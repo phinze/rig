@@ -8,17 +8,26 @@ import (
 	"strings"
 )
 
-type primaryRepo struct {
-	Name string // short repo name, used as subdir under basedir
-	Path string // absolute path to source repo
+type repoRef struct {
+	Owner string // e.g. "phinze" — may be "" when not derivable from path
+	Name  string // short repo name, used as the subdir under the basedir
+	Path  string // absolute path to the source repo
+}
+
+// nameWithOwner returns "owner/repo", or just "repo" when the owner is unknown.
+func (r repoRef) nameWithOwner() string {
+	if r.Owner == "" {
+		return r.Name
+	}
+	return r.Owner + "/" + r.Name
 }
 
 // detectPrimaryRepo derives the primary repo from cwd. It expects to be run
 // from inside (or under) a checkout that lives at ~/src/<host>/<owner>/<repo>.
-func detectPrimaryRepo() (primaryRepo, error) {
+func detectPrimaryRepo() (repoRef, error) {
 	out, err := exec.Command("git", "rev-parse", "--git-common-dir").Output()
 	if err != nil {
-		return primaryRepo{}, fmt.Errorf("not in a git repo — cd into a checkout first")
+		return repoRef{}, fmt.Errorf("not in a git repo — cd into a checkout first")
 	}
 	gitCommon := strings.TrimSpace(string(out))
 	if !filepath.IsAbs(gitCommon) {
@@ -27,9 +36,36 @@ func detectPrimaryRepo() (primaryRepo, error) {
 	}
 	repoPath, err := filepath.EvalSymlinks(filepath.Dir(gitCommon))
 	if err != nil {
-		return primaryRepo{}, fmt.Errorf("resolving repo path: %w", err)
+		return repoRef{}, fmt.Errorf("resolving repo path: %w", err)
 	}
-	return primaryRepo{Name: filepath.Base(repoPath), Path: repoPath}, nil
+	return repoRef{
+		Owner: ownerFromPath(repoPath),
+		Name:  filepath.Base(repoPath),
+		Path:  repoPath,
+	}, nil
+}
+
+// ownerFromPath pulls the owner segment out of a ghq-style checkout path
+// (~/src/<host>/<owner>/<repo>). Returns "" if the path isn't under ~/src or
+// doesn't have the expected depth, so GH_REPO derivation degrades gracefully.
+func ownerFromPath(repoPath string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(home); err == nil {
+		home = resolved
+	}
+	srcRoot := filepath.Join(home, "src")
+	rel, err := filepath.Rel(srcRoot, repoPath)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return ""
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	if len(parts) < 3 {
+		return ""
+	}
+	return parts[len(parts)-2]
 }
 
 // ensureJJColocated initializes jj alongside the existing git repo if needed.
@@ -91,6 +127,21 @@ func jjWorkspaceForget(repoArg string, names []string) error {
 	cmd := exec.Command("jj", args...)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	return cmd.Run()
+}
+
+// workspaceRegistered reports whether a workspace name is registered with the
+// source repo (regardless of whether its directory still exists on disk).
+func workspaceRegistered(repoPath, wsName string) bool {
+	out, err := exec.Command("jj", "-R", repoPath, "workspace", "list").Output()
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), wsName+":") {
+			return true
+		}
+	}
+	return false
 }
 
 // jjSourceRepo returns the source (default-workspace) repo path that backs

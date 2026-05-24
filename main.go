@@ -17,6 +17,14 @@ func main() {
 	switch cmd {
 	case "up":
 		err = runUp(args)
+	case "review":
+		err = runReview(args)
+	case "add":
+		err = runAdd(args)
+	case "ls":
+		err = runLs(args)
+	case "cd":
+		err = runCd(args)
 	case "down":
 		err = runDown(args)
 	case "-h", "--help", "help":
@@ -37,7 +45,13 @@ func usage() {
 	fmt.Fprint(os.Stderr, `rig: workspace tool for task-shaped work
 
 usage:
-  rig up <issue-id>    pitch a new rig (e.g. rig up MIR-75)
-  rig down             break the current rig down
+  rig up [issue-id|query]   pitch a new rig from a Linear issue
+                            (exact id, search terms, or fzf picker with no args)
+  rig review [pr-url]       pitch a review rig for a PR
+                            (url, or fzf picker over review-requested PRs)
+  rig add <owner/repo>      add another repo to the rig you're in
+  rig ls                    list rigs in flight
+  rig cd [query]            jump to a rig's tmux session (fzf if ambiguous)
+  rig down                  break the current rig down
 `)
 }

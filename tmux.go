@@ -22,6 +22,41 @@ func tmuxNewSession(name, cwd string) error {
 	return cmd.Run()
 }
 
+// tmuxSplitH splits the given target horizontally, running command in the
+// new (right) pane with cwd as its working directory.
+func tmuxSplitH(target, cwd, command string) error {
+	cmd := exec.Command("tmux", "split-window", "-h", "-t", target, "-c", cwd, command)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	return cmd.Run()
+}
+
+// tmuxNewWindow opens a new window named name in the session, with cwd as its
+// working directory.
+func tmuxNewWindow(session, name, cwd string) error {
+	cmd := exec.Command("tmux", "new-window", "-t", session, "-n", name, "-c", cwd)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	return cmd.Run()
+}
+
+func tmuxSelectPane(target string) error {
+	cmd := exec.Command("tmux", "select-pane", "-t", target)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	return cmd.Run()
+}
+
+// tmuxSendKeys types text into the target pane, then presses Enter.
+func tmuxSendKeys(target, text string) error {
+	cmd := exec.Command("tmux", "send-keys", "-t", target, text, "Enter")
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	return cmd.Run()
+}
+
+// shellQuote wraps s for safe inclusion as a single shell argument when
+// typed via send-keys (where the receiving shell will reparse the line).
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 func tmuxKillSession(name string) error {
 	if !tmuxHasSession(name) {
 		return nil
