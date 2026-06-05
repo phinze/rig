@@ -64,6 +64,39 @@ job (climbing rig, fishing rig, sound rig):
 - `rig ls` — list rigs in flight (the call-sheet equivalent).
 - `rig cd PROJ-123` — jump to a rig; fzf if no arg.
 
+## Naming
+
+A rig's identity comes in three levels, all derived once at `up`/`review`
+time:
+
+1. **Task id** — the compact handle: `mir-1221` (Linear mints it, globally
+   unique via the team prefix) or `pr-845` (GitHub, unique per repo only).
+2. **Task slug** — `<task-id>-<title-slug>`, capped at 60 chars with a hard
+   cut, the same shape Linear mints for branch names. Linear hands it to us
+   via `branchName` (minus the `user/` prefix); for GitHub PRs we derive it
+   from the PR title. Names the basedir.
+3. **Working-tree id** — `<task-id>-<repo>`, one per repo workspace. Already
+   exists as the jj workspace name; also the right value to project into the
+   environment for tools that need a per-tree key (iso's `ISO_SESSION`,
+   compose's project name). Main checkouts get the parallel-but-different
+   form `<owner>-<repo>`.
+
+The principle underneath: **truncated paths are for display only, never for
+identity**. The pre-rig layout happened to give every working tree a unique
+basename (the leaf dir was a branch slug), and tools quietly grew the
+assumption that `basename $(pwd)` identifies a project — iso's session
+names, sophon's notification grouping, docker-compose's default project
+name. Rig's layout (`<basedir>/<repo>`) broke that by reintroducing
+repo-named leaf dirs. Rather than contorting the layout to keep the
+heuristic accidentally true, identity is declared (manifest → direnv → env
+vars) and tools should consume the env var first, falling back to
+enough-path-to-be-unique rather than basename.
+
+tmux sessions are named with the full basedir path in session-wizard's
+full-path convention (`~/workspaces/...`, lowercased, `. :` → `-`), so a
+`t` jump into a rig dir finds the existing session instead of spawning a
+duplicate. Full paths are never ambiguous; only truncation is.
+
 ## Open questions
 
 - **Language.** Fish is at its ceiling for this shape (TOML parsing,

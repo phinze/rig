@@ -16,6 +16,24 @@ func slugify(s string) string {
 	return strings.Trim(nonSlugRe.ReplaceAllString(strings.ToLower(s), "-"), "-")
 }
 
+// taskSlug joins a task id with a slugified title to form the basedir name,
+// matching the shape Linear mints for branch names (id + slugified title,
+// hard-capped with the trailing dash trimmed). Linear hands us its slug via
+// branchName; this derives the equivalent for tasks that don't come with one
+// (GitHub PRs, from their title).
+func taskSlug(id, title string) string {
+	const maxLen = 60
+	t := slugify(title)
+	if t == "" {
+		return id
+	}
+	s := id + "-" + t
+	if len(s) > maxLen {
+		s = strings.TrimRight(s[:maxLen], "-")
+	}
+	return s
+}
+
 // basedirPath returns the absolute basedir for a rig given its slug name.
 func basedirPath(name string) (string, error) {
 	home, err := os.UserHomeDir()

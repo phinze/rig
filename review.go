@@ -41,8 +41,13 @@ func runReview(args []string) error {
 		return err
 	}
 
-	rigID := slugify(fmt.Sprintf("pr-%d-%s", pr.Number, pr.Repo))
-	basedirName := rigID + "-" + slugify(branch)
+	// Task id is just pr-<n>: jj workspace names get the repo appended and are
+	// registered per source repo, and the basedir gets the title slug, so the
+	// repo name isn't needed for uniqueness anywhere the id travels. The slug
+	// derives from the PR title (Linear-style id-plus-title shape) rather than
+	// the branch, which often embeds a whole ticket slug of its own.
+	rigID := fmt.Sprintf("pr-%d", pr.Number)
+	basedirName := taskSlug(rigID, title)
 	basedir, err := basedirPath(basedirName)
 	if err != nil {
 		return err

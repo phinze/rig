@@ -233,7 +233,8 @@ exit 1
 		t.Fatalf("rig review: %v\n%s", err, out)
 	}
 
-	basedir := filepath.Join(home, "workspaces", "pr-42-fakerepo-pr-branch")
+	// Basedir slug derives from the PR title, not the branch name.
+	basedir := filepath.Join(home, "workspaces", "pr-42-fix-the-thing")
 	for _, p := range []string{
 		basedir,
 		filepath.Join(basedir, ".rig.toml"),
@@ -245,7 +246,7 @@ exit 1
 	}
 
 	manifest := string(mustReadFile(t, filepath.Join(basedir, ".rig.toml")))
-	if !strings.Contains(manifest, `id    = "pr-42-fakerepo"`) {
+	if !strings.Contains(manifest, `id    = "pr-42"`) {
 		t.Errorf("manifest missing id:\n%s", manifest)
 	}
 	if !strings.Contains(manifest, `title = "fix the thing"`) {
@@ -256,7 +257,7 @@ exit 1
 	}
 
 	// Session named after the basedir, session-wizard full-path style.
-	session := "~/workspaces/pr-42-fakerepo-pr-branch"
+	session := "~/workspaces/pr-42-fix-the-thing"
 	if err := exec.Command(realTmux, "-L", "rig-e2e-review", "has-session", "-t", session).Run(); err != nil {
 		t.Errorf("expected tmux session %s: %v", session, err)
 	}
@@ -269,7 +270,7 @@ exit 1
 
 	// --- rig ls --- should report the rig on stdout.
 	lsOut := mustOutput(t, home, env, rigBin, "ls")
-	if !strings.Contains(lsOut, "pr-42-fakerepo") {
+	if !strings.Contains(lsOut, "pr-42") || !strings.Contains(lsOut, "fix the thing") {
 		t.Errorf("rig ls missing the review rig:\n%s", lsOut)
 	}
 
