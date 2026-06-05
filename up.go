@@ -54,7 +54,7 @@ func runUp(args []string) error {
 			tk.Identifier, tk.Title,
 		),
 	}
-	session, err := spawnSession(tk.rigID(), repoDest, sess)
+	session, err := spawnSession(basedir, repoDest, sess)
 	if err != nil {
 		return err
 	}

@@ -82,7 +82,7 @@ func runDown(args []string) error {
 	// it) can't cut short the destructive steps above. If we're outside
 	// the session this is just a normal kill; if we're inside, our
 	// terminal exits cleanly with the work already done.
-	session := tmuxSessionName(m.ID)
+	session := tmuxSessionName(basedir)
 	if cwdInside && !insideTmuxSession(session) {
 		fmt.Fprintf(os.Stderr, "rig: note: your shell's cwd was inside the basedir; run `cd` to recover.\n")
 	}

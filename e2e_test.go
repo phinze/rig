@@ -117,12 +117,14 @@ exit 1
 		t.Errorf("manifest missing repos mapping:\n%s", manifest)
 	}
 
-	if err := exec.Command(realTmux, "-L", "rig-e2e", "has-session", "-t", "rig-fake-1").Run(); err != nil {
-		t.Errorf("expected tmux session rig-fake-1: %v", err)
+	// Session named after the basedir, session-wizard full-path style.
+	session := "~/workspaces/fake-1-do-the-thing"
+	if err := exec.Command(realTmux, "-L", "rig-e2e", "has-session", "-t", session).Run(); err != nil {
+		t.Errorf("expected tmux session %s: %v", session, err)
 	}
 
 	// Two panes: claude on the left, recto on the right.
-	panes := mustOutput(t, "", env, realTmux, "-L", "rig-e2e", "list-panes", "-t", "rig-fake-1:0", "-F", "#{pane_current_command}")
+	panes := mustOutput(t, "", env, realTmux, "-L", "rig-e2e", "list-panes", "-t", session+":0", "-F", "#{pane_current_command}")
 	paneLines := strings.Split(strings.TrimSpace(panes), "\n")
 	if len(paneLines) != 2 {
 		t.Errorf("expected 2 panes after up, got %d:\n%s", len(paneLines), panes)
@@ -145,7 +147,7 @@ exit 1
 	if _, err := os.Stat(basedir); err == nil {
 		t.Errorf("basedir still exists after down")
 	}
-	if err := exec.Command(realTmux, "-L", "rig-e2e", "has-session", "-t", "rig-fake-1").Run(); err == nil {
+	if err := exec.Command(realTmux, "-L", "rig-e2e", "has-session", "-t", session).Run(); err == nil {
 		t.Errorf("tmux session still exists after down")
 	}
 	wsList = mustOutput(t, repoDir, env, "jj", "workspace", "list")
@@ -253,8 +255,10 @@ exit 1
 		t.Errorf("manifest missing repos mapping:\n%s", manifest)
 	}
 
-	if err := exec.Command(realTmux, "-L", "rig-e2e-review", "has-session", "-t", "rig-pr-42-fakerepo").Run(); err != nil {
-		t.Errorf("expected tmux session rig-pr-42-fakerepo: %v", err)
+	// Session named after the basedir, session-wizard full-path style.
+	session := "~/workspaces/pr-42-fakerepo-pr-branch"
+	if err := exec.Command(realTmux, "-L", "rig-e2e-review", "has-session", "-t", session).Run(); err != nil {
+		t.Errorf("expected tmux session %s: %v", session, err)
 	}
 
 	// The workspace should sit on the PR branch's commit, not main's.

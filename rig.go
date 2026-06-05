@@ -91,10 +91,12 @@ type sessionSpec struct {
 }
 
 // spawnSession creates the rig's tmux session (recto right, claude left) if it
-// doesn't already exist, and returns the session name. Idempotent: an existing
-// session is left untouched.
-func spawnSession(rigID, paneCwd string, sess sessionSpec) (string, error) {
-	session := tmuxSessionName(rigID)
+// doesn't already exist, and returns the session name. The session is named
+// after the basedir (session-wizard convention) even though the panes start in
+// the primary repo dir: the basedir is the rig's unit, and multi-repo rigs
+// still get one session. Idempotent: an existing session is left untouched.
+func spawnSession(basedir, paneCwd string, sess sessionSpec) (string, error) {
+	session := tmuxSessionName(basedir)
 	if tmuxHasSession(session) {
 		return session, nil
 	}

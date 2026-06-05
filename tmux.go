@@ -8,8 +8,20 @@ import (
 	"golang.org/x/term"
 )
 
-func tmuxSessionName(rigID string) string {
-	return "rig-" + rigID
+// tmuxSessionName converts an absolute path into the session name
+// session-wizard computes in full-path mode: $HOME shown as ~, then the
+// characters tmux can't keep in a session name (plus spaces) replaced with
+// dashes, lowercased. Matching that convention means a `t` jump into a rig
+// directory lands in the rig's existing session instead of spawning a
+// duplicate, and rig sessions sort alongside everything else in the list.
+func tmuxSessionName(path string) string {
+	if home, err := os.UserHomeDir(); err == nil {
+		if rel, ok := strings.CutPrefix(path, home); ok {
+			path = "~" + rel
+		}
+	}
+	repl := strings.NewReplacer(" ", "-", ".", "-", ":", "-")
+	return strings.ToLower(repl.Replace(path))
 }
 
 func tmuxHasSession(name string) bool {

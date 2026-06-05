@@ -69,7 +69,7 @@ func runReview(args []string) error {
 			pr.Number,
 		),
 	}
-	session, err := spawnSession(rigID, repoDest, sess)
+	session, err := spawnSession(basedir, repoDest, sess)
 	if err != nil {
 		return err
 	}
