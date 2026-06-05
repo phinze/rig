@@ -112,6 +112,9 @@ exit 1
 	if !strings.Contains(string(manifest), `title = "do the thing"`) {
 		t.Errorf("manifest missing title:\n%s", manifest)
 	}
+	if !strings.Contains(string(manifest), `created = "`) {
+		t.Errorf("manifest missing created timestamp:\n%s", manifest)
+	}
 	// The [repos] table is what the global direnvrc reads to set GH_REPO.
 	if !strings.Contains(string(manifest), `fakerepo = "fakeowner/fakerepo"`) {
 		t.Errorf("manifest missing repos mapping:\n%s", manifest)

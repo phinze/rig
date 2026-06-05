@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"text/tabwriter"
+	"time"
 )
 
 // runAdd brings another repo into the rig you're currently in (cwd-derived).
@@ -49,7 +51,7 @@ func runAdd(args []string) error {
 	}
 
 	// Best-effort: give the new repo its own window in the rig session.
-	session := tmuxSessionName(m.ID)
+	session := tmuxSessionName(basedir)
 	if tmuxHasSession(session) {
 		_ = tmuxNewWindow(session, repo, repoDest)
 	}
@@ -70,9 +72,25 @@ func runLs(args []string) error {
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
 	for _, r := range rigs {
-		fmt.Fprintf(w, "%s\t%s\n", r.ID, r.Title)
+		fmt.Fprintf(w, "%s\t%s\t%s\n", r.ID, age(r.Created), r.Title)
 	}
 	return w.Flush()
+}
+
+// age renders a compact relative age for ls output.
+func age(t time.Time) string {
+	if t.IsZero() {
+		return "?"
+	}
+	d := time.Since(t)
+	switch {
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	}
 }
 
 // runCd jumps to a rig by attaching (or switching to) its tmux session. With
@@ -131,7 +149,7 @@ func runCd(args []string) error {
 		return nil
 	}
 
-	session := tmuxSessionName(chosen.ID)
+	session := tmuxSessionName(chosen.Path)
 	if !tmuxHasSession(session) {
 		// Rig dir is present but its session was killed; stand up a bare one.
 		if err := tmuxNewSession(session, chosen.Path); err != nil {
@@ -142,10 +160,11 @@ func runCd(args []string) error {
 }
 
 type rigInfo struct {
-	ID    string
-	Slug  string // basedir directory name
-	Title string
-	Path  string // absolute basedir path
+	ID      string
+	Slug    string // basedir directory name
+	Title   string
+	Path    string // absolute basedir path
+	Created time.Time
 }
 
 // listRigs scans ~/workspaces for directories carrying a rig manifest.
@@ -169,14 +188,22 @@ func listRigs() ([]rigInfo, error) {
 			continue
 		}
 		base := filepath.Join(root, e.Name())
-		if _, err := os.Stat(filepath.Join(base, manifestName)); err != nil {
+		fi, err := os.Stat(filepath.Join(base, manifestName))
+		if err != nil {
 			continue
 		}
 		m, err := readManifest(base)
 		if err != nil {
 			continue
 		}
-		rigs = append(rigs, rigInfo{ID: m.ID, Slug: e.Name(), Title: m.Title, Path: base})
+		// Rigs created before the manifest grew a created field fall back to
+		// the manifest's mtime (close enough: rewritten only by `rig add`).
+		created := m.Created
+		if created.IsZero() {
+			created = fi.ModTime()
+		}
+		rigs = append(rigs, rigInfo{ID: m.ID, Slug: e.Name(), Title: m.Title, Path: base, Created: created})
 	}
+	sort.Slice(rigs, func(i, j int) bool { return rigs[i].Created.Before(rigs[j].Created) })
 	return rigs, nil
 }

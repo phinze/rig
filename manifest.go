@@ -7,13 +7,15 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 const manifestName = ".rig.toml"
 
 type manifest struct {
-	ID    string
-	Title string
+	ID      string
+	Title   string
+	Created time.Time
 	// Repos maps a repo's subdir name under the basedir to its
 	// "owner/repo" slug. The global direnvrc reads this to set GH_REPO,
 	// since the flat basedir path no longer encodes owner/repo the way
@@ -25,6 +27,9 @@ func writeManifest(basedir string, m manifest) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "id    = %q\n", m.ID)
 	fmt.Fprintf(&b, "title = %q\n", m.Title)
+	if !m.Created.IsZero() {
+		fmt.Fprintf(&b, "created = %q\n", m.Created.Format(time.RFC3339))
+	}
 	if len(m.Repos) > 0 {
 		b.WriteString("\n[repos]\n")
 		keys := make([]string, 0, len(m.Repos))
@@ -74,6 +79,10 @@ func readManifest(basedir string) (manifest, error) {
 				m.ID = val
 			case "title":
 				m.Title = val
+			case "created":
+				if t, err := time.Parse(time.RFC3339, val); err == nil {
+					m.Created = t
+				}
 			}
 		case "repos":
 			m.Repos[key] = val

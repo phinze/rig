@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 var nonSlugRe = regexp.MustCompile(`[^a-z0-9]+`)
@@ -48,6 +49,9 @@ func basedirPath(name string) (string, error) {
 func createBasedir(basedir string, m manifest) error {
 	if _, err := os.Stat(basedir); err == nil {
 		return fmt.Errorf("basedir already exists: %s", basedir)
+	}
+	if m.Created.IsZero() {
+		m.Created = time.Now()
 	}
 	if err := os.MkdirAll(basedir, 0o755); err != nil {
 		return err
