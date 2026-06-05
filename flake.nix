@@ -23,7 +23,8 @@
           pname = "rig";
           version = "0.0.1";
           src = ./.;
-          vendorHash = null; # Update after first build
+          vendorHash = "sha256-76yvZ8MhGnJhkfBALS/MYAeEmkOcLX0VKu1zTtPLhxo=";
+          meta.mainProgram = "rig";
         };
 
         devShells.default = pkgs.mkShell {
