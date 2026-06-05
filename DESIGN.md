@@ -88,9 +88,15 @@ assumption that `basename $(pwd)` identifies a project — iso's session
 names, sophon's notification grouping, docker-compose's default project
 name. Rig's layout (`<basedir>/<repo>`) broke that by reintroducing
 repo-named leaf dirs. Rather than contorting the layout to keep the
-heuristic accidentally true, identity is declared (manifest → direnv → env
-vars) and tools should consume the env var first, falling back to
-enough-path-to-be-unique rather than basename.
+heuristic accidentally true, identity is declared in the manifest and
+projected into the environment by `rig env`, which the global direnv stdlib
+evals before every .envrc (`has rig && eval "$(rig env)"`). It can't ride
+in rig-written .envrc files: direnv loads only the nearest .envrc (no
+cascade), so a repo shipping its own — nix devshells — would shadow the
+basedir's exports. Tools should consume the env vars first
+(`RIG_WORKSPACE` is the per-working-tree key, same shape as the jj
+workspace name), falling back to enough-path-to-be-unique rather than
+basename.
 
 tmux sessions are named with the full basedir path in session-wizard's
 full-path convention (`~/workspaces/...`, lowercased, `. :` → `-`), so a
@@ -113,10 +119,12 @@ duplicate. Full paths are never ambiguous; only truncation is.
 - **Sandbox primitive.** bwrap on Linux, claude code's own
   `--allowed-paths`, or something else? Decide before locking in the
   basedir-as-boundary assumption.
-- **direnvrc stdlib migration.** Current path-parsing trick
-  (`~/workspaces/github.com/...` → `GH_REPO`) stops being load-bearing.
-  Layered `source_up` setup replaces it. Old single-repo sessions can
-  age out as their tasks finish.
+- ~~**direnvrc stdlib migration.**~~ Answered: `rig env` owns all layout
+  and manifest knowledge (including the legacy
+  `~/workspaces/github.com/...` → `GH_REPO` path-parse, which ages out
+  with those sessions); the host stdlib is a one-line eval. The layered
+  `source_up` idea didn't survive contact with repos that ship their own
+  .envrc — see §Naming.
 - **Interactive picker source mixing.** No-arg `rig up` should fzf
   across pickable issues. Merge Linear + GH into one list with a
   source column, or pick the tracker first? Merged is nicer but means

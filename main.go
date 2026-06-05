@@ -27,6 +27,8 @@ func main() {
 		err = runCd(args)
 	case "down":
 		err = runDown(args)
+	case "env":
+		err = runEnv(args)
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -53,5 +55,7 @@ usage:
   rig ls                    list rigs in flight
   rig cd [query]            jump to a rig's tmux session (fzf if ambiguous)
   rig down                  break the current rig down
+  rig env                   print shell exports describing the current dir
+                            (eval'd by the direnv stdlib; silent outside a rig)
 `)
 }
