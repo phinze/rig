@@ -16,7 +16,13 @@ func TestEnvExports(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(basedir, "tmp"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	m := manifest{ID: "mir-75", Title: "add zig stack", Repos: map[string]string{"runtime": "mirendev/runtime"}}
+	if err := os.MkdirAll(filepath.Join(basedir, "cloud", ".iso"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := manifest{ID: "mir-75", Title: "add zig stack", Repos: map[string]string{
+		"runtime": "mirendev/runtime",
+		"cloud":   "mirendev/cloud",
+	}}
 	if err := writeManifest(basedir, m); err != nil {
 		t.Fatal(err)
 	}
@@ -61,6 +67,16 @@ func TestEnvExports(t *testing.T) {
 			[]string{
 				"export RIG_BASEDIR='" + basedir + "'",
 				"export RIG_ID='mir-75'",
+			},
+		},
+		{
+			"iso-using repo also gets ISO_SESSION", filepath.Join(basedir, "cloud"),
+			[]string{
+				"export RIG_BASEDIR='" + basedir + "'",
+				"export RIG_ID='mir-75'",
+				"export RIG_WORKSPACE='mir-75-cloud'",
+				"export ISO_SESSION='dev-mir-75-cloud'",
+				"export GH_REPO='mirendev/cloud'",
 			},
 		},
 		{

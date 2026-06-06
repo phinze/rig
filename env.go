@@ -63,6 +63,14 @@ func rigExports(basedir, cwd string) []string {
 	}
 	if m.ID != "" {
 		out = append(out, "export RIG_WORKSPACE="+shellQuote(m.ID+"-"+sub))
+		// Tool knobs for tools rig composes with, emitted only where the
+		// tool is actually in play. iso keys dev containers off
+		// ISO_SESSION; without this, same-named checkouts cross-wire
+		// (the override carries the whole name, dev- purpose prefix
+		// included — see mirendev/runtime#849).
+		if dirExists(filepath.Join(basedir, sub, ".iso")) {
+			out = append(out, "export ISO_SESSION="+shellQuote("dev-"+m.ID+"-"+sub))
+		}
 	}
 	return append(out, "export GH_REPO="+shellQuote(nwo))
 }
