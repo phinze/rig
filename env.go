@@ -69,10 +69,18 @@ func rigExports(basedir, cwd string) []string {
 		// (the override carries the whole name, dev- purpose prefix
 		// included — see mirendev/runtime#849).
 		if dirExists(filepath.Join(basedir, sub, ".iso")) {
-			out = append(out, "export ISO_SESSION="+shellQuote("dev-"+m.ID+"-"+sub))
+			out = append(out, "export ISO_SESSION="+shellQuote(isoSessionName(m.ID, sub)))
 		}
 	}
 	return append(out, "export GH_REPO="+shellQuote(nwo))
+}
+
+// isoSessionName is the iso session identity rig exports as ISO_SESSION for
+// a repo workspace (dev- purpose prefix included; see the comment in
+// rigExports). Teardown stops sessions by this exact name, so the two sides
+// share one definition.
+func isoSessionName(rigID, sub string) string {
+	return "dev-" + rigID + "-" + sub
 }
 
 // legacyExports handles the pre-rig workspace layout,

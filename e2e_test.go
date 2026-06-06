@@ -289,6 +289,135 @@ exit 1
 	}
 }
 
+// TestReap walks a rig through every reap gate: an active session keeps it,
+// WIP in a workspace keeps it, dry-run reports without acting, and a clean
+// idle rig finally gets torn down. Same fake-repo + dedicated-tmux-server
+// setup as TestUpDown.
+func TestReap(t *testing.T) {
+	realTmux, err := exec.LookPath("tmux")
+	if err != nil {
+		t.Skip("tmux not installed")
+	}
+
+	home := t.TempDir()
+	bin := filepath.Join(home, "bin")
+	repoDir := filepath.Join(home, "src", "github.com", "fakeowner", "fakerepo")
+	rigBin := filepath.Join(home, "rig")
+
+	mustMkdir(t, bin)
+	mustMkdir(t, repoDir)
+
+	build := exec.Command("go", "build", "-o", rigBin, ".")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+
+	env := append(os.Environ(),
+		"HOME="+home,
+		"PATH="+bin+":"+os.Getenv("PATH"),
+		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.com",
+		"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@example.com",
+		"JJ_USER=Test", "JJ_EMAIL=test@example.com",
+	)
+
+	mustRun(t, repoDir, env, "git", "init", "-q", "-b", "main")
+	mustRun(t, repoDir, env, "git", "commit", "-q", "--allow-empty", "-m", "init")
+	mustRun(t, repoDir, env, "jj", "git", "init", "--colocate")
+	mustRun(t, repoDir, env, "jj", "config", "set", "--repo", `revset-aliases."trunk()"`, "main")
+
+	linearis := `#!/bin/sh
+if [ "$1" = "issues" ] && [ "$2" = "read" ]; then
+  cat <<JSON
+{"identifier":"FAKE-1","title":"do the thing","branchName":"fake/fake-1-do-the-thing"}
+JSON
+  exit 0
+fi
+echo "fake linearis: unsupported invocation $*" >&2
+exit 1
+`
+	mustWriteExec(t, filepath.Join(bin, "linearis"), linearis)
+
+	tmuxWrap := fmt.Sprintf("#!/bin/sh\nexec %s -L rig-e2e-reap \"$@\"\n", realTmux)
+	mustWriteExec(t, filepath.Join(bin, "tmux"), tmuxWrap)
+
+	sleeper := "#!/bin/sh\nexec sleep infinity\n"
+	mustWriteExec(t, filepath.Join(bin, "recto"), sleeper)
+	mustWriteExec(t, filepath.Join(bin, "claude"), sleeper)
+
+	t.Cleanup(func() {
+		_ = exec.Command(realTmux, "-L", "rig-e2e-reap", "kill-server").Run()
+	})
+
+	upCmd := exec.Command(rigBin, "up", "FAKE-1")
+	upCmd.Dir = repoDir
+	upCmd.Env = env
+	if out, err := upCmd.CombinedOutput(); err != nil {
+		t.Fatalf("rig up: %v\n%s", err, out)
+	}
+	basedir := filepath.Join(home, "workspaces", "fake-1-do-the-thing")
+
+	// Gate 1: recent attention keeps the rig. The manifest's created
+	// timestamp gives a just-pitched rig its grace period; plant a fresh
+	// claude session file too so the agent-attention signal rides through
+	// the binary at least once (claude_test.go covers its matching).
+	projDir := filepath.Join(home, ".claude", "projects",
+		claudeProjectDirName(filepath.Join(basedir, "fakerepo")))
+	mustMkdir(t, projDir)
+	if err := os.WriteFile(filepath.Join(projDir, "fake-session.jsonl"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := mustOutput(t, home, env, rigBin, "reap")
+	if !strings.Contains(out, "keep fake-1") || !strings.Contains(out, "recently active") {
+		t.Errorf("expected attention gate to keep the rig:\n%s", out)
+	}
+	if _, err := os.Stat(basedir); err != nil {
+		t.Errorf("basedir gone after keep-by-attention reap: %v", err)
+	}
+
+	// Gate 2: WIP in the workspace blocks even an idle rig. jj snapshots
+	// the file into @ when reap's revset check runs. (The rig-written
+	// .envrc anchor is also in @ but gets the carve-out; wip.txt doesn't.)
+	wip := filepath.Join(basedir, "fakerepo", "wip.txt")
+	if err := os.WriteFile(wip, []byte("half-finished\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out = mustOutput(t, home, env, rigBin, "reap", "--max-idle", "0")
+	if !strings.Contains(out, "keep fake-1") || !strings.Contains(out, "uncommitted changes") {
+		t.Errorf("expected WIP gate to keep the rig:\n%s", out)
+	}
+	if _, err := os.Stat(basedir); err != nil {
+		t.Errorf("basedir gone after keep-by-wip reap: %v", err)
+	}
+
+	// Gate 3: clean again, but dry-run only reports.
+	if err := os.Remove(wip); err != nil {
+		t.Fatal(err)
+	}
+	out = mustOutput(t, home, env, rigBin, "reap", "--max-idle", "0", "--dry-run")
+	if !strings.Contains(out, "would reap fake-1") {
+		t.Errorf("expected dry-run to offer the rig:\n%s", out)
+	}
+	if _, err := os.Stat(basedir); err != nil {
+		t.Errorf("basedir gone after dry-run reap: %v", err)
+	}
+
+	// The real thing: merged (nothing off trunk), no WIP, idle past 0s.
+	out = mustOutput(t, home, env, rigBin, "reap", "--max-idle", "0")
+	if !strings.Contains(out, "reaped fake-1") {
+		t.Errorf("expected rig to be reaped:\n%s", out)
+	}
+	if _, err := os.Stat(basedir); err == nil {
+		t.Errorf("basedir still exists after reap")
+	}
+	if err := exec.Command(realTmux, "-L", "rig-e2e-reap", "has-session", "-t", "~/workspaces/fake-1-do-the-thing").Run(); err == nil {
+		t.Errorf("tmux session still exists after reap")
+	}
+	wsList := mustOutput(t, repoDir, env, "jj", "workspace", "list")
+	if strings.Contains(wsList, "fake-1-fakerepo") {
+		t.Errorf("workspace not forgotten after reap:\n%s", wsList)
+	}
+}
+
 func mustReadFile(t *testing.T, path string) []byte {
 	t.Helper()
 	b, err := os.ReadFile(path)

@@ -103,7 +103,7 @@ full-path convention (`~/workspaces/...`, lowercased, `. :` → `-`), so a
 `t` jump into a rig dir finds the existing session instead of spawning a
 duplicate. Full paths are never ambiguous; only truncation is.
 
-## Reaping (planned: `rig reap`)
+## Reaping (`rig reap`)
 
 The nightly `dev-session-cleanup` in nix-config exists because old-style
 workspaces had no owner: reaping one meant path archaeology (parse
@@ -122,20 +122,50 @@ fail-closed posture the shell script earned the hard way:
   unpushed WIP); jj errors mean skip, never guess.
 - **No WIP**: no non-empty commits reachable from `@` that aren't on
   trunk (catches both dirty `@` and the jj-new-on-top-of-WIP shape).
-- **Idle**: the rig's tmux session has no recent output
-  (`window_activity`, not `session_activity`, which updates on view).
+- **Idle**: no recent attention. Two signals, both persistent and
+  neither resettable by accident: the newest claude session JSONL mtime
+  under `~/.claude/projects` for cwds inside the basedir (a turn
+  appends whether human-driven or autonomous; repaint doesn't), and the
+  rig's own age (a rig younger than the idle window can't be idle).
+  File changes are deliberately the VCS gates' job — jj already sees
+  any non-ignored modification as WIP, and losing a gitignored scratch
+  file is the accepted cost of not mtime-crawling every workspace
+  nightly. Earlier designs died here. `window_activity` (the shell
+  script's hard-won lesson) turned out to lie: claude's TUI repaints
+  at rest in some states, pinning sessions to "active" forever — the
+  same blind spot that quietly neutered the legacy script's claude
+  phase, which walked processes to their pane's window_activity. And
+  tmux's attach-based signals (`session_last_attached`,
+  `client_activity`) reset on a mere peek, so checking whether a rig
+  was dead would keep it alive another day.
 
-Reapable rigs go through the same code path as `rig down`. Teardown
-also needs to grow tool cleanup that `down` currently lacks: stop the
-rig's iso session *by exact name* (the same `dev-<id>-<repo>` rig env
-emits). Never `iso stop --all-sessions` from a workspace dir — iso's
-project scope is basename-derived, so that would also stop the main
-checkout's container of a same-named repo.
+Each source repo gets one best-effort `jj git fetch` per run so trunk()
+reflects what actually merged; a failed fetch just means checking
+against a stale trunk, which fails closed too.
+
+Implementation surfaced one wrinkle: the direnv anchor rig writes into
+workspaces whose repo ships no .envrc gets auto-tracked by jj, leaving
+`@` permanently non-empty — no such rig would ever reap. So `@` gets
+exactly one allowance: a diff of precisely `.envrc` whose content is
+the bare anchor. Anything else dirty at `@` blocks.
+
+Reapable rigs go through the same code path as `rig down`
+(`teardownRig`). Teardown also grew the tool cleanup `down` previously
+lacked: stop the rig's iso session *by exact name* (the same
+`dev-<id>-<repo>` rig env emits). Never `iso stop --all-sessions` from
+a workspace dir — iso's project scope is basename-derived, so that
+would also stop the main checkout's container of a same-named repo.
 
 Division of labor stays the same as `rig env`: rig owns layout,
 manifest, and teardown knowledge; nix-config owns scheduling (the
 systemd timer invokes `rig reap` and keeps the legacy phase only until
 old-layout workspaces age out).
+
+Deferred to a future pass: being smart about the claude sessions
+running inside a rig. Killing the rig's tmux session takes its pane
+processes with it, but the legacy nightly's phase 3 (SIGTERM idle
+`claude-unwrapped` processes wherever they live) has no rig-aware
+replacement yet.
 
 ## Open questions
 

@@ -27,6 +27,8 @@ func main() {
 		err = runCd(args)
 	case "down":
 		err = runDown(args)
+	case "reap":
+		err = runReap(args)
 	case "env":
 		err = runEnv(args)
 	case "-h", "--help", "help":
@@ -55,6 +57,9 @@ usage:
   rig ls                    list rigs in flight
   rig cd [query]            jump to a rig's tmux session (fzf if ambiguous)
   rig down                  break the current rig down
+  rig reap [-n] [--max-idle SECONDS]
+                            break down every rig that is merged, WIP-free,
+                            and idle (default 24h) — fails closed on doubt
   rig env                   print shell exports describing the current dir
                             (eval'd by the direnv stdlib; silent outside a rig)
 `)

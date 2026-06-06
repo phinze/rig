@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -90,6 +91,30 @@ func resolveStartRev(repoPath, branchName string) string {
 		return branchName
 	}
 	return "trunk()"
+}
+
+// jjGitFetch refreshes a repo's remote-tracking state so trunk() reflects
+// what has actually merged. Callers treat failure (offline, no remote) as
+// "check against a stale trunk", which still fails closed.
+func jjGitFetch(repoPath string) error {
+	return exec.Command("jj", "-R", repoPath, "git", "fetch").Run()
+}
+
+// jjRevsetEmpty reports whether revset matches no commits in repoArg. jj
+// errors are returned as errors so call sites can fail closed — never
+// conflated with "no matches" (contrast revExists, which fails open in the
+// direction its callers want).
+func jjRevsetEmpty(repoArg, revset string) (bool, error) {
+	cmd := exec.Command("jj", "-R", repoArg, "log", "-r", revset, "--no-graph", "-T", `"x"`)
+	out, err := cmd.Output()
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
+			return false, fmt.Errorf("%s", strings.TrimSpace(string(ee.Stderr)))
+		}
+		return false, err
+	}
+	return len(strings.TrimSpace(string(out))) == 0, nil
 }
 
 func revExists(repoPath, rev string) bool {
