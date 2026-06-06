@@ -103,6 +103,40 @@ full-path convention (`~/workspaces/...`, lowercased, `. :` → `-`), so a
 `t` jump into a rig dir finds the existing session instead of spawning a
 duplicate. Full paths are never ambiguous; only truncation is.
 
+## Reaping (planned: `rig reap`)
+
+The nightly `dev-session-cleanup` in nix-config exists because old-style
+workspaces had no owner: reaping one meant path archaeology (parse
+`<host>/<owner>/<repo>/<branch>` back out of the filesystem), heuristic
+merge detection against the main repo, and hand-rolled teardown that had
+to mirror what jpickup set up. Rig inverts that. Every workspace has a
+manifest, an id, and a single teardown code path (`rig down`), so
+cleanup stops being archaeology and becomes enumeration plus policy.
+The nightly's rig-shaped replacement is one line: `rig reap`.
+
+Shape: walk `rig ls`, and for each rig decide reapability with the same
+fail-closed posture the shell script earned the hard way:
+
+- **Merged**: every repo workspace's work is an ancestor of `trunk()`
+  in its source repo. A missing bookmark is not a green light (possible
+  unpushed WIP); jj errors mean skip, never guess.
+- **No WIP**: no non-empty commits reachable from `@` that aren't on
+  trunk (catches both dirty `@` and the jj-new-on-top-of-WIP shape).
+- **Idle**: the rig's tmux session has no recent output
+  (`window_activity`, not `session_activity`, which updates on view).
+
+Reapable rigs go through the same code path as `rig down`. Teardown
+also needs to grow tool cleanup that `down` currently lacks: stop the
+rig's iso session *by exact name* (the same `dev-<id>-<repo>` rig env
+emits). Never `iso stop --all-sessions` from a workspace dir — iso's
+project scope is basename-derived, so that would also stop the main
+checkout's container of a same-named repo.
+
+Division of labor stays the same as `rig env`: rig owns layout,
+manifest, and teardown knowledge; nix-config owns scheduling (the
+systemd timer invokes `rig reap` and keeps the legacy phase only until
+old-layout workspaces age out).
+
 ## Open questions
 
 - **Language.** Fish is at its ceiling for this shape (TOML parsing,
