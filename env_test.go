@@ -50,6 +50,7 @@ func TestEnvExports(t *testing.T) {
 				"export RIG_BASEDIR='" + basedir + "'",
 				"export RIG_ID='mir-75'",
 				"export RIG_WORKSPACE='mir-75-runtime'",
+				"export RIG_PORT=17527",
 				"export GH_REPO='mirendev/runtime'",
 			},
 		},
@@ -59,6 +60,7 @@ func TestEnvExports(t *testing.T) {
 				"export RIG_BASEDIR='" + basedir + "'",
 				"export RIG_ID='mir-75'",
 				"export RIG_WORKSPACE='mir-75-runtime'",
+				"export RIG_PORT=17527",
 				"export GH_REPO='mirendev/runtime'",
 			},
 		},
@@ -75,6 +77,7 @@ func TestEnvExports(t *testing.T) {
 				"export RIG_BASEDIR='" + basedir + "'",
 				"export RIG_ID='mir-75'",
 				"export RIG_WORKSPACE='mir-75-cloud'",
+				"export RIG_PORT=17314",
 				"export ISO_SESSION='dev-mir-75-cloud'",
 				"export GH_REPO='mirendev/cloud'",
 			},
@@ -95,5 +98,17 @@ func TestEnvExports(t *testing.T) {
 				t.Errorf("envExports(%q):\n got  %q\n want %q", c.cwd, got, c.want)
 			}
 		})
+	}
+}
+
+func TestHashPort(t *testing.T) {
+	for _, key := range []string{"", "mir-75-runtime", "mir-1-x", "a-very-long-workspace-name-indeed"} {
+		p := hashPort(key)
+		if p < 10000 || p > 19999 {
+			t.Errorf("hashPort(%q) = %d, out of [10000,19999]", key, p)
+		}
+		if p2 := hashPort(key); p2 != p {
+			t.Errorf("hashPort(%q) not stable: %d then %d", key, p, p2)
+		}
 	}
 }

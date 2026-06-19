@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"hash/fnv"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,7 +63,14 @@ func rigExports(basedir, cwd string) []string {
 		return out // not inside a known repo workspace
 	}
 	if m.ID != "" {
-		out = append(out, "export RIG_WORKSPACE="+shellQuote(m.ID+"-"+sub))
+		workspace := m.ID + "-" + sub
+		out = append(out, "export RIG_WORKSPACE="+shellQuote(workspace))
+		// A stable dev-server port per workspace, so several live rigs (the
+		// parallelism the sandbox boundary is built for) don't collide on the
+		// default port. Hashing the workspace identity makes it deterministic
+		// across machines and reboots; being keyed off cwd means each repo
+		// workspace in a multi-repo rig gets its own port for free.
+		out = append(out, fmt.Sprintf("export RIG_PORT=%d", hashPort(workspace)))
 		// Tool knobs for tools rig composes with, emitted only where the
 		// tool is actually in play. iso keys dev containers off
 		// ISO_SESSION; without this, same-named checkouts cross-wire
@@ -73,6 +81,15 @@ func rigExports(basedir, cwd string) []string {
 		}
 	}
 	return append(out, "export GH_REPO="+shellQuote(nwo))
+}
+
+// hashPort maps an arbitrary key to a stable port in 10000-19999, matching
+// worktrunk's hash_port range. FNV keeps it dependency-free and reproducible:
+// the same workspace name always lands on the same port, on any machine.
+func hashPort(key string) int {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(key))
+	return 10000 + int(h.Sum32()%10000)
 }
 
 // isoSessionName is the iso session identity rig exports as ISO_SESSION for
