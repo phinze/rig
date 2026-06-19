@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -60,21 +61,125 @@ func runAdd(args []string) error {
 	return nil
 }
 
-// runLs lists the rigs currently in flight under ~/workspaces.
+// runLs lists the rigs currently in flight under ~/workspaces. The default
+// table is the human call-sheet; --format=json exposes the same rows as a
+// stable API for tmux statuslines, FleetView-style boards, and scripts that
+// would otherwise have to scrape columns.
 func runLs(args []string) error {
+	jsonOut := false
+	for _, a := range args {
+		switch a {
+		case "--format=json":
+			jsonOut = true
+		case "--format=table":
+			jsonOut = false
+		default:
+			return fmt.Errorf("usage: rig ls [--format=json|table]")
+		}
+	}
+
 	rigs, err := listRigs()
 	if err != nil {
 		return err
 	}
-	if len(rigs) == 0 {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	statuses := rigStatuses(rigs, home, time.Now())
+
+	if jsonOut {
+		blob, err := encodeRigsJSON(statuses)
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(blob))
+		return nil
+	}
+
+	if len(statuses) == 0 {
 		fmt.Fprintln(os.Stderr, "rig: no rigs in flight")
 		return nil
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-	for _, r := range rigs {
-		fmt.Fprintf(w, "%s\t%s\t%s\n", r.ID, age(r.Created), r.Title)
+	for _, s := range statuses {
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", s.ID, age(s.Created), agentMarker(s), s.Title)
 	}
 	return w.Flush()
+}
+
+// rigStatus is the enriched view rig ls renders: a rigInfo plus the live
+// signals (tmux session presence, agent attention) that make ls the one place
+// to scan everything in flight. Field tags pin the json shape as an API.
+type rigStatus struct {
+	ID          string     `json:"id"`
+	Slug        string     `json:"slug"`
+	Title       string     `json:"title"`
+	Path        string     `json:"path"`
+	Created     time.Time  `json:"created"`
+	SessionLive bool       `json:"session_live"`
+	Agent       string     `json:"agent"`                 // working | idle | "" (no session)
+	LastActive  *time.Time `json:"last_active,omitempty"` // newest claude turn, if any
+}
+
+// agentActiveWindow is how recently a claude turn must have landed for the
+// agent to read as "working" rather than "idle".
+const agentActiveWindow = 3 * time.Minute
+
+// rigStatuses enriches each rig with its live signals. Kept out of listRigs
+// so cd and reap don't pay for tmux/claude probes they don't use.
+func rigStatuses(rigs []rigInfo, home string, now time.Time) []rigStatus {
+	out := make([]rigStatus, 0, len(rigs))
+	for _, r := range rigs {
+		s := rigStatus{
+			ID:          r.ID,
+			Slug:        r.Slug,
+			Title:       r.Title,
+			Path:        r.Path,
+			Created:     r.Created,
+			SessionLive: tmuxHasSession(tmuxSessionName(r.Path)),
+		}
+		if ts := claudeSessionActivity(home, r.Path); ts > 0 {
+			t := time.Unix(ts, 0)
+			s.LastActive = &t
+		}
+		s.Agent = agentState(s.LastActive, now)
+		out = append(out, s)
+	}
+	return out
+}
+
+// agentState buckets agent attention from the newest claude turn. We can only
+// honestly read recency from session-file mtimes (a turn appends, repaint
+// doesn't), so this is working-vs-idle, not the working/waiting/idle split the
+// issue sketched — telling "waiting on input" from "quiet" needs a richer
+// signal than a timestamp. Returns "" when no claude session exists at all.
+func agentState(lastActive *time.Time, now time.Time) string {
+	if lastActive == nil {
+		return ""
+	}
+	if now.Sub(*lastActive) < agentActiveWindow {
+		return "working"
+	}
+	return "idle"
+}
+
+// agentMarker renders the agent column for the table, blank-padded to a dash
+// when there's no agent so the column stays scannable.
+func agentMarker(s rigStatus) string {
+	if s.Agent == "" {
+		return "-"
+	}
+	return s.Agent
+}
+
+// encodeRigsJSON marshals the status rows as the ls json API. Always an array
+// (never null) so consumers can iterate unconditionally.
+func encodeRigsJSON(statuses []rigStatus) ([]byte, error) {
+	if statuses == nil {
+		statuses = []rigStatus{}
+	}
+	return json.MarshalIndent(statuses, "", "  ")
 }
 
 // age renders a compact relative age for ls output.
