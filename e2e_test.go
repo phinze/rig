@@ -92,6 +92,8 @@ exit 1
 		basedir,
 		filepath.Join(basedir, ".rig.toml"),
 		filepath.Join(basedir, ".envrc"),
+		// agent-facing breadcrumb, rendered from the manifest.
+		filepath.Join(basedir, "CLAUDE.md"),
 		filepath.Join(basedir, "fakerepo", ".jj"),
 		// direnv anchor written because the fake repo ships no .envrc of its own.
 		filepath.Join(basedir, "fakerepo", ".envrc"),

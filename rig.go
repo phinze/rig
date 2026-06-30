@@ -102,6 +102,13 @@ func addRepoWorkspace(basedir, rigID string, repo repoRef, startRev string) (str
 	if err := addRepoToManifest(basedir, repo.Name, repo.nameWithOwner()); err != nil {
 		return "", err
 	}
+
+	// Refresh the agent-facing breadcrumb so its repo list reflects the repo we
+	// just added. Best-effort: a missing CLAUDE.md shouldn't fail the add.
+	if m, err := readManifest(basedir); err == nil {
+		_ = writeRigClaudeMD(basedir, m)
+	}
+
 	return repoDest, nil
 }
 
