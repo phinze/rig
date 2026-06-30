@@ -114,6 +114,10 @@ func reapBlocker(r rigInfo, home string, now time.Time, maxIdle time.Duration, f
 	if err != nil {
 		return fmt.Sprintf("reading basedir: %v", err)
 	}
+	m, err := readManifest(r.Path)
+	if err != nil {
+		return fmt.Sprintf("reading manifest: %v", err)
+	}
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -134,15 +138,22 @@ func reapBlocker(r rigInfo, home string, now time.Time, maxIdle time.Duration, f
 			_ = jjGitFetch(source)
 		}
 		// Merged + no-WIP below @: any non-empty commit reachable from @
-		// that isn't on trunk blocks the reap. Catches the
-		// jj-new-on-top-of-WIP shape and unmerged (or squash-merged —
-		// same blind spot as the shell script this replaces) work alike.
+		// that isn't on trunk is a candidate for blocking the reap. Catches
+		// the jj-new-on-top-of-WIP shape and genuinely unmerged work alike.
 		empty, err := jjRevsetEmpty(ws, "::@ & ~@ & ~empty() & ~::trunk()")
 		if err != nil {
 			return fmt.Sprintf("%s: jj check failed: %v", e.Name(), err)
 		}
 		if !empty {
-			return fmt.Sprintf("%s has unmerged work", e.Name())
+			// Off-trunk commits don't prove the work is unmerged: a squash
+			// merge lands on trunk as a brand-new commit, so the branch's
+			// originals never become trunk ancestors and look unmerged
+			// forever. Ask GitHub before believing jj here. Fail closed —
+			// no branch, no PR, an unmerged PR, or a gh error all keep the
+			// rig; only a confirmed MERGED state lets us look past trunk.
+			if reason := unmergedReason(ws, m.Repos[e.Name()], e.Name()); reason != "" {
+				return reason
+			}
 		}
 		// @ itself gets one allowance: the direnv anchor rig wrote at
 		// setup. jj auto-tracks it, leaving @ permanently non-empty in
@@ -155,6 +166,37 @@ func reapBlocker(r rigInfo, home string, now time.Time, maxIdle time.Duration, f
 		if !atEmpty && !anchorOnlyWIP(ws) {
 			return fmt.Sprintf("%s has uncommitted changes", e.Name())
 		}
+	}
+	return ""
+}
+
+// unmergedReason decides whether a workspace with off-trunk commits should
+// still block the reap, returning the blocker reason ("" means the work is
+// accounted for and the reap may proceed). It only runs when jj has already
+// found non-empty off-trunk commits below @, so it's lazy: one gh call per
+// rig that's a reap candidate, never a sweep. label is the workspace subdir,
+// used in the reason strings.
+func unmergedReason(ws, nameWithOwner, label string) string {
+	branch, err := jjPRBranch(ws)
+	if err != nil || branch == "" {
+		// No bookmark to map to a PR — treat as unmerged local work.
+		return fmt.Sprintf("%s has unmerged work", label)
+	}
+	pr, err := prForBranch(nameWithOwner, branch)
+	if err != nil || pr == nil || pr.State != "MERGED" {
+		// Couldn't confirm a merge (offline, no PR, still open): fail closed.
+		return fmt.Sprintf("%s has unmerged work", label)
+	}
+	// PR merged: the branch's own commits are done even though they aren't
+	// trunk ancestors. Only work layered ON TOP of the merged branch still
+	// counts as unfinished, so re-check excluding the branch's ancestry.
+	beyond, err := jjRevsetEmpty(ws,
+		fmt.Sprintf("::@ & ~@ & ~empty() & ~::trunk() & ~::%q", branch))
+	if err != nil {
+		return fmt.Sprintf("%s: jj check failed: %v", label, err)
+	}
+	if !beyond {
+		return fmt.Sprintf("%s has work beyond the merged PR", label)
 	}
 	return ""
 }
