@@ -43,11 +43,22 @@ func tmuxSplitH(target, cwd, command string) error {
 }
 
 // tmuxNewWindow opens a new window named name in the session, with cwd as its
-// working directory.
-func tmuxNewWindow(session, name, cwd string) error {
-	cmd := exec.Command("tmux", "new-window", "-t", session, "-n", name, "-c", cwd)
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	return cmd.Run()
+// working directory, and returns the new window's id (e.g. "@5"). The window is
+// created detached (-d) so it doesn't steal focus: rig add is normally run from
+// a main session, and the new repo's window should wait in the background until
+// the caller chooses to visit it. The returned id is a stable target for a
+// follow-up split, even after other windows come and go.
+func tmuxNewWindow(session, name, cwd string) (string, error) {
+	cmd := exec.Command("tmux", "new-window", "-d",
+		"-t", session, "-n", name, "-c", cwd,
+		"-P", "-F", "#{window_id}",
+	)
+	cmd.Stderr = os.Stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 func tmuxSelectPane(target string) error {

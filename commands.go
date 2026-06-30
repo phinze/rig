@@ -51,10 +51,15 @@ func runAdd(args []string) error {
 		return err
 	}
 
-	// Best-effort: give the new repo its own window in the rig session.
+	// Best-effort: give the new repo its own background window in the rig
+	// session, laid out like rig up's primary window — repo shell on the left,
+	// recto previewing diffs on the right. Backgrounded so adding a repo from a
+	// main session doesn't yank focus into it.
 	session := tmuxSessionName(basedir)
 	if tmuxHasSession(session) {
-		_ = tmuxNewWindow(session, repo, repoDest)
+		if winID, err := tmuxNewWindow(session, repo, repoDest); err == nil {
+			_ = tmuxSplitH(winID, repoDest, "recto")
+		}
 	}
 
 	fmt.Fprintf(os.Stderr, "rig: added %s → %s\n", ref.nameWithOwner(), repoDest)
