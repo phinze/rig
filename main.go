@@ -19,6 +19,8 @@ func main() {
 		err = runUp(args)
 	case "review":
 		err = runReview(args)
+	case "pr":
+		err = runPR(args)
 	case "add":
 		err = runAdd(args)
 	case "ls":
@@ -53,6 +55,8 @@ usage:
                             (exact id, search terms, or fzf picker with no args)
   rig review [pr-url]       pitch a review rig for a PR
                             (url, or fzf picker over review-requested PRs)
+  rig pr                    open the rig's PR in the browser
+                            (gh pr view -w, but it knows the jj branch)
   rig add <owner/repo>      add another repo to the rig you're in
   rig ls                    list rigs in flight
   rig cd [query]            jump to a rig's tmux session (fzf if ambiguous)
