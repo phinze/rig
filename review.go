@@ -59,7 +59,7 @@ func runReview(args []string) error {
 	}
 
 	repo := repoRef{Owner: pr.Owner, Name: pr.Repo, Path: repoPath}
-	repoDest, err := addRepoWorkspace(basedir, rigID, repo, branch)
+	repoDest, err := addRepoWorkspace(basedir, rigID, repo, branch, branch)
 	if err != nil {
 		return err
 	}

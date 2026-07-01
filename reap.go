@@ -151,7 +151,10 @@ func reapBlocker(r rigInfo, home string, now time.Time, maxIdle time.Duration, f
 			// forever. Ask GitHub before believing jj here. Fail closed —
 			// no branch, no PR, an unmerged PR, or a gh error all keep the
 			// rig; only a confirmed MERGED state lets us look past trunk.
-			if reason := unmergedReason(ws, m.Repos[e.Name()], e.Name()); reason != "" {
+			// The branch comes from the manifest (recorded at up/review) when
+			// we have it, else the bookmark heuristic.
+			branch, _ := repoBranch(m, e.Name(), ws)
+			if reason := unmergedReason(ws, m.Repos[e.Name()], e.Name(), branch); reason != "" {
 				return reason
 			}
 		}
@@ -175,11 +178,11 @@ func reapBlocker(r rigInfo, home string, now time.Time, maxIdle time.Duration, f
 // accounted for and the reap may proceed). It only runs when jj has already
 // found non-empty off-trunk commits below @, so it's lazy: one gh call per
 // rig that's a reap candidate, never a sweep. label is the workspace subdir,
-// used in the reason strings.
-func unmergedReason(ws, nameWithOwner, label string) string {
-	branch, err := jjPRBranch(ws)
-	if err != nil || branch == "" {
-		// No bookmark to map to a PR — treat as unmerged local work.
+// used in the reason strings; branch is the rig's resolved branch for this
+// repo (empty when we couldn't determine one).
+func unmergedReason(ws, nameWithOwner, label, branch string) string {
+	if branch == "" {
+		// No branch to map to a PR — treat as unmerged local work.
 		return fmt.Sprintf("%s has unmerged work", label)
 	}
 	pr, err := prForBranch(nameWithOwner, branch)

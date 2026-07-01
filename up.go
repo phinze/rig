@@ -39,7 +39,10 @@ func runUp(args []string) error {
 	}
 
 	startRev := resolveStartRev(repo.Path, tk.BranchName)
-	repoDest, err := addRepoWorkspace(basedir, tk.rigID(), repo, startRev)
+	// Record the Linear branch even when startRev fell back to trunk() because
+	// the branch isn't pushed yet: it's still the branch this rig's PR will ride,
+	// so pr/ls/reap resolve the right PR the moment it exists.
+	repoDest, err := addRepoWorkspace(basedir, tk.rigID(), repo, startRev, tk.BranchName)
 	if err != nil {
 		return err
 	}

@@ -13,6 +13,8 @@ import (
 func fakeGh(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
+	// GH_FAKE_ROLLUP steers the emitted statusCheckRollup (defaults to a single
+	// passing CheckRun); tests set it to "" for a bare PR or a failing item.
 	script := `#!/bin/sh
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
   if [ -n "$GH_FAKE_ERR" ]; then
@@ -23,7 +25,10 @@ if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
     echo "no pull requests found for branch \"x\"" >&2
     exit 1
   fi
-  printf '{"number":7,"state":"%s","url":"https://github.com/o/r/pull/7"}\n' "${GH_FAKE_STATE:-OPEN}"
+  rollup='[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"}]'
+  if [ -n "${GH_FAKE_ROLLUP+set}" ]; then rollup="$GH_FAKE_ROLLUP"; fi
+  printf '{"number":7,"state":"%s","url":"https://github.com/o/r/pull/7","statusCheckRollup":%s}\n' \
+    "${GH_FAKE_STATE:-OPEN}" "${rollup:-[]}"
   exit 0
 fi
 echo "fake gh: unsupported invocation $*" >&2
@@ -38,14 +43,14 @@ exit 1
 func TestPrForBranch(t *testing.T) {
 	fakeGh(t)
 
-	t.Run("merged", func(t *testing.T) {
+	t.Run("merged with passing checks", func(t *testing.T) {
 		t.Setenv("GH_FAKE_STATE", "MERGED")
 		pr, err := prForBranch("o/r", "feat")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if pr == nil || pr.State != "MERGED" || pr.Number != 7 {
-			t.Fatalf("got %+v, want a MERGED PR #7", pr)
+		if pr == nil || pr.State != "MERGED" || pr.Number != 7 || pr.Checks != "passing" {
+			t.Fatalf("got %+v, want a MERGED PR #7 with passing checks", pr)
 		}
 	})
 
@@ -66,4 +71,43 @@ func TestPrForBranch(t *testing.T) {
 			t.Fatal("expected an error when gh fails")
 		}
 	})
+}
+
+func TestRollupChecks(t *testing.T) {
+	cases := []struct {
+		name  string
+		items []checkItem
+		want  string
+	}{
+		{"no checks", nil, ""},
+		{"all green", []checkItem{
+			{Typename: "CheckRun", Status: "COMPLETED", Conclusion: "SUCCESS"},
+			{Typename: "CheckRun", Status: "COMPLETED", Conclusion: "SKIPPED"},
+		}, "passing"},
+		{"a failure dominates", []checkItem{
+			{Typename: "CheckRun", Status: "COMPLETED", Conclusion: "SUCCESS"},
+			{Typename: "CheckRun", Status: "COMPLETED", Conclusion: "FAILURE"},
+		}, "failing"},
+		{"in-progress reads pending", []checkItem{
+			{Typename: "CheckRun", Status: "IN_PROGRESS"},
+			{Typename: "CheckRun", Status: "COMPLETED", Conclusion: "SUCCESS"},
+		}, "pending"},
+		{"failure beats pending", []checkItem{
+			{Typename: "CheckRun", Status: "IN_PROGRESS"},
+			{Typename: "CheckRun", Status: "COMPLETED", Conclusion: "FAILURE"},
+		}, "failing"},
+		{"legacy status context error", []checkItem{
+			{Typename: "StatusContext", State: "ERROR"},
+		}, "failing"},
+		{"legacy status context pending", []checkItem{
+			{Typename: "StatusContext", State: "PENDING"},
+		}, "pending"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := rollupChecks(c.items); got != c.want {
+				t.Errorf("rollupChecks = %q, want %q", got, c.want)
+			}
+		})
+	}
 }

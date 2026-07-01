@@ -52,22 +52,30 @@ func TestUnmergedReason(t *testing.T) {
 
 	t.Run("merged PR clears the gate", func(t *testing.T) {
 		t.Setenv("GH_FAKE_STATE", "MERGED")
-		if reason := unmergedReason(ws, "o/r", "fakerepo"); reason != "" {
+		if reason := unmergedReason(ws, "o/r", "fakerepo", "feat"); reason != "" {
 			t.Errorf("expected merged PR to reap, blocked by: %q", reason)
 		}
 	})
 
 	t.Run("open PR keeps the rig", func(t *testing.T) {
 		t.Setenv("GH_FAKE_STATE", "OPEN")
-		if reason := unmergedReason(ws, "o/r", "fakerepo"); reason == "" {
+		if reason := unmergedReason(ws, "o/r", "fakerepo", "feat"); reason == "" {
 			t.Error("expected open PR to keep the rig")
 		}
 	})
 
 	t.Run("no PR keeps the rig", func(t *testing.T) {
 		t.Setenv("GH_FAKE_NOPR", "1")
-		if reason := unmergedReason(ws, "o/r", "fakerepo"); reason == "" {
+		if reason := unmergedReason(ws, "o/r", "fakerepo", "feat"); reason == "" {
 			t.Error("expected missing PR to keep the rig")
+		}
+	})
+
+	t.Run("no branch keeps the rig without asking gh", func(t *testing.T) {
+		// Empty branch means we couldn't map the work to a PR; fail closed
+		// without a gh round-trip.
+		if reason := unmergedReason(ws, "o/r", "fakerepo", ""); reason == "" {
+			t.Error("expected a branchless workspace to keep the rig")
 		}
 	})
 
@@ -77,7 +85,7 @@ func TestUnmergedReason(t *testing.T) {
 		write("more.txt", "kept working\n")
 		run("jj", "commit", "-m", "more")
 		t.Setenv("GH_FAKE_STATE", "MERGED")
-		reason := unmergedReason(ws, "o/r", "fakerepo")
+		reason := unmergedReason(ws, "o/r", "fakerepo", "feat")
 		if reason == "" {
 			t.Error("expected post-merge work to keep the rig")
 		}

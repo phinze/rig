@@ -123,6 +123,18 @@ func revExists(repoPath, rev string) bool {
 	return err == nil && len(strings.TrimSpace(string(out))) > 0
 }
 
+// repoBranch answers "which branch backs this repo's work in the rig?" It
+// prefers the manifest's recorded branch (authoritative, captured at creation
+// even before the branch is pushed), and only falls back to the jj-bookmark
+// heuristic for repos we didn't record: added repos, or rigs whose manifests
+// predate branch recording. Empty means no branch could be determined.
+func repoBranch(m manifest, subdir, workspacePath string) (string, error) {
+	if b := m.Branches[subdir]; b != "" {
+		return b, nil
+	}
+	return jjPRBranch(workspacePath)
+}
+
 // jjWorkspaceName is the workspace identity registered with the source repo.
 // Scoping it by rig keeps multi-rig listings legible in `jj workspace list`.
 func jjWorkspaceName(rigID, repoName string) string {

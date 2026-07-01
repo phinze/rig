@@ -58,7 +58,8 @@ usage:
   rig pr                    open the rig's PR in the browser
                             (gh pr view -w, but it knows the jj branch)
   rig add <owner/repo>      add another repo to the rig you're in
-  rig ls                    list rigs in flight
+  rig ls [--full]           list rigs in flight
+                            (--full adds PR/CI, one gh call per repo)
   rig cd [query]            jump to a rig's tmux session (fzf if ambiguous)
   rig down                  break the current rig down
   rig reap [-n] [--max-idle SECONDS]

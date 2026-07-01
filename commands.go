@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"text/tabwriter"
 	"time"
 )
@@ -45,8 +46,10 @@ func runAdd(args []string) error {
 	}
 
 	ref := repoRef{Owner: owner, Name: repo, Path: repoPath}
-	// No branch hint for an added repo — start it on trunk().
-	repoDest, err := addRepoWorkspace(basedir, m.ID, ref, "trunk()")
+	// No branch hint for an added repo — start it on trunk() and leave the
+	// branch unrecorded, so pr/ls fall back to the bookmark heuristic once the
+	// user creates one.
+	repoDest, err := addRepoWorkspace(basedir, m.ID, ref, "trunk()", "")
 	if err != nil {
 		return err
 	}
@@ -72,14 +75,17 @@ func runAdd(args []string) error {
 // would otherwise have to scrape columns.
 func runLs(args []string) error {
 	jsonOut := false
+	full := false
 	for _, a := range args {
 		switch a {
 		case "--format=json":
 			jsonOut = true
 		case "--format=table":
 			jsonOut = false
+		case "--full":
+			full = true
 		default:
-			return fmt.Errorf("usage: rig ls [--format=json|table]")
+			return fmt.Errorf("usage: rig ls [--format=json|table] [--full]")
 		}
 	}
 
@@ -92,6 +98,11 @@ func runLs(args []string) error {
 		return err
 	}
 	statuses := rigStatuses(rigs, home, time.Now())
+	// PR/CI is opt-in: it costs a gh round-trip per repo, so plain ls (the
+	// common case, and what statuslines poll) stays local and instant.
+	if full {
+		enrichWithPRs(statuses)
+	}
 
 	if jsonOut {
 		blob, err := encodeRigsJSON(statuses)
@@ -108,7 +119,11 @@ func runLs(args []string) error {
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
 	for _, s := range statuses {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", s.ID, age(s.Created), agentMarker(s), s.Title)
+		if full {
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", s.ID, age(s.Created), agentMarker(s), prMarker(s), s.Title)
+		} else {
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", s.ID, age(s.Created), agentMarker(s), s.Title)
+		}
 	}
 	return w.Flush()
 }
@@ -125,6 +140,16 @@ type rigStatus struct {
 	SessionLive bool       `json:"session_live"`
 	Agent       string     `json:"agent"`                 // working | idle | "" (no session)
 	LastActive  *time.Time `json:"last_active,omitempty"` // newest claude turn, if any
+	PRs         []rigPR    `json:"prs,omitempty"`         // populated only under --full
+}
+
+// rigPR is one of a rig's pull requests, tagged with the repo and branch it
+// belongs to so a multi-repo rig's PRs stay distinguishable. The prInfo fields
+// (number, state, url, checks) flatten into the same json object.
+type rigPR struct {
+	Repo   string `json:"repo"`   // owner/repo
+	Branch string `json:"branch"` // head branch
+	prInfo
 }
 
 // agentActiveWindow is how recently a claude turn must have landed for the
@@ -176,6 +201,97 @@ func agentMarker(s rigStatus) string {
 		return "-"
 	}
 	return s.Agent
+}
+
+// prMarker renders the PR column for the --full table. A single-repo rig reads
+// "#7 OPEN/passing"; a rig spanning repos prefixes each with its short repo
+// name ("infra #80 OPEN  runtime #42 OPEN/failing") so the PRs don't blur
+// together. A dash keeps the column scannable for rigs with no PR.
+func prMarker(s rigStatus) string {
+	if len(s.PRs) == 0 {
+		return "-"
+	}
+	multi := len(s.PRs) > 1
+	segs := make([]string, len(s.PRs))
+	for i, pr := range s.PRs {
+		seg := fmt.Sprintf("#%d %s", pr.Number, pr.State)
+		if pr.Checks != "" {
+			seg += "/" + pr.Checks
+		}
+		if multi {
+			seg = shortRepo(pr.Repo) + " " + seg
+		}
+		segs[i] = seg
+	}
+	return strings.Join(segs, "  ")
+}
+
+// shortRepo trims "owner/repo" to just "repo" for compact table display.
+func shortRepo(nameWithOwner string) string {
+	if _, name, ok := strings.Cut(nameWithOwner, "/"); ok {
+		return name
+	}
+	return nameWithOwner
+}
+
+// enrichWithPRs fills in each rig's PRs for `rig ls --full`. Every rig's per-
+// repo branch is resolved locally first (manifest-recorded, or the bookmark
+// heuristic), then one gh call per rig-repo fetches that exact branch's PR,
+// fanned out concurrently. Cost scales with repos-in-flight, and each call is a
+// single PR's rollup rather than a repo-wide list. A rig can carry several PRs
+// (one per repo it touches). gh failures and branchless repos degrade to a
+// blank column rather than failing the whole listing.
+func enrichWithPRs(statuses []rigStatus) {
+	type task struct {
+		rig    int
+		repo   string // owner/repo
+		branch string
+	}
+	var tasks []task
+	for i := range statuses {
+		m, err := readManifest(statuses[i].Path)
+		if err != nil {
+			continue
+		}
+		subdirs := make([]string, 0, len(m.Repos))
+		for sub := range m.Repos {
+			subdirs = append(subdirs, sub)
+		}
+		sort.Strings(subdirs)
+		for _, sub := range subdirs {
+			branch, err := repoBranch(m, sub, filepath.Join(statuses[i].Path, sub))
+			if err != nil || branch == "" {
+				continue
+			}
+			tasks = append(tasks, task{i, m.Repos[sub], branch})
+		}
+	}
+
+	results := make([]*prInfo, len(tasks))
+	sem := make(chan struct{}, 8) // cap concurrent gh calls
+	var wg sync.WaitGroup
+	for i, t := range tasks {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int, t task) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if pr, err := prForBranch(t.repo, t.branch); err == nil {
+				results[i] = pr
+			}
+		}(i, t)
+	}
+	wg.Wait()
+
+	// Tasks were built in rig-then-sorted-subdir order, so appending in order
+	// keeps each rig's PRs stable and grouped.
+	for i, t := range tasks {
+		if results[i] != nil {
+			statuses[t.rig].PRs = append(statuses[t.rig].PRs, rigPR{
+				Repo: t.repo, Branch: t.branch, prInfo: *results[i],
+			})
+		}
+	}
 }
 
 // encodeRigsJSON marshals the status rows as the ls json API. Always an array

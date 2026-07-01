@@ -66,9 +66,12 @@ func createBasedir(basedir string, m manifest) error {
 }
 
 // addRepoWorkspace creates a jj workspace for repo under basedir at startRev,
-// drops a direnv anchor so GH_REPO loads, and records the repo in the manifest.
-// Returns the absolute path to the created workspace directory.
-func addRepoWorkspace(basedir, rigID string, repo repoRef, startRev string) (string, error) {
+// drops a direnv anchor so GH_REPO loads, and records the repo (and its branch,
+// when known) in the manifest. branch is the intended branch for this repo's
+// work — up passes the Linear branch, review the PR head, add passes "" since
+// an added repo starts on trunk with no branch yet. Returns the absolute path
+// to the created workspace directory.
+func addRepoWorkspace(basedir, rigID string, repo repoRef, startRev, branch string) (string, error) {
 	repoDest := filepath.Join(basedir, repo.Name)
 	wsName := jjWorkspaceName(rigID, repo.Name)
 
@@ -99,7 +102,7 @@ func addRepoWorkspace(basedir, rigID string, repo repoRef, startRev string) (str
 		return "", err
 	}
 
-	if err := addRepoToManifest(basedir, repo.Name, repo.nameWithOwner()); err != nil {
+	if err := addRepoToManifest(basedir, repo.Name, repo.nameWithOwner(), branch); err != nil {
 		return "", err
 	}
 

@@ -39,7 +39,7 @@ func runPR(args []string) error {
 	}
 	repoDest := filepath.Join(basedir, subdir)
 
-	branch, err := jjPRBranch(repoDest)
+	branch, err := repoBranch(m, subdir, repoDest)
 	if err != nil {
 		return err
 	}
