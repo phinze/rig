@@ -30,6 +30,12 @@ go build ./...
 go test ./...
 ```
 
+This is a personal, single-author repo. Land work by committing straight to
+`main` — no PR ceremony, no review gate, `pr-time` is overkill here. The whole
+flow is: keep the tree green (`go build ./... && go test ./...`), draft the
+commit message and get a nod, `jj describe` the change, then advance the `main`
+bookmark to it.
+
 ## Conventions
 
 - stdlib net/http preferred over frameworks
