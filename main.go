@@ -25,8 +25,8 @@ func main() {
 		err = runAdd(args)
 	case "ls":
 		err = runLs(args)
-	case "cd":
-		err = runCd(args)
+	case "switch", "cd": // cd is a retained alias
+		err = runSwitch(args)
 	case "down":
 		err = runDown(args)
 	case "reap":
@@ -60,7 +60,8 @@ usage:
   rig add <owner/repo>      add another repo to the rig you're in
   rig ls [--full]           list rigs in flight
                             (--full adds PR/CI, one gh call per repo)
-  rig cd [query]            jump to a rig's tmux session (fzf if ambiguous)
+  rig switch [query]        jump to a rig's tmux session, most-recently-used
+                            first (fzf if ambiguous; aliased as rig cd)
   rig down                  break the current rig down
   rig reap [-n] [--max-idle SECONDS]
                             break down every rig that is merged, WIP-free,

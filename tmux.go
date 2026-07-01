@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"golang.org/x/term"
@@ -26,6 +27,44 @@ func tmuxSessionName(path string) string {
 
 func tmuxHasSession(name string) bool {
 	return exec.Command("tmux", "has-session", "-t", name).Run() == nil
+}
+
+// tmuxLastAttached maps each live tmux session name to the unix time it was
+// last attached (0 if never). It's how `rig switch` sorts most-recently-touched
+// first, the same session_last_attached signal session-wizard's `t` sorts on.
+// Returns an empty map when tmux isn't running.
+func tmuxLastAttached() map[string]int64 {
+	out, err := exec.Command("tmux", "list-sessions", "-F", "#{session_last_attached} #{session_name}").Output()
+	if err != nil {
+		return map[string]int64{}
+	}
+	m := make(map[string]int64)
+	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
+		ts, name, ok := strings.Cut(line, " ")
+		if !ok {
+			continue
+		}
+		secs, err := strconv.ParseInt(ts, 10, 64)
+		if err != nil {
+			continue
+		}
+		m[name] = secs
+	}
+	return m
+}
+
+// currentTmuxSession returns the name of the session the current process is
+// running inside, or "" if not inside tmux. `rig switch` drops this from the
+// list — you never switch to where you already are.
+func currentTmuxSession() string {
+	if os.Getenv("TMUX") == "" {
+		return ""
+	}
+	out, err := exec.Command("tmux", "display-message", "-p", "#S").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 func tmuxNewSession(name, cwd string) error {
