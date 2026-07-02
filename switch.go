@@ -42,6 +42,18 @@ func runSwitch(args []string) error {
 		}
 		statuses = kept
 	}
+
+	// Parked rigs are deliberately dormant — awaiting review, session killed —
+	// so they stay out of the switcher until `rig wake` brings one back.
+	{
+		kept := statuses[:0]
+		for _, s := range statuses {
+			if !s.Parked {
+				kept = append(kept, s)
+			}
+		}
+		statuses = kept
+	}
 	if len(statuses) == 0 {
 		return fmt.Errorf("no other rigs in flight")
 	}
@@ -59,48 +71,9 @@ func runSwitch(args []string) error {
 		return statuses[i].Created.After(statuses[j].Created)
 	})
 
-	var chosen *rigStatus
-	if len(args) >= 1 {
-		q := strings.ToLower(strings.Join(args, " "))
-		var matches []rigStatus
-		for _, s := range statuses {
-			hay := strings.ToLower(s.ID + " " + s.Slug + " " + s.Title)
-			if strings.Contains(hay, q) {
-				matches = append(matches, s)
-			}
-		}
-		switch len(matches) {
-		case 0:
-			return fmt.Errorf("no rig matches %q", q)
-		case 1:
-			chosen = &matches[0]
-		default:
-			statuses = matches // narrow the picker to the matches
-		}
-	}
-
-	if chosen == nil {
-		rows := make([]string, len(statuses))
-		for i, s := range statuses {
-			// col1 id, col2 age+agent, col3 title are shown; col4 slug is the
-			// hidden lookup key (unique per rig, unlike id which can repeat).
-			rows[i] = fmt.Sprintf("%s\t%s\t%s\t%s", s.ID, switchStatusCol(s), s.Title, s.Slug)
-		}
-		sel, err := fzfSelect(rows, "switch to rig: ")
-		if err != nil {
-			return err
-		}
-		if sel == "" {
-			return nil
-		}
-		fields := strings.Split(sel, "\t")
-		slug := fields[len(fields)-1]
-		for i := range statuses {
-			if statuses[i].Slug == slug {
-				chosen = &statuses[i]
-				break
-			}
-		}
+	chosen, err := pickRigStatus(statuses, args, "switch to rig: ")
+	if err != nil {
+		return err
 	}
 	if chosen == nil {
 		return nil
@@ -114,6 +87,54 @@ func runSwitch(args []string) error {
 		}
 	}
 	return attachOrReport(session)
+}
+
+// pickRigStatus resolves a single rig from statuses. An arg substring-matches
+// id/slug/title: a unique match is taken directly, an ambiguous one narrows the
+// fzf picker, no match is an error. With no arg (or an ambiguous one) it opens
+// fzf with the given prompt. Returns nil when the user escapes the picker.
+// Shared by switch and wake so both filter and select the same way.
+func pickRigStatus(statuses []rigStatus, args []string, prompt string) (*rigStatus, error) {
+	if len(args) >= 1 {
+		q := strings.ToLower(strings.Join(args, " "))
+		var matches []rigStatus
+		for _, s := range statuses {
+			hay := strings.ToLower(s.ID + " " + s.Slug + " " + s.Title)
+			if strings.Contains(hay, q) {
+				matches = append(matches, s)
+			}
+		}
+		switch len(matches) {
+		case 0:
+			return nil, fmt.Errorf("no rig matches %q", q)
+		case 1:
+			return &matches[0], nil
+		default:
+			statuses = matches // narrow the picker to the matches
+		}
+	}
+
+	rows := make([]string, len(statuses))
+	for i, s := range statuses {
+		// col1 id, col2 age+agent, col3 title are shown; col4 slug is the
+		// hidden lookup key (unique per rig, unlike id which can repeat).
+		rows[i] = fmt.Sprintf("%s\t%s\t%s\t%s", s.ID, switchStatusCol(s), s.Title, s.Slug)
+	}
+	sel, err := fzfSelect(rows, prompt)
+	if err != nil {
+		return nil, err
+	}
+	if sel == "" {
+		return nil, nil
+	}
+	slug := strings.Split(sel, "\t")
+	lookup := slug[len(slug)-1]
+	for i := range statuses {
+		if statuses[i].Slug == lookup {
+			return &statuses[i], nil
+		}
+	}
+	return nil, nil
 }
 
 // switchStatusCol renders the compact age/agent cell for a switch row, e.g.

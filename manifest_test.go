@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // A manifest with recorded branches must round-trip through write/read, and the
@@ -54,6 +55,41 @@ func TestManifestLegacyScalarBranch(t *testing.T) {
 	}
 	if !slices.Equal(m.Branches["rig"], []string{"phinze/legacy"}) {
 		t.Errorf("legacy scalar branch = %v, want [phinze/legacy]", m.Branches["rig"])
+	}
+}
+
+// The parked timestamp must round-trip, and an unparked rig must write no
+// parked key at all (so switch/ls read it as in-flight).
+func TestManifestParkedRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	parked := time.Now().UTC().Truncate(time.Second)
+	m := manifest{ID: "mir-5", Repos: map[string]string{"rig": "phinze/rig"}, Parked: parked}
+	if err := writeManifest(dir, m); err != nil {
+		t.Fatalf("writeManifest: %v", err)
+	}
+	got, err := readManifest(dir)
+	if err != nil {
+		t.Fatalf("readManifest: %v", err)
+	}
+	if !got.Parked.Equal(parked) {
+		t.Errorf("parked = %v, want %v", got.Parked, parked)
+	}
+
+	// An unparked rig leaves no parked key behind.
+	dir2 := t.TempDir()
+	if err := writeManifest(dir2, manifest{ID: "mir-6", Repos: map[string]string{"rig": "phinze/rig"}}); err != nil {
+		t.Fatal(err)
+	}
+	raw := string(mustReadFile(t, dir2+"/"+manifestName))
+	if strings.Contains(raw, "parked") {
+		t.Errorf("expected no parked key for an in-flight rig:\n%s", raw)
+	}
+	got2, err := readManifest(dir2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got2.Parked.IsZero() {
+		t.Errorf("in-flight rig should read Parked zero, got %v", got2.Parked)
 	}
 }
 

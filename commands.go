@@ -139,6 +139,7 @@ type rigStatus struct {
 	Created     time.Time  `json:"created"`
 	SessionLive bool       `json:"session_live"`
 	Agent       string     `json:"agent"`                 // working | idle | "" (no session)
+	Parked      bool       `json:"parked"`                // dormant, awaiting review
 	LastActive  *time.Time `json:"last_active,omitempty"` // newest claude turn, if any
 	PRs         []rigPR    `json:"prs,omitempty"`         // populated only under --full
 }
@@ -167,6 +168,7 @@ func rigStatuses(rigs []rigInfo, home string, now time.Time) []rigStatus {
 			Title:       r.Title,
 			Path:        r.Path,
 			Created:     r.Created,
+			Parked:      !r.Parked.IsZero(),
 			SessionLive: tmuxHasSession(tmuxSessionName(r.Path)),
 		}
 		if ts := claudeSessionActivity(home, r.Path); ts > 0 {
@@ -194,9 +196,13 @@ func agentState(lastActive *time.Time, now time.Time) string {
 	return "idle"
 }
 
-// agentMarker renders the agent column for the table, blank-padded to a dash
-// when there's no agent so the column stays scannable.
+// agentMarker renders the agent column for the table. A parked rig reads
+// "parked" (it's deliberately dormant, session killed); otherwise it's the live
+// agent state, or a dash when there's no session so the column stays scannable.
 func agentMarker(s rigStatus) string {
+	if s.Parked {
+		return "parked"
+	}
 	if s.Agent == "" {
 		return "-"
 	}
@@ -330,6 +336,7 @@ type rigInfo struct {
 	Title   string
 	Path    string // absolute basedir path
 	Created time.Time
+	Parked  time.Time // non-zero once `rig park` marked it dormant
 }
 
 // listRigs scans ~/workspaces for directories carrying a rig manifest.
@@ -367,7 +374,7 @@ func listRigs() ([]rigInfo, error) {
 		if created.IsZero() {
 			created = fi.ModTime()
 		}
-		rigs = append(rigs, rigInfo{ID: m.ID, Slug: e.Name(), Title: m.Title, Path: base, Created: created})
+		rigs = append(rigs, rigInfo{ID: m.ID, Slug: e.Name(), Title: m.Title, Path: base, Created: created, Parked: m.Parked})
 	}
 	sort.Slice(rigs, func(i, j int) bool { return rigs[i].Created.Before(rigs[j].Created) })
 	return rigs, nil

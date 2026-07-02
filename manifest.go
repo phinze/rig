@@ -17,6 +17,12 @@ type manifest struct {
 	ID      string
 	Title   string
 	Created time.Time
+	// Parked, when non-zero, marks a rig as dormant: its work is done and up
+	// for human review, so it drops out of `rig switch` and its tmux session is
+	// killed, but the basedir (and its claude session history) stay on disk.
+	// `rig wake` clears it and stands the session back up at the same path. Zero
+	// means an ordinary in-flight rig.
+	Parked time.Time
 	// Repos maps a repo's subdir name under the basedir to its
 	// "owner/repo" slug. The global direnvrc reads this to set GH_REPO,
 	// since the flat basedir path no longer encodes owner/repo the way
@@ -42,6 +48,9 @@ func writeManifest(basedir string, m manifest) error {
 	fmt.Fprintf(&b, "title = %q\n", m.Title)
 	if !m.Created.IsZero() {
 		fmt.Fprintf(&b, "created = %q\n", m.Created.Format(time.RFC3339))
+	}
+	if !m.Parked.IsZero() {
+		fmt.Fprintf(&b, "parked = %q\n", m.Parked.Format(time.RFC3339))
 	}
 	writeTable(&b, "repos", m.Repos)
 	writeBranchTable(&b, "branches", m.Branches)
@@ -151,6 +160,10 @@ func readManifest(basedir string) (manifest, error) {
 			case "created":
 				if t, err := time.Parse(time.RFC3339, val); err == nil {
 					m.Created = t
+				}
+			case "parked":
+				if t, err := time.Parse(time.RFC3339, val); err == nil {
+					m.Parked = t
 				}
 			}
 		case "repos":

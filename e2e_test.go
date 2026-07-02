@@ -431,6 +431,123 @@ exit 1
 	}
 }
 
+// TestParkWake walks a rig through park → ls → switch → wake: parking kills the
+// session and marks the manifest, ls still shows it (as parked), switch no
+// longer offers it, and wake clears the mark and stands the session back up at
+// the same basedir.
+func TestParkWake(t *testing.T) {
+	realTmux, err := exec.LookPath("tmux")
+	if err != nil {
+		t.Skip("tmux not installed")
+	}
+
+	home := t.TempDir()
+	bin := filepath.Join(home, "bin")
+	repoDir := filepath.Join(home, "src", "github.com", "fakeowner", "fakerepo")
+	rigBin := filepath.Join(home, "rig")
+
+	mustMkdir(t, bin)
+	mustMkdir(t, repoDir)
+
+	if out, err := exec.Command("go", "build", "-o", rigBin, ".").CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+
+	env := append(os.Environ(),
+		"HOME="+home,
+		"PATH="+bin+":"+os.Getenv("PATH"),
+		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.com",
+		"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@example.com",
+		"JJ_USER=Test", "JJ_EMAIL=test@example.com",
+	)
+
+	mustRun(t, repoDir, env, "git", "init", "-q", "-b", "main")
+	mustRun(t, repoDir, env, "git", "commit", "-q", "--allow-empty", "-m", "init")
+	mustRun(t, repoDir, env, "jj", "git", "init", "--colocate")
+	mustRun(t, repoDir, env, "jj", "config", "set", "--repo", `revset-aliases."trunk()"`, "main")
+
+	linearis := `#!/bin/sh
+if [ "$1" = "issues" ] && [ "$2" = "read" ]; then
+  cat <<JSON
+{"identifier":"FAKE-1","title":"do the thing","branchName":"fake/fake-1-do-the-thing"}
+JSON
+  exit 0
+fi
+echo "fake linearis: unsupported invocation $*" >&2
+exit 1
+`
+	mustWriteExec(t, filepath.Join(bin, "linearis"), linearis)
+
+	socket := "rig-e2e-parkwake"
+	tmuxWrap := fmt.Sprintf("#!/bin/sh\nexec %s -L %s \"$@\"\n", realTmux, socket)
+	mustWriteExec(t, filepath.Join(bin, "tmux"), tmuxWrap)
+
+	sleeper := "#!/bin/sh\nexec sleep infinity\n"
+	mustWriteExec(t, filepath.Join(bin, "recto"), sleeper)
+	mustWriteExec(t, filepath.Join(bin, "claude"), sleeper)
+
+	t.Cleanup(func() {
+		_ = exec.Command(realTmux, "-L", socket, "kill-server").Run()
+	})
+
+	upCmd := exec.Command(rigBin, "up", "FAKE-1")
+	upCmd.Dir = repoDir
+	upCmd.Env = env
+	if out, err := upCmd.CombinedOutput(); err != nil {
+		t.Fatalf("rig up: %v\n%s", err, out)
+	}
+	basedir := filepath.Join(home, "workspaces", "fake-1-do-the-thing")
+	session := "~/workspaces/fake-1-do-the-thing"
+
+	hasSession := func() bool {
+		return exec.Command(realTmux, "-L", socket, "has-session", "-t", session).Run() == nil
+	}
+	if !hasSession() {
+		t.Fatal("expected a session after up")
+	}
+
+	// --- rig park --- from inside the basedir.
+	parkOut := mustOutput(t, basedir, env, rigBin, "park")
+	if !strings.Contains(parkOut, "parked fake-1") {
+		t.Errorf("park output missing confirmation:\n%s", parkOut)
+	}
+	if m := string(mustReadFile(t, filepath.Join(basedir, ".rig.toml"))); !strings.Contains(m, "parked = \"") {
+		t.Errorf("manifest missing parked timestamp:\n%s", m)
+	}
+	if hasSession() {
+		t.Error("expected park to kill the session")
+	}
+
+	// ls still lists the rig, now marked parked.
+	lsOut := mustOutput(t, home, env, rigBin, "ls")
+	if !strings.Contains(lsOut, "fake-1") || !strings.Contains(lsOut, "parked") {
+		t.Errorf("ls should show the parked rig:\n%s", lsOut)
+	}
+
+	// switch no longer offers it — the only rig is parked, so there's nothing
+	// to switch to.
+	switchCmd := exec.Command(rigBin, "switch")
+	switchCmd.Dir = home
+	switchCmd.Env = env
+	if out, err := switchCmd.CombinedOutput(); err == nil {
+		t.Errorf("expected switch to skip the parked rig, got:\n%s", out)
+	} else if !strings.Contains(string(out), "no other rigs in flight") {
+		t.Errorf("expected 'no other rigs in flight', got:\n%s", out)
+	}
+
+	// --- rig wake --- clears the mark and rebuilds the session at the same path.
+	wakeOut := mustOutput(t, home, env, rigBin, "wake", "FAKE-1")
+	if !strings.Contains(wakeOut, "woke fake-1") {
+		t.Errorf("wake output missing confirmation:\n%s", wakeOut)
+	}
+	if m := string(mustReadFile(t, filepath.Join(basedir, ".rig.toml"))); strings.Contains(m, "parked = \"") {
+		t.Errorf("manifest still parked after wake:\n%s", m)
+	}
+	if !hasSession() {
+		t.Error("expected wake to stand the session back up")
+	}
+}
+
 func mustReadFile(t *testing.T, path string) []byte {
 	t.Helper()
 	b, err := os.ReadFile(path)

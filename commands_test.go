@@ -29,6 +29,29 @@ func TestAgentState(t *testing.T) {
 	}
 }
 
+// agentMarker reads "parked" for a dormant rig regardless of session state, so
+// the call-sheet still accounts for review-waiting rigs; otherwise it's the
+// live agent state or a dash.
+func TestAgentMarker(t *testing.T) {
+	cases := []struct {
+		name string
+		s    rigStatus
+		want string
+	}{
+		{"no session", rigStatus{}, "-"},
+		{"working", rigStatus{Agent: "working"}, "working"},
+		{"parked wins over blank", rigStatus{Parked: true}, "parked"},
+		{"parked wins over stale agent", rigStatus{Parked: true, Agent: "idle"}, "parked"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := agentMarker(c.s); got != c.want {
+				t.Errorf("agentMarker = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
 func TestPrMarker(t *testing.T) {
 	cases := []struct {
 		name string
