@@ -16,6 +16,12 @@ type prInfo struct {
 	State  string `json:"state"` // OPEN | CLOSED | MERGED
 	URL    string `json:"url"`
 	Checks string `json:"checks,omitempty"` // passing | failing | pending | ""
+	// Review is GitHub's rollup review decision on the PR:
+	// APPROVED | CHANGES_REQUESTED | REVIEW_REQUIRED, or "" when the repo has
+	// no required-review policy and nobody's weighed in. It's the signal park
+	// keys off: awaiting-review (REVIEW_REQUIRED/"") vs the change that wakes a
+	// rig (CHANGES_REQUESTED) vs done-pending-merge (APPROVED).
+	Review string `json:"review,omitempty"`
 }
 
 // checkItem is one entry in a PR's statusCheckRollup. GitHub mixes two shapes:
@@ -75,7 +81,7 @@ func rollupChecks(items []checkItem) string {
 // concurrently.
 func prForBranch(nameWithOwner, branch string) (*prInfo, error) {
 	cmd := exec.Command("gh", "pr", "view", branch,
-		"-R", nameWithOwner, "--json", "number,state,url,statusCheckRollup")
+		"-R", nameWithOwner, "--json", "number,state,url,statusCheckRollup,reviewDecision")
 	out, err := cmd.Output()
 	if err != nil {
 		var ee *exec.ExitError
@@ -95,9 +101,13 @@ func prForBranch(nameWithOwner, branch string) (*prInfo, error) {
 		State             string      `json:"state"`
 		URL               string      `json:"url"`
 		StatusCheckRollup []checkItem `json:"statusCheckRollup"`
+		ReviewDecision    string      `json:"reviewDecision"`
 	}
 	if err := json.Unmarshal(out, &v); err != nil {
 		return nil, fmt.Errorf("parsing gh pr view %s (%s): %w", branch, nameWithOwner, err)
 	}
-	return &prInfo{Number: v.Number, State: v.State, URL: v.URL, Checks: rollupChecks(v.StatusCheckRollup)}, nil
+	return &prInfo{
+		Number: v.Number, State: v.State, URL: v.URL,
+		Checks: rollupChecks(v.StatusCheckRollup), Review: v.ReviewDecision,
+	}, nil
 }

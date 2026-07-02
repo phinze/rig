@@ -8,8 +8,9 @@ import (
 
 // fakeGh installs a stub `gh` on PATH for the duration of the test. Its
 // behavior is steered by env vars the test sets: GH_FAKE_STATE picks the PR
-// state it reports, GH_FAKE_NOPR makes it answer "no pull requests found", and
-// GH_FAKE_ERR makes it fail like an offline/unauthorized gh.
+// state it reports, GH_FAKE_REVIEW sets its reviewDecision, GH_FAKE_NOPR makes
+// it answer "no pull requests found", and GH_FAKE_ERR makes it fail like an
+// offline/unauthorized gh.
 func fakeGh(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
@@ -27,8 +28,8 @@ if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
   fi
   rollup='[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"}]'
   if [ -n "${GH_FAKE_ROLLUP+set}" ]; then rollup="$GH_FAKE_ROLLUP"; fi
-  printf '{"number":7,"state":"%s","url":"https://github.com/o/r/pull/7","statusCheckRollup":%s}\n' \
-    "${GH_FAKE_STATE:-OPEN}" "${rollup:-[]}"
+  printf '{"number":7,"state":"%s","url":"https://github.com/o/r/pull/7","statusCheckRollup":%s,"reviewDecision":"%s"}\n' \
+    "${GH_FAKE_STATE:-OPEN}" "${rollup:-[]}" "${GH_FAKE_REVIEW:-}"
   exit 0
 fi
 echo "fake gh: unsupported invocation $*" >&2
@@ -51,6 +52,18 @@ func TestPrForBranch(t *testing.T) {
 		}
 		if pr == nil || pr.State != "MERGED" || pr.Number != 7 || pr.Checks != "passing" {
 			t.Fatalf("got %+v, want a MERGED PR #7 with passing checks", pr)
+		}
+	})
+
+	t.Run("review decision comes through", func(t *testing.T) {
+		t.Setenv("GH_FAKE_STATE", "OPEN")
+		t.Setenv("GH_FAKE_REVIEW", "CHANGES_REQUESTED")
+		pr, err := prForBranch("o/r", "feat")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if pr == nil || pr.Review != "CHANGES_REQUESTED" {
+			t.Fatalf("got %+v, want Review=CHANGES_REQUESTED", pr)
 		}
 	})
 

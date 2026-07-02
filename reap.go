@@ -110,11 +110,23 @@ func reapBlocker(r rigInfo, home string, now time.Time, maxIdle time.Duration, f
 		return fmt.Sprintf("recently active (idle %s)", idle.Round(time.Second))
 	}
 
-	entries, err := os.ReadDir(r.Path)
+	return rigTeardownBlocker(r.Path, fetched)
+}
+
+// rigTeardownBlocker reports why a rig's work isn't safe to delete yet, or ""
+// when every workspace is accounted for — merged, or holding no WIP. It's the
+// shared judgment behind both `reap` (which gates it behind an idle window) and
+// `down` (which runs it on an explicit teardown), so the two can't disagree
+// about what "done" means. Fail-closed throughout: any error reading the rig,
+// resolving a source repo, or asking jj/gh keeps the rig rather than guessing
+// it's disposable. fetched dedups the per-source-repo git fetch across a sweep;
+// pass a fresh map for a one-shot check.
+func rigTeardownBlocker(basedir string, fetched map[string]bool) string {
+	entries, err := os.ReadDir(basedir)
 	if err != nil {
 		return fmt.Sprintf("reading basedir: %v", err)
 	}
-	m, err := readManifest(r.Path)
+	m, err := readManifest(basedir)
 	if err != nil {
 		return fmt.Sprintf("reading manifest: %v", err)
 	}
@@ -122,7 +134,7 @@ func reapBlocker(r rigInfo, home string, now time.Time, maxIdle time.Duration, f
 		if !e.IsDir() {
 			continue
 		}
-		ws := filepath.Join(r.Path, e.Name())
+		ws := filepath.Join(basedir, e.Name())
 		if _, err := os.Stat(filepath.Join(ws, ".jj")); err != nil {
 			continue
 		}
