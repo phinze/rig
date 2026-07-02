@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -21,14 +22,18 @@ type manifest struct {
 	// since the flat basedir path no longer encodes owner/repo the way
 	// the old ~/workspaces/<host>/<owner>/<repo> shape did.
 	Repos map[string]string
-	// Branches maps a repo's subdir to the branch its work rides on, captured
-	// at workspace creation (up's Linear branch, review's PR head). It's the
-	// authoritative answer to "which PR is this repo's?" — recorded before the
-	// branch is even pushed, so pr/ls/reap resolve the rig's own PR rather than
-	// guessing from whatever bookmark the workspace happens to sit on. Absent
-	// for added repos (no branch yet) and rigs predating this field, which fall
-	// back to the jj-bookmark heuristic.
-	Branches map[string]string
+	// Branches maps a repo's subdir to the branches its work rides on. The
+	// first is the primary, captured at workspace creation (up's Linear branch,
+	// review's PR head) — the authoritative answer to "which PR is this repo's?",
+	// recorded before the branch is even pushed so pr/ls/reap resolve the rig's
+	// own PR rather than guessing from whatever bookmark the workspace sits on.
+	// Any that follow are secondaries recorded by `rig track` — a bugfix PR you
+	// spun off the same repo while in here — so down/reap gate on all of them,
+	// not just the primary. Absent for added repos (no branch yet) and rigs
+	// predating this field, which fall back to the jj-bookmark heuristic. The
+	// TOML encodes each as a string array; a legacy scalar reads as a one-element
+	// list.
+	Branches map[string][]string
 }
 
 func writeManifest(basedir string, m manifest) error {
@@ -39,7 +44,7 @@ func writeManifest(basedir string, m manifest) error {
 		fmt.Fprintf(&b, "created = %q\n", m.Created.Format(time.RFC3339))
 	}
 	writeTable(&b, "repos", m.Repos)
-	writeTable(&b, "branches", m.Branches)
+	writeBranchTable(&b, "branches", m.Branches)
 	return os.WriteFile(filepath.Join(basedir, manifestName), []byte(b.String()), 0o644)
 }
 
@@ -61,6 +66,53 @@ func writeTable(b *strings.Builder, name string, table map[string]string) {
 	}
 }
 
+// writeBranchTable emits a sorted [name] table whose values are string arrays
+// (subdir → ["primary", "secondary", ...]). Empty maps and empty slices leave
+// no output, mirroring writeTable so a rig with no recorded branch grows no
+// dangling header. Always array-valued, even for one branch, so the shape is
+// uniform; readManifest still accepts a legacy scalar.
+func writeBranchTable(b *strings.Builder, name string, table map[string][]string) {
+	if len(table) == 0 {
+		return
+	}
+	keys := make([]string, 0, len(table))
+	for k, vals := range table {
+		if len(vals) > 0 {
+			keys = append(keys, k)
+		}
+	}
+	if len(keys) == 0 {
+		return
+	}
+	sort.Strings(keys)
+	fmt.Fprintf(b, "\n[%s]\n", name)
+	for _, k := range keys {
+		quoted := make([]string, len(table[k]))
+		for i, v := range table[k] {
+			quoted[i] = fmt.Sprintf("%q", v)
+		}
+		fmt.Fprintf(b, "%s = [%s]\n", k, strings.Join(quoted, ", "))
+	}
+}
+
+// parseTOMLStringArray reads a `["a", "b"]` array literal into its elements.
+// Deliberately minimal, matching the hand-rolled reader: it splits on commas
+// and strips surrounding quotes, which is enough for branch names (git refs
+// carry no commas or quotes). Empty elements are dropped.
+func parseTOMLStringArray(s string) []string {
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(s, "[")
+	s = strings.TrimSuffix(s, "]")
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		part = strings.Trim(strings.TrimSpace(part), `"`)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
 // readManifest is intentionally a minimal hand-rolled parser. We only emit
 // `key = "value"` pairs and a single `[repos]` table, so we only need to read
 // those back. Swap for a real TOML library if the schema grows further.
@@ -71,7 +123,7 @@ func readManifest(basedir string) (manifest, error) {
 	}
 	defer f.Close()
 
-	m := manifest{Repos: map[string]string{}, Branches: map[string]string{}}
+	m := manifest{Repos: map[string]string{}, Branches: map[string][]string{}}
 	section := ""
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
@@ -104,7 +156,13 @@ func readManifest(basedir string) (manifest, error) {
 		case "repos":
 			m.Repos[key] = val
 		case "branches":
-			m.Branches[key] = val
+			// Array form is the current shape; a bare scalar is a legacy
+			// single-branch manifest, read as a one-element list.
+			if strings.HasPrefix(val, "[") {
+				m.Branches[key] = parseTOMLStringArray(val)
+			} else {
+				m.Branches[key] = []string{val}
+			}
 		}
 	}
 	if err := sc.Err(); err != nil {
@@ -128,11 +186,31 @@ func addRepoToManifest(basedir, subdir, nameWithOwner, branch string) error {
 	m.Repos[subdir] = nameWithOwner
 	if branch != "" {
 		if m.Branches == nil {
-			m.Branches = map[string]string{}
+			m.Branches = map[string][]string{}
 		}
-		m.Branches[subdir] = branch
+		m.Branches[subdir] = []string{branch}
 	}
 	return writeManifest(basedir, m)
+}
+
+// addBranchToManifest records an additional branch for a repo already in the
+// rig — the `rig track` path for a secondary PR spun off the same repo. It
+// appends rather than replaces (the primary keeps its slot) and is idempotent:
+// a branch already tracked, primary or not, is a no-op. Reports whether it
+// actually added anything so callers can tailor their output.
+func addBranchToManifest(basedir, subdir, branch string) (bool, error) {
+	m, err := readManifest(basedir)
+	if err != nil {
+		return false, err
+	}
+	if slices.Contains(m.Branches[subdir], branch) {
+		return false, nil
+	}
+	if m.Branches == nil {
+		m.Branches = map[string][]string{}
+	}
+	m.Branches[subdir] = append(m.Branches[subdir], branch)
+	return true, writeManifest(basedir, m)
 }
 
 func writeRootEnvrc(basedir string, m manifest) error {

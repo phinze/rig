@@ -21,6 +21,8 @@ func main() {
 		err = runReview(args)
 	case "pr":
 		err = runPR(args)
+	case "track":
+		err = runTrack(args)
 	case "add":
 		err = runAdd(args)
 	case "ls":
@@ -57,6 +59,9 @@ usage:
                             (url, or fzf picker over review-requested PRs)
   rig pr                    open the rig's PR in the browser
                             (gh pr view -w, but it knows the jj branch)
+  rig track [branch]        record a secondary PR branch for the repo you're in
+                            (defaults to the current work's branch) so down and
+                            reap gate on it alongside the rig's primary PR
   rig add <owner/repo>      add another repo to the rig you're in
   rig ls [--full]           list rigs in flight
                             (--full adds PR/CI, one gh call per repo)

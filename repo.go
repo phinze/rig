@@ -123,16 +123,39 @@ func revExists(repoPath, rev string) bool {
 	return err == nil && len(strings.TrimSpace(string(out))) > 0
 }
 
-// repoBranch answers "which branch backs this repo's work in the rig?" It
-// prefers the manifest's recorded branch (authoritative, captured at creation
-// even before the branch is pushed), and only falls back to the jj-bookmark
+// repoBranches answers "which branches back this repo's work in the rig?" It
+// prefers the manifest's recorded branches (authoritative, captured at creation
+// and extended by `rig track`), and only falls back to the jj-bookmark
 // heuristic for repos we didn't record: added repos, or rigs whose manifests
-// predate branch recording. Empty means no branch could be determined.
-func repoBranch(m manifest, subdir, workspacePath string) (string, error) {
-	if b := m.Branches[subdir]; b != "" {
-		return b, nil
+// predate branch recording. The primary is first. An empty result means no
+// branch could be determined.
+func repoBranches(m manifest, subdir, workspacePath string) ([]string, error) {
+	if bs := m.Branches[subdir]; len(bs) > 0 {
+		return bs, nil
 	}
-	return jjPRBranch(workspacePath)
+	b, err := jjPRBranch(workspacePath)
+	if err != nil {
+		return nil, err
+	}
+	if b == "" {
+		return nil, nil
+	}
+	return []string{b}, nil
+}
+
+// repoBranch returns just the primary branch for a repo — the rig's own PR,
+// used where a single answer is wanted (rig pr, reap's merge check). It's
+// repoBranches' first element, so the same recorded-then-heuristic resolution
+// applies. Empty means no branch could be determined.
+func repoBranch(m manifest, subdir, workspacePath string) (string, error) {
+	bs, err := repoBranches(m, subdir, workspacePath)
+	if err != nil {
+		return "", err
+	}
+	if len(bs) == 0 {
+		return "", nil
+	}
+	return bs[0], nil
 }
 
 // jjWorkspaceName is the workspace identity registered with the source repo.

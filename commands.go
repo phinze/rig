@@ -259,11 +259,16 @@ func enrichWithPRs(statuses []rigStatus) {
 		}
 		sort.Strings(subdirs)
 		for _, sub := range subdirs {
-			branch, err := repoBranch(m, sub, filepath.Join(statuses[i].Path, sub))
-			if err != nil || branch == "" {
+			branches, err := repoBranches(m, sub, filepath.Join(statuses[i].Path, sub))
+			if err != nil {
 				continue
 			}
-			tasks = append(tasks, task{i, m.Repos[sub], branch})
+			for _, branch := range branches {
+				if branch == "" {
+					continue
+				}
+				tasks = append(tasks, task{i, m.Repos[sub], branch})
+			}
 		}
 	}
 
