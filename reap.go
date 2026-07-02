@@ -149,69 +149,69 @@ func rigTeardownBlocker(basedir string, fetched map[string]bool) string {
 			fetched[source] = true
 			_ = jjGitFetch(source)
 		}
-		// Merged + no-WIP below @: any non-empty commit reachable from @
-		// that isn't on trunk is a candidate for blocking the reap. Catches
-		// the jj-new-on-top-of-WIP shape and genuinely unmerged work alike.
-		empty, err := jjRevsetEmpty(ws, "::@ & ~@ & ~empty() & ~::trunk()")
+		branches, err := repoBranches(m, e.Name(), ws)
 		if err != nil {
-			return fmt.Sprintf("%s: jj check failed: %v", e.Name(), err)
+			return fmt.Sprintf("%s: resolving branches: %v", e.Name(), err)
 		}
-		if !empty {
-			// Off-trunk commits don't prove the work is unmerged: a squash
-			// merge lands on trunk as a brand-new commit, so the branch's
-			// originals never become trunk ancestors and look unmerged
-			// forever. Ask GitHub before believing jj here. Fail closed —
-			// no branch, no PR, an unmerged PR, or a gh error all keep the
-			// rig; only a confirmed MERGED state lets us look past trunk.
-			// The branch comes from the manifest (recorded at up/review) when
-			// we have it, else the bookmark heuristic.
-			branch, _ := repoBranch(m, e.Name(), ws)
-			if reason := unmergedReason(ws, m.Repos[e.Name()], e.Name(), branch); reason != "" {
-				return reason
-			}
-		}
-		// @ itself gets one allowance: the direnv anchor rig wrote at
-		// setup. jj auto-tracks it, leaving @ permanently non-empty in
-		// repos that ship no .envrc of their own — without the carve-out
-		// no such rig would ever reap. Anything else dirty blocks.
-		atEmpty, err := jjRevsetEmpty(ws, "@ & ~empty() & ~::trunk()")
-		if err != nil {
-			return fmt.Sprintf("%s: jj check failed: %v", e.Name(), err)
-		}
-		if !atEmpty && !anchorOnlyWIP(ws) {
-			return fmt.Sprintf("%s has uncommitted changes", e.Name())
+		if reason := workspaceTeardownBlocker(ws, m.Repos[e.Name()], e.Name(), branches); reason != "" {
+			return reason
 		}
 	}
 	return ""
 }
 
-// unmergedReason decides whether a workspace with off-trunk commits should
-// still block the reap, returning the blocker reason ("" means the work is
-// accounted for and the reap may proceed). It only runs when jj has already
-// found non-empty off-trunk commits below @, so it's lazy: one gh call per
-// rig that's a reap candidate, never a sweep. label is the workspace subdir,
-// used in the reason strings; branch is the rig's resolved branch for this
-// repo (empty when we couldn't determine one).
-func unmergedReason(ws, nameWithOwner, label, branch string) string {
-	if branch == "" {
-		// No branch to map to a PR — treat as unmerged local work.
-		return fmt.Sprintf("%s has unmerged work", label)
-	}
-	pr, err := prForBranch(nameWithOwner, branch)
-	if err != nil || pr == nil || pr.State != "MERGED" {
-		// Couldn't confirm a merge (offline, no PR, still open): fail closed.
-		return fmt.Sprintf("%s has unmerged work", label)
-	}
-	// PR merged: the branch's own commits are done even though they aren't
-	// trunk ancestors. Only work layered ON TOP of the merged branch still
-	// counts as unfinished, so re-check excluding the branch's ancestry.
-	beyond, err := jjRevsetEmpty(ws,
-		fmt.Sprintf("::@ & ~@ & ~empty() & ~::trunk() & ~::%q", branch))
+// workspaceTeardownBlocker judges whether one workspace's local work is safe to
+// delete, returning the first reason it isn't ("" when it's clean). It's the
+// lazy, offline-tolerant half of the teardown judgment: it only asks GitHub
+// when there's actually off-trunk work to account for, so a freshly-pitched or
+// fully-merged workspace reaps without a round-trip. `rig down` layers an eager
+// all-PRs-merged gate on top (unmergedPRsBlocker); reap leans on this alone.
+//
+// Two gates after the cheap off-trunk probe, all fail-closed:
+//
+//  1. Off-trunk commits reachable from @ must all sit under a merged branch. A
+//     squash merge lands on trunk as a brand-new commit, so the branch's
+//     originals never become trunk ancestors and look unmerged forever —
+//     subtracting each merged recorded branch's ancestry (once GitHub confirms
+//     it merged) is how we see past that. Anything left is genuine unmerged
+//     work. A gh error keeps the rig.
+//  2. @ itself gets one allowance: the direnv anchor rig wrote at setup. jj
+//     auto-tracks it, leaving @ permanently non-empty in repos that ship no
+//     .envrc of their own; without the carve-out no such rig would ever reap.
+//     Anything else dirty blocks.
+func workspaceTeardownBlocker(ws, nameWithOwner, label string, branches []string) string {
+	// Cheap first: any non-empty off-trunk commit reachable from @? If not,
+	// there's no local work to lose and nothing to verify against GitHub.
+	empty, err := jjRevsetEmpty(ws, "::@ & ~@ & ~empty() & ~::trunk()")
 	if err != nil {
 		return fmt.Sprintf("%s: jj check failed: %v", label, err)
 	}
-	if !beyond {
-		return fmt.Sprintf("%s has work beyond the merged PR", label)
+	if !empty {
+		clauses := []string{"::@ & ~@ & ~empty() & ~::trunk()"}
+		for _, b := range branches {
+			pr, err := prForBranch(nameWithOwner, b)
+			if err != nil {
+				return fmt.Sprintf("%s: checking PR for %s: %v", label, b, err)
+			}
+			if pr != nil && pr.State == "MERGED" {
+				clauses = append(clauses, fmt.Sprintf("~::%q", b))
+			}
+		}
+		beyond, err := jjRevsetEmpty(ws, strings.Join(clauses, " & "))
+		if err != nil {
+			return fmt.Sprintf("%s: jj check failed: %v", label, err)
+		}
+		if !beyond {
+			return fmt.Sprintf("%s has unmerged work", label)
+		}
+	}
+
+	atEmpty, err := jjRevsetEmpty(ws, "@ & ~empty() & ~::trunk()")
+	if err != nil {
+		return fmt.Sprintf("%s: jj check failed: %v", label, err)
+	}
+	if !atEmpty && !anchorOnlyWIP(ws) {
+		return fmt.Sprintf("%s has uncommitted changes", label)
 	}
 	return ""
 }

@@ -63,6 +63,15 @@ exit 1
 `
 	mustWriteExec(t, filepath.Join(bin, "linearis"), linearis)
 
+	// Fake gh: this rig's branch was never pushed, so it has no PR. Answering
+	// "no pull requests found" lets `rig down`'s guardrail see nothing unmerged
+	// and tear the fresh rig down (the guardrail's pass-with-no-PR path).
+	ghNoPR := "#!/bin/sh\n" +
+		"if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"view\" ]; then\n" +
+		"  echo 'no pull requests found for branch' >&2\n  exit 1\nfi\n" +
+		"echo \"fake gh: unsupported invocation $*\" >&2\nexit 1\n"
+	mustWriteExec(t, filepath.Join(bin, "gh"), ghNoPR)
+
 	// tmux wrapper routes every call to a dedicated server socket so the
 	// user's real tmux is untouched.
 	tmuxWrap := fmt.Sprintf("#!/bin/sh\nexec %s -L rig-e2e \"$@\"\n", realTmux)
@@ -279,12 +288,14 @@ exit 1
 		t.Errorf("rig ls missing the review rig:\n%s", lsOut)
 	}
 
-	// --- rig down --- tidy up.
-	downCmd := exec.Command(rigBin, "down")
+	// --- rig down --force --- a review rig wraps someone else's still-open PR,
+	// which the merge guardrail would (correctly) refuse to tear down; --force
+	// is the reviewer's honest teardown, and exercises the override path.
+	downCmd := exec.Command(rigBin, "down", "--force")
 	downCmd.Dir = basedir
 	downCmd.Env = env
 	if out, err := downCmd.CombinedOutput(); err != nil {
-		t.Fatalf("rig down: %v\n%s", err, out)
+		t.Fatalf("rig down --force: %v\n%s", err, out)
 	}
 	if _, err := os.Stat(basedir); err == nil {
 		t.Errorf("basedir still exists after down")

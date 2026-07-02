@@ -67,7 +67,9 @@ usage:
                             (--full adds PR/CI, one gh call per repo)
   rig switch [query]        jump to a rig's tmux session, most-recently-used
                             first (fzf if ambiguous; aliased as rig cd)
-  rig down                  break the current rig down
+  rig down [--force]        break the current rig down
+                            (refuses if it has WIP or an unmerged PR; --force
+                            overrides)
   rig reap [-n] [--max-idle SECONDS]
                             break down every rig that is merged, WIP-free,
                             and idle (default 24h) — fails closed on doubt

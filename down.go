@@ -5,12 +5,19 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
 func runDown(args []string) error {
-	if len(args) != 0 {
-		return fmt.Errorf("usage: rig down")
+	force := false
+	for _, a := range args {
+		switch a {
+		case "--force", "-f":
+			force = true
+		default:
+			return fmt.Errorf("usage: rig down [--force]")
+		}
 	}
 
 	cwd, err := os.Getwd()
@@ -25,6 +32,20 @@ func runDown(args []string) error {
 	m, err := readManifest(basedir)
 	if err != nil {
 		return fmt.Errorf("reading manifest: %w", err)
+	}
+
+	// Safety gate, unless forced. Two checks that together mean "this rig's
+	// work is truly done": the shared, lazy local-work judgment (reap's too —
+	// uncommitted changes or off-trunk commits not under a merged branch), and
+	// an eager pass that asks GitHub about every recorded PR, so an OPEN PR
+	// blocks even when the workspace holds no local commits. --force skips both.
+	if !force {
+		if reason := rigTeardownBlocker(basedir, map[string]bool{}); reason != "" {
+			return downRefusal(reason)
+		}
+		if reason := unmergedPRsBlocker(basedir); reason != "" {
+			return downRefusal(reason)
+		}
 	}
 
 	// Note if the caller will be stranded by their cwd vanishing. This
@@ -59,6 +80,47 @@ func runDown(args []string) error {
 		return fmt.Errorf("tmux kill-session %s: %w", session, err)
 	}
 	return nil
+}
+
+// downRefusal wraps a blocker reason as the error `rig down` exits with, always
+// pointing at the escape hatch so the gate never feels like a dead end.
+func downRefusal(reason string) error {
+	return fmt.Errorf("refusing to tear down: %s\n      run `rig down --force` to override", reason)
+}
+
+// unmergedPRsBlocker reports the first recorded PR that isn't merged, or "" when
+// every recorded branch's PR is merged (or has no PR at all). Unlike the lazy
+// workspace WIP check it always asks GitHub, which is what lets `rig down`
+// refuse on an OPEN PR even when the workspace holds no local commits — the
+// disjoint secondary-PR case reap's lazy path skips. A branch with no PR doesn't
+// block (nothing to merge); a gh error blocks, fail-closed.
+func unmergedPRsBlocker(basedir string) string {
+	m, err := readManifest(basedir)
+	if err != nil {
+		return fmt.Sprintf("reading manifest: %v", err)
+	}
+	subdirs := make([]string, 0, len(m.Repos))
+	for sub := range m.Repos {
+		subdirs = append(subdirs, sub)
+	}
+	sort.Strings(subdirs)
+	for _, sub := range subdirs {
+		branches, err := repoBranches(m, sub, filepath.Join(basedir, sub))
+		if err != nil {
+			return fmt.Sprintf("%s: resolving branches: %v", sub, err)
+		}
+		for _, b := range branches {
+			pr, err := prForBranch(m.Repos[sub], b)
+			if err != nil {
+				return fmt.Sprintf("%s: checking PR for %s: %v", sub, b, err)
+			}
+			if pr != nil && pr.State != "MERGED" {
+				return fmt.Sprintf("%s PR #%d (%s) is %s, not merged",
+					sub, pr.Number, b, strings.ToLower(pr.State))
+			}
+		}
+	}
+	return ""
 }
 
 // teardownRig dismantles a rig's resources except its tmux session: iso

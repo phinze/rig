@@ -7,10 +7,11 @@ import (
 	"testing"
 )
 
-// TestUnmergedReason drives the squash-merge gate: a workspace with off-trunk
-// commits should reap once GitHub confirms the branch's PR merged, but stay
-// put when it's still open, has no PR, or grew new work on top of the merge.
-func TestUnmergedReason(t *testing.T) {
+// TestWorkspaceTeardownBlocker drives the squash-merge gate: a workspace with
+// off-trunk commits should be reapable once GitHub confirms the branch's PR
+// merged, but stay put when it's still open, has no PR, or grew new work on top
+// of the merge.
+func TestWorkspaceTeardownBlocker(t *testing.T) {
 	if _, err := exec.LookPath("jj"); err != nil {
 		t.Skip("jj not installed")
 	}
@@ -52,29 +53,29 @@ func TestUnmergedReason(t *testing.T) {
 
 	t.Run("merged PR clears the gate", func(t *testing.T) {
 		t.Setenv("GH_FAKE_STATE", "MERGED")
-		if reason := unmergedReason(ws, "o/r", "fakerepo", "feat"); reason != "" {
+		if reason := workspaceTeardownBlocker(ws, "o/r", "fakerepo", []string{"feat"}); reason != "" {
 			t.Errorf("expected merged PR to reap, blocked by: %q", reason)
 		}
 	})
 
 	t.Run("open PR keeps the rig", func(t *testing.T) {
 		t.Setenv("GH_FAKE_STATE", "OPEN")
-		if reason := unmergedReason(ws, "o/r", "fakerepo", "feat"); reason == "" {
+		if reason := workspaceTeardownBlocker(ws, "o/r", "fakerepo", []string{"feat"}); reason == "" {
 			t.Error("expected open PR to keep the rig")
 		}
 	})
 
 	t.Run("no PR keeps the rig", func(t *testing.T) {
 		t.Setenv("GH_FAKE_NOPR", "1")
-		if reason := unmergedReason(ws, "o/r", "fakerepo", "feat"); reason == "" {
+		if reason := workspaceTeardownBlocker(ws, "o/r", "fakerepo", []string{"feat"}); reason == "" {
 			t.Error("expected missing PR to keep the rig")
 		}
 	})
 
 	t.Run("no branch keeps the rig without asking gh", func(t *testing.T) {
-		// Empty branch means we couldn't map the work to a PR; fail closed
-		// without a gh round-trip.
-		if reason := unmergedReason(ws, "o/r", "fakerepo", ""); reason == "" {
+		// No recorded branch means we can't map the work to a PR; the local
+		// off-trunk commit alone keeps the rig, no gh round-trip.
+		if reason := workspaceTeardownBlocker(ws, "o/r", "fakerepo", nil); reason == "" {
 			t.Error("expected a branchless workspace to keep the rig")
 		}
 	})
@@ -85,7 +86,7 @@ func TestUnmergedReason(t *testing.T) {
 		write("more.txt", "kept working\n")
 		run("jj", "commit", "-m", "more")
 		t.Setenv("GH_FAKE_STATE", "MERGED")
-		reason := unmergedReason(ws, "o/r", "fakerepo", "feat")
+		reason := workspaceTeardownBlocker(ws, "o/r", "fakerepo", []string{"feat"})
 		if reason == "" {
 			t.Error("expected post-merge work to keep the rig")
 		}
