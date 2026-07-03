@@ -29,6 +29,8 @@ func main() {
 		err = runLs(args)
 	case "switch", "cd": // cd is a retained alias
 		err = runSwitch(args)
+	case "radar":
+		err = runRadar(args)
 	case "park":
 		err = runPark(args)
 	case "wake":
@@ -73,6 +75,9 @@ usage:
                             (--full adds PR/CI, one gh call per repo)
   rig switch [query]        jump to a rig's tmux session, most-recently-used
                             first (fzf if ambiguous; aliased as rig cd)
+  rig radar                 live TUI board over every rig, meant for a tmux
+                            popup: in-flight rigs to switch to, parked rigs
+                            ranked by review status; enter switches or wakes
   rig park                  park the current rig: mark it awaiting-review,
                             kill its session, drop it from switch (dir kept)
   rig wake [query]          wake a parked rig back into a session at its old cwd

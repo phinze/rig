@@ -40,16 +40,7 @@ func runWaiting(args []string) error {
 	}
 	enrichWithPRs(statuses)
 
-	// Order by how much each wants you: a change request first (go wake it),
-	// then approved (go merge it), then merged (done, reap collects it),
-	// waiting last, ties broken oldest-first.
-	rank := map[string]int{
-		"changes requested": 0,
-		"approved":          1,
-		"merged":            2,
-		"waiting":           3,
-		"no PR":             4,
-	}
+	// Order by how much each wants you, ties broken oldest-first.
 	type row struct {
 		s    rigStatus
 		disp string
@@ -59,8 +50,8 @@ func runWaiting(args []string) error {
 		rows[i] = row{s, parkedDisposition(s.PRs)}
 	}
 	sort.SliceStable(rows, func(i, j int) bool {
-		if rank[rows[i].disp] != rank[rows[j].disp] {
-			return rank[rows[i].disp] < rank[rows[j].disp]
+		if dispRank(rows[i].disp) != dispRank(rows[j].disp) {
+			return dispRank(rows[i].disp) < dispRank(rows[j].disp)
 		}
 		return rows[i].s.Created.Before(rows[j].s.Created)
 	})
@@ -104,6 +95,28 @@ func parkedDisposition(prs []rigPR) string {
 		return "approved"
 	default:
 		return "waiting"
+	}
+}
+
+// dispRank orders dispositions by how much each wants you: a change request
+// first (go wake it), then approved (go merge it), then merged (done, reap
+// collects it), then still-waiting. Anything unrecognized — including the
+// radar's "…" while a PR fetch is still out — sinks to the bottom. Shared by
+// waiting's table and the radar's parked section so they never disagree.
+func dispRank(disp string) int {
+	switch disp {
+	case "changes requested":
+		return 0
+	case "approved":
+		return 1
+	case "merged":
+		return 2
+	case "waiting":
+		return 3
+	case "no PR":
+		return 4
+	default:
+		return 5
 	}
 }
 
