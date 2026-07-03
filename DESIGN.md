@@ -20,49 +20,71 @@ and `jreview` fish functions, reshaped for where the work actually is:
   yolo-claude (bwrap / `--allowed-paths` / whatever), so containment is
   structural, not bolted on.
 - **Metadata + .envrc at the basedir.** A `.rig.toml` is the source of
-  truth; an `.envrc` exports `RIG_ID`, `RIG_TRACKER`, `RIG_BASEDIR` so
-  downstream tools (claude context, jj templates, `rig down`) read
-  from one place.
+  truth; the basedir `.envrc` and `rig env` project `RIG_ID`,
+  `RIG_BASEDIR`, and per-workspace keys so downstream tools (claude
+  context, jj templates, `rig down`) read from one place.
 
-## Current state
+## Where it stands
 
-`jpickup.fish` does single-repo Linear pickup via fish, deriving the
-workspace path from `~/workspaces/<host>/<owner>/<repo>/<branch>`.
-`jreview.fish` is the PR-review sibling using the same path shape. The
-git-flavored `review.fish` still lives alongside but is on the chopping
-block (separate, simpler collapse — drop the "j" prefix once jj is the
-only path).
+Built, in Go, and in daily use as a single multi-command binary that
+ships under `pkgs/`. It outgrew the "prototype in Python first" plan below:
+the shape stuck fast enough that it went straight to Go. `rig up`,
+`review`, `add`, `track`, `pr`, `ls`, `switch`, `park`, `wake`, `waiting`,
+`down`, `reap`, and `env` are all real. `jpickup` and `jreview` are
+subsumed; the single-repo Linear pickup and the PR-review sibling both
+fall out of `rig up` and `rig review` now.
 
-Path shape today bakes the branch name into the directory, which is a
-git-worktree habit. jj doesn't need this — bookmarks are deferrable —
-so the shape can become `~/workspaces/<task-id>-<short-slug>/<repo>/`
-with the slug cosmetic and the bookmark resolved later.
+The pre-rig layout baked the branch name into the directory
+(`~/workspaces/<host>/<owner>/<repo>/<branch>`), a git-worktree habit. jj
+doesn't need it, since bookmarks are deferrable, so the shape became
+`~/workspaces/<task-id>-<short-slug>/<repo>/` with the slug cosmetic and
+the bookmark resolved later. `rig env` still reads the old layout for
+sessions that predate the move, and those age out.
 
 ## Shape sketch
 
 ```
 ~/workspaces/proj-123-fix-auth/
-  .rig.toml          # {id, tracker, title, primary_repo, repos: [...]}
-  .envrc             # exports RIG_ID, RIG_TRACKER, RIG_BASEDIR
+  .rig.toml          # id, title, created, [parked], [repos], [branches]
+  .envrc             # exports RIG_BASEDIR, RIG_ID; rig env adds the rest
   api/               # jj workspace of phinze/api
-    .envrc           # source_up; export GH_REPO=phinze/api
   web/               # jj workspace of phinze/web
-    .envrc           # source_up; export GH_REPO=phinze/web
 ```
+
+The manifest is flat TOML: scalar `id` / `title` / `created` (and `parked`
+once dormant), a `[repos]` table mapping each subdir to its `owner/repo`,
+and a `[branches]` table mapping each subdir to the branches its work rides
+(primary first, `rig track` secondaries after). `GH_REPO`, `RIG_WORKSPACE`,
+and a stable per-workspace `RIG_PORT` are projected by `rig env` rather than
+written into per-repo .envrc files: direnv loads only the nearest .envrc, so
+a repo shipping its own (nix devshells) would shadow them (see §Naming).
 
 CLI shape — `rig up`/`rig down` is real industry idiom (oil rigs,
 audio crews, sailing all rig up before a job and rig down after), and
 a "rig" reads naturally as purpose-built apparatus assembled for one
 job (climbing rig, fishing rig, sound rig):
 
-- `rig up PROJ-123` — pitch a new rig: resolve issue, create basedir,
-  add first repo workspace, spawn tmux session with claude.
-- `rig up <gh-issue-url>` — same shape, GH dispatch.
+- `rig up PROJ-123` — pitch a new rig: resolve the issue, create the
+  basedir, add the first repo workspace, spawn a tmux session with claude.
+  A gh-issue URL dispatches the same shape.
+- `rig review <pr>` — the jreview sibling: pitch a rig around an existing
+  PR, checked out at its head.
 - `rig add owner/repo` — add a repo to the rig you're in (cwd-derived).
-- `rig down` — break the rig down; flush final metadata, archive or
-  remove the basedir, kill the tmux session.
-- `rig ls` — list rigs in flight (the call-sheet equivalent).
-- `rig cd PROJ-123` — jump to a rig; fzf if no arg.
+- `rig track <pr>` — record a second PR's branch on a repo already in the
+  rig, so down/reap gate on it too.
+- `rig pr` — open the rig's PR in the browser.
+- `rig ls` — list rigs in flight (the call-sheet); `--full` adds PR/CI
+  columns, `--format=json` is the stable API.
+- `rig switch` (alias `cd`) — jump to a rig; fzf if no arg, most-recently-
+  attached first. `rig radar` (below) is the richer live-TUI take.
+- `rig park` / `rig wake` / `rig waiting` — the dormant-review lifecycle:
+  park sends a finished rig quiet (kills its session, keeps the basedir),
+  waiting reports which parked rig's review came back, wake stands it back
+  up for `claude --resume`.
+- `rig down` — break the rig down; refuses to drop unmerged work.
+- `rig reap` — bulk-collect merged, WIP-free, idle rigs through the same
+  teardown path as down.
+- `rig env` — print the identity exports for the direnv stdlib to eval.
 
 ## Naming
 
@@ -167,14 +189,70 @@ processes with it, but the legacy nightly's phase 3 (SIGTERM idle
 `claude-unwrapped` processes wherever they live) has no rig-aware
 replacement yet.
 
+## The radar (`rig radar`)
+
+`rig switch` and `rig waiting` answer two halves of the same question,
+"which rig do I go to next?", and answer it in prose. Switch is the
+instant, local half (jump to a live rig, most-recently-attached first, no
+network). Waiting is the network half (which parked rig's review came
+back). The radar folds both into one live view: a TUI popup, bound the way
+ilmari was, that renders every rig and its real state and lets you act on
+the one you pick.
+
+The point is that it doesn't guess. ilmari (the popup this replaces) infers
+agent state by scraping pane output for `running` / `waiting-input` /
+`finished`, because from the outside that is all it can see. Rig is on the
+inside. It already knows whether a session is live, whether a claude turn
+landed in the last few minutes (`agentState`), whether the rig is parked,
+and what its PRs' review decision is (`parkedDisposition`). The radar is
+that truth drawn as a board instead of re-derived from terminal scrollback.
+
+Layout is two sections. *In flight* is the switch view: unparked rigs,
+most-recently-attached first, the session you're in dropped, each row
+carrying its live agent state. *Parked / awaiting review* is the waiting
+view: dormant rigs ranked by how much they want you (changes-requested →
+approved → merged → still-waiting), the same ranking `rig waiting` prints.
+One glance covers both "where was I" and "what came back."
+
+Enter does the right thing per row so you never pick a verb: a live rig
+switches, an in-flight rig whose session was killed gets a bare one stood
+up first, a parked rig wakes (clears the park stamp, spawns a session for
+`claude --resume`, attaches). The switch itself is the same popup trick
+ilmari uses. The popup inherits `$TMUX`, so `tmux switch-client` from inside
+it moves the underlying client, and the `-E` popup tears down as the program
+exits, landing you in the target.
+
+The review column is where the live TUI earns itself. Switch stays instant
+by never touching the network; waiting pays the gh cost because it's an
+explicit command. The radar gets both: it renders immediately from local
+state, then fires the same concurrent `enrichWithPRs` fan-out in the
+background and fills the PR/review cells in as they land. Local agent state
+re-ticks every couple seconds on top, so a rig going hot updates while
+you're looking at it, the thing ilmari's bell-on-transition gestures at,
+keyed off real turn activity instead of a scrollback heuristic.
+
+Built with Bubble Tea, the one place rig reaches past its
+stdlib-and-shell-outs posture for a real dependency. The justification is
+that the whole design is render-now, fill-in-later, tick-forever, and that
+is exactly Bubble Tea's Msg/Cmd model; ilmari itself is a real ratatui TUI,
+so a real TUI lib is matching it, not betraying the ethos. The framework
+layer stays thin (one model file) and the guts stay in the helpers switch
+and waiting already share.
+
+For now the radar takes over ilmari's slot (the prefix-`i` popup) and
+becomes the primary rig switcher; session-wizard keeps prefix-`t` for
+everything that isn't a rig. The horizon is holistic: teach the radar about
+plain tmux sessions too, so it's the one board for all of it and
+session-wizard's job folds in as well. Not yet; first it has to earn the
+switcher seat on rigs alone.
+
 ## Open questions
 
-- **Language.** Fish is at its ceiling for this shape (TOML parsing,
-  plugin dispatch, multi-command surface). Go fits the neighborhood
-  (peer to `recto`, `jj`, `gh`, ships clean as a `pkgs/` derivation).
-  Python stdlib is the cheap-iteration alternative — `tomllib`,
-  `argparse`, `subprocess` all available globally without a venv dance.
-  Lean: Python prototype to find the CLI shape, port to Go once stable.
+- ~~**Language.**~~ Answered: Go. Fish was at its ceiling for this shape
+  (TOML parsing, plugin dispatch, multi-command surface); Go fits the
+  neighborhood (peer to `recto`, `jj`, `gh`, ships clean as a `pkgs/`
+  derivation). The Python-prototype-first hedge proved unnecessary, since
+  the shape held on the first pass.
 - **Tracker shim shape.** Minimum interface: `resolve_issue(id) ->
   Task`, plus maybe `mark_in_progress(id)` and `mark_done(id)`. GH
   issues lack a canonical `branchName` field, so the shim has to
@@ -193,27 +271,28 @@ replacement yet.
   across pickable issues. Merge Linear + GH into one list with a
   source column, or pick the tracker first? Merged is nicer but means
   two API calls per invocation.
-- **`rig down` destructiveness.** Does it delete the basedir, archive
-  it somewhere (`~/workspaces/.archive/`?), or just unregister the jj
-  workspaces and leave the dir for manual cleanup? Probably "archive
-  by default, `--purge` for delete," but worth a beat.
+- ~~**`rig down` destructiveness.**~~ Answered by the park/reap lifecycle
+  rather than an archive dir: `down` tears the basedir down but refuses to
+  drop unmerged work, `park` keeps a finished rig on disk while its review
+  is out, and `reap` bulk-collects the merged-and-idle. The safety gate
+  turned out to matter more than an archive would have.
 
 ## Next actions
 
-1. Sit with the design a few days; let the shape either stick or crack
-   under typing.
-2. Prototype in Python — single file, `tomllib`, `subprocess`. Goal:
-   `rig up PROJ-123` end-to-end on one repo, then `rig add owner/repo`
-   for the second.
-3. If the CLI shape feels right after a real week of use, scaffold
-   from launchpad, port to Go, package under `pkgs/`.
+The prototype-and-port plan is spent; rig is the Go tool now, so what's
+left is growth on the built base:
+
+1. `rig radar` (above) — the live-TUI switcher, first replacing ilmari on
+   rigs, later absorbing plain tmux sessions so it becomes the one board.
+2. Sand off the open questions still open (sandbox primitive, multi-tracker
+   shim, picker source mixing) as real use pushes on them.
 
 ## Related
 
-- `nix-config/home-manager/phinze/fish-functions/jpickup.fish` —
-  current implementation.
-- `nix-config/home-manager/phinze/fish-functions/jreview.fish` —
-  sibling for PR review.
+- `nix-config/home-manager/phinze/fish-functions/jpickup.fish` — the
+  single-repo Linear pickup `rig up` subsumed.
+- `nix-config/home-manager/phinze/fish-functions/jreview.fish` — the
+  PR-review sibling `rig review` subsumed.
 - `Projects/Ideas/review-first-diff-tool.md` — same family (control
   surface for agent-driven work), different facet.
 - `Projects/Ideas/agentic-memex-experiment.md` — adjacent in the "what
