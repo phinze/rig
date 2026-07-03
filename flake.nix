@@ -23,7 +23,7 @@
           pname = "rig";
           version = "0.0.1";
           src = ./.;
-          vendorHash = "sha256-76yvZ8MhGnJhkfBALS/MYAeEmkOcLX0VKu1zTtPLhxo=";
+          vendorHash = "sha256-q9WvkLsvWGzFnN55LdjI6M4+Zvbm5kBNUxsrIwV2APQ=";
           meta.mainProgram = "rig";
         };
 
