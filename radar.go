@@ -3,11 +3,13 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -24,6 +26,11 @@ import (
 // switches, a sessionless one gets a bare session stood up first, a parked one
 // wakes. The popup inherits $TMUX, so switch-client from inside it moves the
 // underlying client, and the -E popup tears down as we exit.
+//
+// It doubles as the universal session picker that replaces tmux-session-wizard:
+// below the rigs sits an OTHER SESSIONS section listing every non-rig tmux
+// session in MRU order, and typing fuzzy-filters the whole board the way the
+// old fzf front-end did, so `t`'s muscle memory carries over.
 func runRadar(args []string) error {
 	if len(args) != 0 {
 		return fmt.Errorf("usage: rig radar")
@@ -73,6 +80,11 @@ func runRadar(args []string) error {
 // up if it lacks one, and land in it. This is the tail of switch and wake,
 // executed after the TUI has released the terminal.
 func radarAct(s rigStatus) error {
+	// A bare tmux session is nothing but a name to land in — no manifest, no
+	// session to stand up, no PR to wake.
+	if s.bare {
+		return attachOrReport(s.session)
+	}
 	if s.Parked {
 		m, err := readManifest(s.Path)
 		if err != nil {
@@ -103,11 +115,13 @@ type radarModel struct {
 
 	inflight  []rigStatus
 	parked    []rigStatus
+	sessions  []rigStatus      // bare (non-rig) tmux sessions, MRU order
 	attached  map[string]int64 // session → last-attached, for in-flight order
 	prs       map[string][]rigPR
 	fetchedAt map[string]time.Time // slug → when its PRs were fetched
 	pending   map[string]bool      // slug → PR fetch in flight
 
+	filter  string // fuzzy query; empty = show everything
 	cursor  int
 	chosen  *rigStatus // set on Enter; acted on after the program exits
 	width   int
@@ -116,6 +130,7 @@ type radarModel struct {
 
 type radarScanMsg struct {
 	statuses []rigStatus
+	sessions []tmuxSession
 	attached map[string]int64
 	err      error
 }
@@ -141,9 +156,18 @@ func radarScanNow(home string) radarScanMsg {
 	if err != nil {
 		return radarScanMsg{err: err}
 	}
+	// One list-sessions feeds both the in-flight attach-order map and the bare
+	// session rows, so the universal picker costs the same tmux round-trip the
+	// board already paid.
+	sessions := tmuxSessions()
+	attached := make(map[string]int64, len(sessions))
+	for _, s := range sessions {
+		attached[s.Name] = s.LastAttached
+	}
 	return radarScanMsg{
 		statuses: rigStatuses(rigs, home, time.Now()),
-		attached: tmuxLastAttached(),
+		sessions: sessions,
+		attached: attached,
 	}
 }
 
@@ -181,7 +205,7 @@ const radarPRTTL = 5 * time.Minute
 func (m radarModel) fetchMissing() []tea.Cmd {
 	now := time.Now()
 	var cmds []tea.Cmd
-	for _, s := range m.rows() {
+	for _, s := range m.rigRows() {
 		if m.pending[s.Slug] {
 			continue
 		}
@@ -303,15 +327,27 @@ func (m radarModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// handleKey drives the picker in always-on filter mode, the way session-wizard's
+// fzf did: printable runes narrow the list as you type, arrows (and ctrl+n/p)
+// walk the survivors, enter lands. esc backs out of a query before it quits, so
+// there's always a way home without reaching for the mouse.
 func (m radarModel) handleKey(key string) (radarModel, tea.Cmd) {
 	switch key {
-	case "q", "esc", "ctrl+c":
+	case "ctrl+c":
 		return m, tea.Quit
-	case "j", "down":
+	case "esc":
+		// First esc clears an active query; a second (or esc with no query)
+		// leaves. Typers expect the filter to peel back before the whole UI does.
+		if m.filter != "" {
+			m.setFilter("")
+			return m, nil
+		}
+		return m, tea.Quit
+	case "down", "ctrl+n":
 		if m.cursor < len(m.rows())-1 {
 			m.cursor++
 		}
-	case "k", "up":
+	case "up", "ctrl+p":
 		if m.cursor > 0 {
 			m.cursor--
 		}
@@ -323,11 +359,19 @@ func (m radarModel) handleKey(key string) (radarModel, tea.Cmd) {
 		s := rows[m.cursor]
 		m.chosen = &s
 		return m, tea.Quit
-	case "r":
+	case "ctrl+u":
+		m.setFilter("")
+		return m, nil
+	case "backspace":
+		if r := []rune(m.filter); len(r) > 0 {
+			m.setFilter(string(r[:len(r)-1]))
+		}
+		return m, nil
+	case "ctrl+r":
 		// Refetch every rig's PRs; stale cells keep showing until the
 		// fresh answer lands rather than flashing back to "…".
 		var cmds []tea.Cmd
-		for _, s := range m.rows() {
+		for _, s := range m.rigRows() {
 			if m.pending[s.Slug] {
 				continue
 			}
@@ -335,8 +379,22 @@ func (m radarModel) handleKey(key string) (radarModel, tea.Cmd) {
 			cmds = append(cmds, radarFetchCmd(s))
 		}
 		return m, tea.Batch(cmds...)
+	default:
+		// Any lone printable rune is filter input. Named keys (tab, f-keys)
+		// arrive as multi-rune strings and fall through untouched.
+		if r := []rune(key); len(r) == 1 && unicode.IsGraphic(r[0]) {
+			m.setFilter(m.filter + key)
+		}
 	}
 	return m, nil
+}
+
+// setFilter changes the query and snaps the cursor to the top row, which under
+// an active filter is the best-scoring match — as you type, the selection rides
+// the strongest hit the way fzf does.
+func (m *radarModel) setFilter(q string) {
+	m.filter = q
+	m.cursor = 0
 }
 
 // apply folds a fresh local scan into the model: split sections, merge the PR
@@ -351,10 +409,14 @@ func (m *radarModel) apply(scan radarScanMsg) {
 	m.attached = scan.attached
 	// The selection to preserve is what the user is looking at now, so read
 	// it before the sections are replaced.
-	selected := m.selectedSlug()
+	selected := m.selectedKey()
 
+	// The rig session names are the ones the bare-session pass must exclude, so
+	// a rig never shows up twice (once as itself, once as a plain session).
+	rigSessions := make(map[string]bool, len(scan.statuses))
 	var inflight, parked []rigStatus
 	for _, s := range scan.statuses {
+		rigSessions[tmuxSessionName(s.Path)] = true
 		if prs, ok := m.prs[s.Slug]; ok {
 			s.PRs = prs
 		}
@@ -367,33 +429,85 @@ func (m *radarModel) apply(scan radarScanMsg) {
 			inflight = append(inflight, s)
 		}
 	}
-	m.inflight, m.parked = inflight, parked
+
+	var sessions []rigStatus
+	for _, ts := range scan.sessions {
+		if rigSessions[ts.Name] || ts.Name == m.current {
+			continue
+		}
+		sessions = append(sessions, bareSession(ts, m.home))
+	}
+
+	m.inflight, m.parked, m.sessions = inflight, parked, sessions
 	m.resortKeeping(selected)
 }
 
-// selectedSlug is the slug under the cursor, or "" when there's nothing to
-// point at (first render).
-func (m *radarModel) selectedSlug() string {
+// bareSession turns a plain tmux session into a radar row: its working
+// directory (home-relativized) reads as the title, and its last-attached time
+// stands in for Created so the age column shows how long since you were there
+// and MRU sorting falls out of the same field the rigs use.
+func bareSession(ts tmuxSession, home string) rigStatus {
+	var created time.Time
+	if ts.LastAttached > 0 {
+		created = time.Unix(ts.LastAttached, 0)
+	}
+	title := ts.Name
+	if ts.Path != "" {
+		title = tildePath(ts.Path, home)
+	}
+	return rigStatus{
+		Title:   title,
+		Path:    ts.Path,
+		Created: created,
+		bare:    true,
+		session: ts.Name,
+	}
+}
+
+// tildePath shortens an absolute path under $HOME to a leading ~ for display.
+func tildePath(path, home string) string {
+	if home != "" {
+		if rel, ok := strings.CutPrefix(path, home); ok {
+			return "~" + rel
+		}
+	}
+	return path
+}
+
+// rowKey is a row's stable identity across a re-sort or re-scan: a rig is its
+// slug, a bare session its name. Used to keep the cursor pinned to the same row
+// even as the board reorders under it.
+func rowKey(s rigStatus) string {
+	if s.bare {
+		return "sess:" + s.session
+	}
+	return "slug:" + s.Slug
+}
+
+// selectedKey is the identity of the row under the cursor, or "" when there's
+// nothing to point at (first render).
+func (m *radarModel) selectedKey() string {
 	if rows := m.rows(); m.cursor < len(rows) {
-		return rows[m.cursor].Slug
+		return rowKey(rows[m.cursor])
 	}
 	return ""
 }
 
-// resort re-sorts both sections and keeps the cursor on the rig it's on, so a
+// resort re-sorts every section and keeps the cursor on the row it's on, so a
 // rig climbing the board doesn't yank the selection off it.
 func (m *radarModel) resort() {
-	m.resortKeeping(m.selectedSlug())
+	m.resortKeeping(m.selectedKey())
 }
 
 func (m *radarModel) resortKeeping(selected string) {
 	radarSortInflight(m.inflight, m.attached)
 	radarSortParked(m.parked, m.prs)
+	radarSortSessions(m.sessions)
 
 	rows := m.rows()
 	m.cursor = 0
 	for i, s := range rows {
-		if s.Slug == selected {
+		if rowKey(s) == selected {
 			m.cursor = i
 			break
 		}
@@ -403,13 +517,188 @@ func (m *radarModel) resortKeeping(selected string) {
 	}
 }
 
-// rows flattens the two sections in display order: the cursor walks in-flight
-// then parked as one list.
-func (m radarModel) rows() []rigStatus {
+// rigRows is the two rig sections flattened, unfiltered: the PR fan-out enriches
+// every rig regardless of what the filter is currently hiding.
+func (m radarModel) rigRows() []rigStatus {
 	out := make([]rigStatus, 0, len(m.inflight)+len(m.parked))
 	out = append(out, m.inflight...)
 	out = append(out, m.parked...)
 	return out
+}
+
+// rows is the list the cursor walks and the board renders. With no filter it's
+// the three sections in board order. With a filter it collapses to one list
+// ranked best-match-first, so the top row (where the cursor snaps) is always
+// the strongest hit, the way fzf reorders under the query.
+func (m radarModel) rows() []rigStatus {
+	if m.filter == "" {
+		out := make([]rigStatus, 0, len(m.inflight)+len(m.parked)+len(m.sessions))
+		out = append(out, m.inflight...)
+		out = append(out, m.parked...)
+		out = append(out, m.sessions...)
+		return out
+	}
+	return m.rankedRows()
+}
+
+// rankedRows scores every row against the query, drops the misses, and sorts
+// what's left by score descending. Ties keep section order (in-flight, then
+// parked, then sessions, each already MRU/urgency-sorted), so equally-good
+// matches still fall out in a sensible order.
+func (m radarModel) rankedRows() []rigStatus {
+	type scored struct {
+		s     rigStatus
+		score float64
+	}
+	var xs []scored
+	add := func(section []rigStatus) {
+		for _, s := range section {
+			if score, ok := fuzzyScore(m.filter, radarHaystack(s)); ok {
+				xs = append(xs, scored{s, score})
+			}
+		}
+	}
+	add(m.inflight)
+	add(m.parked)
+	add(m.sessions)
+	sort.SliceStable(xs, func(i, j int) bool { return xs[i].score > xs[j].score })
+
+	out := make([]rigStatus, len(xs))
+	for i, x := range xs {
+		out[i] = x.s
+	}
+	return out
+}
+
+// radarHaystack is the text a row is fuzzy-matched against: a rig by its id and
+// title, a bare session by its path-title and session name.
+func radarHaystack(s rigStatus) string {
+	if s.bare {
+		return s.Title + " " + s.session
+	}
+	return s.ID + " " + s.Title
+}
+
+// fuzzyMatch reports whether a row survives the query at all (used where only
+// presence matters). Matching is the score's yes/no: every space-separated term
+// must be a case-insensitive subsequence of the haystack.
+func fuzzyMatch(query, hay string) bool {
+	_, ok := fuzzyScore(query, hay)
+	return ok
+}
+
+// fuzzyScore rates how well a query fits a haystack, fzy-style. The query splits
+// on spaces into terms; every term must match (AND), and the total is the sum of
+// each term's best alignment score. A higher number is a tighter, more
+// boundary-aligned match. The bool is false the moment any term fails to match.
+func fuzzyScore(query, hay string) (float64, bool) {
+	hay = strings.ToLower(hay)
+	total := 0.0
+	matched := false
+	for term := range strings.FieldsSeq(strings.ToLower(query)) {
+		matched = true
+		score, ok := matchScore(term, hay)
+		if !ok {
+			return 0, false
+		}
+		total += score
+	}
+	if !matched {
+		return 0, true // empty query matches everything, score-neutral
+	}
+	return total, true
+}
+
+// Fuzzy scoring weights, lifted from fzy: consecutive matched runes and matches
+// landing on a boundary (after a path slash, a word separator, a dot) score
+// well; gaps cost a little, leading gaps least. Tuned so "runtime" beats a
+// scattered r-u-n-t-i-m-e strewn across an unrelated path.
+const (
+	scoreGapLeading       = -0.005
+	scoreGapTrailing      = -0.005
+	scoreGapInner         = -0.01
+	scoreMatchConsecutive = 1.0
+	scoreMatchSlash       = 0.9
+	scoreMatchWord        = 0.8
+	scoreMatchDot         = 0.6
+)
+
+// matchBonus is the boundary bonus a matched rune earns from the rune before it:
+// the char after a slash, separator, or dot reads as the start of a segment and
+// is what people usually aim at. Inputs are already lowercased.
+func matchBonus(prev rune) float64 {
+	switch prev {
+	case '/':
+		return scoreMatchSlash
+	case '-', '_', ' ':
+		return scoreMatchWord
+	case '.':
+		return scoreMatchDot
+	default:
+		return 0
+	}
+}
+
+// matchScore aligns needle against hay with a two-matrix DP (fzy's): D[i][j] is
+// the best score ending with needle[i] on hay[j], M[i][j] the best over
+// hay[0..j]. Returns (score, true) or (0, false) when needle isn't a
+// subsequence at all. Cost is O(len(needle)·len(hay)); both are short here.
+func matchScore(needle, hay string) (float64, bool) {
+	nr, hr := []rune(needle), []rune(hay)
+	n, m := len(nr), len(hr)
+	if n == 0 {
+		return 0, true
+	}
+	if n > m {
+		return 0, false
+	}
+
+	// Boundary bonus per haystack position; the string start counts as a slash
+	// so a leading match is treated as a segment start.
+	bonus := make([]float64, m)
+	prev := '/'
+	for j, c := range hr {
+		bonus[j] = matchBonus(prev)
+		prev = c
+	}
+
+	negInf := math.Inf(-1)
+	D := make([][]float64, n)
+	M := make([][]float64, n)
+	for i := range D {
+		D[i] = make([]float64, m)
+		M[i] = make([]float64, m)
+	}
+	for i := range n {
+		prevScore := negInf
+		gap := scoreGapInner
+		if i == n-1 {
+			gap = scoreGapTrailing
+		}
+		for j := range m {
+			if nr[i] == hr[j] {
+				score := negInf
+				switch {
+				case i == 0:
+					score = float64(j)*scoreGapLeading + bonus[j]
+				case j > 0:
+					score = math.Max(M[i-1][j-1]+bonus[j], D[i-1][j-1]+scoreMatchConsecutive)
+				}
+				D[i][j] = score
+				prevScore = math.Max(score, prevScore+gap)
+				M[i][j] = prevScore
+			} else {
+				D[i][j] = negInf
+				prevScore += gap
+				M[i][j] = prevScore
+			}
+		}
+	}
+	final := M[n-1][m-1]
+	if math.IsInf(final, -1) {
+		return 0, false
+	}
+	return final, true
 }
 
 // radarSortInflight orders live rigs the way switch does: most-recently-
@@ -436,6 +725,18 @@ func radarSortParked(statuses []rigStatus, prs map[string][]rigPR) {
 			return ri < rj
 		}
 		return statuses[i].Created.Before(statuses[j].Created)
+	})
+}
+
+// radarSortSessions orders bare tmux sessions most-recently-attached first
+// (Created carries last-attached for these), the MRU the picker is meant to
+// front. Never-attached sessions sink; name breaks ties for a stable order.
+func radarSortSessions(sessions []rigStatus) {
+	sort.SliceStable(sessions, func(i, j int) bool {
+		if !sessions[i].Created.Equal(sessions[j].Created) {
+			return sessions[i].Created.After(sessions[j].Created)
+		}
+		return sessions[i].session < sessions[j].session
 	})
 }
 
@@ -488,6 +789,11 @@ func radarStateStyle(state string) lipgloss.Style {
 // In-flight rigs read agent attention; parked rigs read review disposition.
 // Glyphs are conservative nerd-font codepoints (classic FA + octicons).
 func radarGlyph(s rigStatus, fetched bool) (string, lipgloss.Style) {
+	if s.bare {
+		// A plain session carries no rig state to read; an open ring marks it
+		// as "just a place to land" without competing with the rigs' dots.
+		return "○", radarFaintStyle
+	}
 	if s.Parked {
 		if !fetched {
 			return "…", radarFaintStyle
@@ -554,6 +860,9 @@ type tailSeg struct {
 // PR as number + CI glyph, repo-prefixed when the rig spans repos. Loading
 // reads as a bare "…"; an in-flight rig with no PR trails nothing at all.
 func radarTailSegs(s rigStatus, fetched bool) []tailSeg {
+	if s.bare {
+		return nil
+	}
 	if !fetched {
 		return []tailSeg{{"…", radarFaintStyle.Render("…")}}
 	}
@@ -579,9 +888,21 @@ func radarTailSegs(s rigStatus, fetched bool) []tailSeg {
 }
 
 func (m radarModel) View() string {
+	// The prompt rides at the top so the query is always where fzf trained the
+	// eye, and stays put while the list below narrows.
+	prompt := ""
+	if m.filter != "" {
+		prompt = radarFaintStyle.Render("/ ") + m.filter + radarFaintStyle.Render("▌") + "\n\n"
+	}
+	footer := radarFaintStyle.Render("↑/↓ move · enter go · type to filter · esc back · ^r refresh · ^c quit")
+
 	rows := m.rows()
 	if len(rows) == 0 {
-		return "\n  no rigs in flight\n\n" + radarFaintStyle.Render("  q quit") + "\n"
+		msg := "  nothing to pick"
+		if m.filter != "" {
+			msg = radarFaintStyle.Render("  no matches")
+		}
+		return "\n" + prompt + msg + "\n\n" + footer + "\n"
 	}
 
 	// Column widths come from local-only cells (id, age, titles), so the
@@ -599,6 +920,7 @@ func (m radarModel) View() string {
 	}
 
 	var b strings.Builder
+	b.WriteString(prompt)
 	line := func(i int, s rigStatus) {
 		fetched := prsFetched(m.prs, s.Slug)
 		glyph, gstyle := radarGlyph(s, fetched)
@@ -640,23 +962,35 @@ func (m radarModel) View() string {
 		b.WriteString("\n")
 	}
 
-	if len(m.inflight) > 0 {
-		b.WriteString(radarHeaderStyle.Render("IN FLIGHT") + "\n")
-		for i := range m.inflight {
-			line(i, m.inflight[i])
+	if m.filter != "" {
+		// Under a filter the board is one ranked list — no section headers, the
+		// order is pure score, and the cursor rides the top (best) match.
+		for i := range rows {
+			line(i, rows[i])
 		}
-	}
-	if len(m.parked) > 0 {
-		if len(m.inflight) > 0 {
-			b.WriteString("\n")
+	} else {
+		// The board proper: three sections, cursor index tracked section by
+		// section so it stays in lockstep with m.rows().
+		base := 0
+		section := func(header string, rows []rigStatus) {
+			if len(rows) == 0 {
+				return
+			}
+			if base > 0 {
+				b.WriteString("\n")
+			}
+			b.WriteString(radarHeaderStyle.Render(header) + "\n")
+			for i := range rows {
+				line(base+i, rows[i])
+			}
+			base += len(rows)
 		}
-		b.WriteString(radarHeaderStyle.Render("PARKED · AWAITING REVIEW") + "\n")
-		for i := range m.parked {
-			line(len(m.inflight)+i, m.parked[i])
-		}
+		section("IN FLIGHT", m.inflight)
+		section("PARKED · AWAITING REVIEW", m.parked)
+		section("OTHER SESSIONS", m.sessions)
 	}
 
-	b.WriteString("\n" + radarFaintStyle.Render("↑/↓ move · enter go · r refresh prs · q quit"))
+	b.WriteString("\n" + footer)
 	if m.scanErr != nil {
 		b.WriteString("\n" + radarErrStyle.Render("scan: "+m.scanErr.Error()))
 	}

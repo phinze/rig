@@ -142,6 +142,13 @@ type rigStatus struct {
 	Parked      bool       `json:"parked"`                // dormant, awaiting review
 	LastActive  *time.Time `json:"last_active,omitempty"` // newest claude turn, if any
 	PRs         []rigPR    `json:"prs,omitempty"`         // populated only under --full
+
+	// radar-only, never serialized: a row that's a bare tmux session (not a
+	// rig) carries bare=true and the raw session name to attach to. Everything
+	// PR- and agent-shaped is skipped for these; they exist so the radar can be
+	// a universal session picker, not just a board over rigs.
+	bare    bool
+	session string
 }
 
 // rigPR is one of a rig's pull requests, tagged with the repo and branch it

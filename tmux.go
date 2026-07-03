@@ -53,6 +53,49 @@ func tmuxLastAttached() map[string]int64 {
 	return m
 }
 
+// tmuxSession is one live tmux session as the radar's universal picker sees it:
+// its name (what you attach to), the working directory tmux reports for it, and
+// when it was last attached (0 if never), so non-rig sessions can sort MRU
+// alongside the rigs.
+type tmuxSession struct {
+	Name         string
+	Path         string
+	LastAttached int64
+}
+
+// tmuxSessions lists every live session with the fields the radar needs. It's
+// the one-call superset of tmuxLastAttached: the radar builds both its
+// attached-map and its bare-session rows from a single list-sessions. Returns
+// nil when tmux isn't running. A tab delimiter keeps paths with spaces intact
+// (session names are dash-normalized, so they never carry a tab).
+func tmuxSessions() []tmuxSession {
+	out, err := exec.Command("tmux", "list-sessions", "-F",
+		"#{session_last_attached}\t#{session_path}\t#{session_name}").Output()
+	if err != nil {
+		return nil
+	}
+	var sessions []tmuxSession
+	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		fields := strings.SplitN(line, "\t", 3)
+		if len(fields) != 3 {
+			continue
+		}
+		secs, err := strconv.ParseInt(fields[0], 10, 64)
+		if err != nil {
+			continue
+		}
+		sessions = append(sessions, tmuxSession{
+			Name:         fields[2],
+			Path:         fields[1],
+			LastAttached: secs,
+		})
+	}
+	return sessions
+}
+
 // currentTmuxSession returns the name of the session the current process is
 // running inside, or "" if not inside tmux. `rig switch` drops this from the
 // list — you never switch to where you already are.

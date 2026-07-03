@@ -187,6 +187,150 @@ func TestRadarTailSegs(t *testing.T) {
 	}
 }
 
+// Bare tmux sessions sort most-recently-attached first (Created carries the
+// last-attached stamp), never-attached sessions sink, and name breaks ties.
+func TestRadarSortSessions(t *testing.T) {
+	sess := func(name string, attached int64) rigStatus {
+		s := rigStatus{bare: true, session: name}
+		if attached > 0 {
+			s.Created = time.Unix(attached, 0)
+		}
+		return s
+	}
+	sessions := []rigStatus{
+		sess("never", 0),
+		sess("old", 100),
+		sess("recent", 300),
+		sess("also-never", 0),
+	}
+
+	radarSortSessions(sessions)
+
+	want := []string{"recent", "old", "also-never", "never"}
+	for i, w := range want {
+		if sessions[i].session != w {
+			t.Fatalf("order[%d] = %q, want %q", i, sessions[i].session, w)
+		}
+	}
+}
+
+// The fuzzy query is space-separated subsequence terms, ANDed, case-insensitive.
+func TestFuzzyMatch(t *testing.T) {
+	cases := []struct {
+		query string
+		hay   string
+		want  bool
+	}{
+		{"", "anything", true},
+		{"rig", "~/src/github.com/phinze/rig", true},
+		{"ghrig", "~/src/github.com/phinze/rig", true},
+		{"RIG", "~/src/github.com/phinze/rig", true},
+		{"phinze rig", "~/src/github.com/phinze/rig", true},
+		{"phinze zzz", "~/src/github.com/phinze/rig", false},
+		{"xyz", "~/src/github.com/phinze/rig", false},
+	}
+	for _, c := range cases {
+		if got := fuzzyMatch(c.query, c.hay); got != c.want {
+			t.Errorf("fuzzyMatch(%q, %q) = %v, want %v", c.query, c.hay, got, c.want)
+		}
+	}
+}
+
+// A tight, boundary-aligned match outscores a scattered one, so the ranking
+// floats the obvious hit to the top.
+func TestMatchScoreRanking(t *testing.T) {
+	tight, ok := matchScore("rig", "/rig")
+	if !ok {
+		t.Fatal("tight match should match")
+	}
+	loose, ok := matchScore("rig", "/raging")
+	if !ok {
+		t.Fatal("loose match should still match")
+	}
+	if !(tight > loose) {
+		t.Errorf("tight %.4f should outscore loose %.4f", tight, loose)
+	}
+	if _, ok := matchScore("zzz", "/rig"); ok {
+		t.Error("non-subsequence should not match")
+	}
+}
+
+// Under a filter, rows() collapses to one list ranked best-first: the exact-ish
+// hit sorts above the scattered one regardless of section order.
+func TestRankedRowsOrder(t *testing.T) {
+	m := radarModel{
+		sessions: []rigStatus{
+			bareSession(tmuxSession{Name: "raging", Path: "/raging"}, ""),
+			bareSession(tmuxSession{Name: "rig", Path: "/rig"}, ""),
+		},
+	}
+	m.setFilter("rig")
+	rows := m.rows()
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(rows))
+	}
+	if rows[0].session != "rig" {
+		t.Errorf("best match = %q, want rig", rows[0].session)
+	}
+	if m.cursor != 0 {
+		t.Errorf("cursor = %d, want 0 (snapped to best)", m.cursor)
+	}
+}
+
+// A bare session renders as a neutral row: the open-ring glyph, no PR tail, and
+// its haystack matches on both the path-title and the raw session name.
+func TestRadarBareSession(t *testing.T) {
+	s := bareSession(tmuxSession{Name: "~-src-rig", Path: "/home/me/src/rig", LastAttached: 42}, "/home/me")
+	if !s.bare || s.session != "~-src-rig" {
+		t.Fatalf("bareSession identity = %+v", s)
+	}
+	if s.Title != "~/src/rig" {
+		t.Errorf("title = %q, want ~/src/rig", s.Title)
+	}
+	if !s.Created.Equal(time.Unix(42, 0)) {
+		t.Errorf("created = %v, want last-attached", s.Created)
+	}
+	if g, _ := radarGlyph(s, false); g != "○" {
+		t.Errorf("glyph = %q, want ○", g)
+	}
+	if segs := radarTailSegs(s, false); segs != nil {
+		t.Errorf("bare tail = %v, want nil", segs)
+	}
+	if !fuzzyMatch("rig", radarHaystack(s)) {
+		t.Error("haystack should match on path")
+	}
+	if !fuzzyMatch("src-rig", radarHaystack(s)) {
+		t.Error("haystack should match on session name")
+	}
+}
+
+// The filter narrows the flattened rows across all three sections while the
+// PR-enrichment list (rigRows) stays whole, so hiding a rig never starves it of
+// its PR fetch.
+func TestRadarFilterRows(t *testing.T) {
+	m := radarModel{
+		inflight: []rigStatus{{Slug: "a", ID: "PROJ-1", Title: "add radar"}},
+		parked:   []rigStatus{{Slug: "b", Parked: true, ID: "PROJ-2", Title: "fix waiting"}},
+		sessions: []rigStatus{bareSession(tmuxSession{Name: "notes", Path: "/n"}, "")},
+	}
+	if got := len(m.rows()); got != 3 {
+		t.Fatalf("unfiltered rows = %d, want 3", got)
+	}
+	if got := len(m.rigRows()); got != 2 {
+		t.Fatalf("rigRows = %d, want 2", got)
+	}
+
+	m.filter = "radar"
+	rows := m.rows()
+	if len(rows) != 1 || rows[0].Slug != "a" {
+		t.Fatalf("filtered rows = %+v, want just PROJ-1", rows)
+	}
+	// rigRows ignores the filter — enrichment shouldn't depend on what's shown.
+	if got := len(m.rigRows()); got != 2 {
+		t.Errorf("rigRows under filter = %d, want 2", got)
+	}
+}
+
 func TestRadarTruncate(t *testing.T) {
 	cases := []struct {
 		in   string
