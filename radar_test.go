@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -84,6 +86,103 @@ func TestRadarStateCell(t *testing.T) {
 	for _, c := range cases {
 		if got := radarStateCell(c.s, c.fetched); got != c.want {
 			t.Errorf("%s: radarStateCell = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// The PR cache round-trips through disk, and entries past the save horizon
+// are dropped rather than resurrected stale.
+func TestRadarCacheRoundTrip(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	now := time.Now().Round(time.Second)
+	prs := map[string][]rigPR{
+		"fresh":   {{Repo: "o/r", Branch: "b", prInfo: prInfo{Number: 7, State: "OPEN", Checks: "passing"}}},
+		"ancient": {{Repo: "o/r", Branch: "c", prInfo: prInfo{Number: 8, State: "MERGED"}}},
+	}
+	at := map[string]time.Time{
+		"fresh":   now,
+		"ancient": now.Add(-2 * time.Hour),
+	}
+	saveRadarCache(prs, at)
+
+	got := loadRadarCache()
+	if _, ok := got["ancient"]; ok {
+		t.Error("entry past the save horizon survived")
+	}
+	e, ok := got["fresh"]
+	if !ok {
+		t.Fatal("fresh entry missing after round-trip")
+	}
+	if len(e.PRs) != 1 || e.PRs[0].Number != 7 || e.PRs[0].Checks != "passing" {
+		t.Errorf("fresh entry PRs = %+v", e.PRs)
+	}
+	if !e.At.Equal(now) {
+		t.Errorf("fresh entry At = %v, want %v", e.At, now)
+	}
+}
+
+// loadRadarCache degrades to empty on a missing or torn file.
+func TestRadarCacheDegrades(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	if got := loadRadarCache(); got != nil {
+		t.Errorf("missing file: got %v, want nil", got)
+	}
+	path, err := radarCachePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("{torn"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := loadRadarCache(); got != nil {
+		t.Errorf("torn file: got %v, want nil", got)
+	}
+}
+
+// The tail is append-only detail: "…" while loading, nothing for a bare
+// in-flight rig, disposition-word-first for parked, repo prefixes only when
+// the rig spans repos.
+func TestRadarTailSegs(t *testing.T) {
+	plains := func(segs []tailSeg) []string {
+		out := make([]string, len(segs))
+		for i, s := range segs {
+			out[i] = s.plain
+		}
+		return out
+	}
+	cases := []struct {
+		name    string
+		s       rigStatus
+		fetched bool
+		want    []string
+	}{
+		{"loading", rigStatus{}, false, []string{"…"}},
+		{"inflight no pr", rigStatus{}, true, nil},
+		{"parked no pr", rigStatus{Parked: true}, true, []string{"no PR"}},
+		{"single pr", rigStatus{PRs: []rigPR{
+			{Repo: "o/api", prInfo: prInfo{Number: 7, State: "OPEN", Checks: "passing"}},
+		}}, true, []string{"#7 "}},
+		{"multi repo", rigStatus{PRs: []rigPR{
+			{Repo: "o/api", prInfo: prInfo{Number: 7, State: "OPEN"}},
+			{Repo: "o/web", prInfo: prInfo{Number: 9, State: "OPEN", Checks: "failing"}},
+		}}, true, []string{"api #7", "web #9 "}},
+		{"parked changes", rigStatus{Parked: true, PRs: []rigPR{
+			{Repo: "o/api", prInfo: prInfo{Number: 7, State: "OPEN", Review: "CHANGES_REQUESTED"}},
+		}}, true, []string{"changes requested", "#7"}},
+	}
+	for _, c := range cases {
+		got := plains(radarTailSegs(c.s, c.fetched))
+		if len(got) != len(c.want) {
+			t.Errorf("%s: segs = %q, want %q", c.name, got, c.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Errorf("%s: seg[%d] = %q, want %q", c.name, i, got[i], c.want[i])
+			}
 		}
 	}
 }
