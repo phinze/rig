@@ -663,6 +663,62 @@ func TestRadarMouse(t *testing.T) {
 	}
 }
 
+// parseAgentPanes keeps one child per distinct agent: two panes sharing a window
+// and the exact same context collapse (a claude mirrored across a split), but
+// two different tasks in one window both survive. Shells drop out; the
+// placeholder title becomes an empty context.
+func TestParseAgentPanes(t *testing.T) {
+	out := strings.Join([]string{
+		"s\t0\t0\twin\tclaude\t✳ Task A",
+		"s\t0\t1\twin\tclaude\t✳ Task A",     // dup: same window + context → collapse
+		"s\t0\t2\twin\tclaude\t⠂ Task B",     // distinct task, same window → keep
+		"s\t1\t0\twin\tfish\t~/x - fish",     // shell → skip
+		"s\t2\t0\tcw\tclaude\t✳ Claude Code", // placeholder → empty context
+	}, "\n")
+
+	kids := parseAgentPanes(out)["s"]
+	if len(kids) != 3 {
+		t.Fatalf("children = %d (%+v), want 3", len(kids), kids)
+	}
+	if kids[0].Context != "Task A" || kids[0].Target != "s:0.0" {
+		t.Errorf("child 0 = %+v, want Task A at s:0.0", kids[0])
+	}
+	if kids[1].Context != "Task B" || kids[1].Target != "s:0.2" {
+		t.Errorf("child 1 = %+v, want Task B at s:0.2 (distinct agent kept)", kids[1])
+	}
+	if kids[2].Context != "" || kids[2].Target != "s:2.0" {
+		t.Errorf("child 2 = %+v, want empty context at s:2.0", kids[2])
+	}
+}
+
+// Two agents sharing a window are told apart by their context, so the repeated
+// window label is suppressed; agents across different windows keep their labels.
+func TestDisplayItemsChildLabels(t *testing.T) {
+	sameWindow := radarModel{inflight: []rigStatus{{Slug: "a", ID: "A", agents: []agentChild{
+		{Window: "claude", Target: "a:0.0", Context: "one"},
+		{Window: "claude", Target: "a:0.1", Context: "two"},
+	}}}}
+	for _, it := range sameWindow.displayItems() {
+		if it.child && it.row.childKey != "" {
+			t.Errorf("same-window child kept a label: %q", it.row.childKey)
+		}
+	}
+
+	diffWindow := radarModel{inflight: []rigStatus{{Slug: "a", ID: "A", agents: []agentChild{
+		{Window: "runtime", Target: "a:0.0", Context: "one"},
+		{Window: "rfd", Target: "a:1.0", Context: "two"},
+	}}}}
+	labels := 0
+	for _, it := range diffWindow.displayItems() {
+		if it.child && it.row.childKey != "" {
+			labels++
+		}
+	}
+	if labels != 2 {
+		t.Errorf("cross-window children labeled = %d, want 2", labels)
+	}
+}
+
 func TestRadarTruncate(t *testing.T) {
 	cases := []struct {
 		in   string

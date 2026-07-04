@@ -656,10 +656,18 @@ func (m radarModel) displayItems() []radarLine {
 	var items []radarLine
 	parent := func(p rigStatus) {
 		items = append(items, radarLine{row: p})
+		// Label children by window only when they span more than one — a repo
+		// name places the runtime agent vs the rfd agent, but two agents in one
+		// window are told apart by their context, so the repeated name is noise.
+		windows := map[string]bool{}
+		for _, c := range p.agents {
+			windows[c.Window] = true
+		}
+		showLabel := len(windows) > 1
 		for i, c := range p.agents {
-			key := c.Window
-			if len(p.agents) <= 1 {
-				key = "" // a lone child needs no window label to place it
+			key := ""
+			if showLabel {
+				key = c.Window
 			}
 			items = append(items, radarLine{
 				row:   rigStatus{child: true, session: c.Target, Title: c.Context, childKey: key},

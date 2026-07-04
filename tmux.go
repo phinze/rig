@@ -108,45 +108,55 @@ type agentChild struct {
 	Context string
 }
 
-// tmuxAgentChildren maps each session to its claude windows, in window order.
-// One list-panes -a sweeps the whole tree; a window counts once (its first
-// claude pane) even when it holds several. A pane is the agent when its command
-// is claude or its title still wears Claude Code's state glyph, so a claude
-// running under a wrapper process is still caught by the title. Returns nil when
-// tmux isn't running.
+// tmuxAgentChildren maps each session to its claude panes, in pane order. One
+// list-panes -a sweeps the whole tree. Each agent pane becomes a child, except
+// that panes sharing a window and the exact same context collapse to one — that
+// kills the artifact of the same claude mirrored across a split without hiding
+// two genuinely different agents side by side. A pane is an agent when its
+// command is claude or its title still wears Claude Code's state glyph (so a
+// claude under a wrapper process is still caught). Returns nil when tmux isn't
+// running.
 func tmuxAgentChildren() map[string][]agentChild {
 	out, err := exec.Command("tmux", "list-panes", "-a", "-F",
-		"#{session_name}\t#{window_index}\t#{window_name}\t#{pane_current_command}\t#{pane_title}").Output()
+		"#{session_name}\t#{window_index}\t#{pane_index}\t#{window_name}\t#{pane_current_command}\t#{pane_title}").Output()
 	if err != nil {
 		return nil
 	}
+	return parseAgentPanes(string(out))
+}
+
+// parseAgentPanes is tmuxAgentChildren's pure core: it turns list-panes output
+// (tab-separated session, window index, pane index, window name, command, title
+// per line) into the per-session child list, applying the agent filter and the
+// same-window-same-context dedup.
+func parseAgentPanes(out string) map[string][]agentChild {
 	children := map[string][]agentChild{}
-	seen := map[string]bool{} // session\twindow — one child per window
-	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
+	seen := map[string]bool{} // session\twindow\tcontext — collapse exact dups
+	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
 		if line == "" {
 			continue
 		}
-		f := strings.SplitN(line, "\t", 5)
-		if len(f) != 5 {
+		f := strings.SplitN(line, "\t", 6)
+		if len(f) != 6 {
 			continue
 		}
-		session, windex, wname, cmd, title := f[0], f[1], f[2], f[3], f[4]
+		session, windex, pindex, wname, cmd, title := f[0], f[1], f[2], f[3], f[4], f[5]
 		if cmd != "claude" && stripAgentGlyph(title) == title {
 			continue // not an agent pane: no claude command, no state glyph
 		}
-		key := session + "\t" + windex
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
 		ctx := stripAgentGlyph(title)
 		if ctx == agentPlaceholder {
 			ctx = "" // "Claude Code" default: agent open, no task named
 		}
+		key := session + "\t" + windex + "\t" + ctx
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
 		children[session] = append(children[session], agentChild{
 			Session: session,
 			Window:  wname,
-			Target:  session + ":" + windex,
+			Target:  session + ":" + windex + "." + pindex,
 			Context: ctx,
 		})
 	}
