@@ -1198,7 +1198,10 @@ func (m radarModel) View() string {
 		if last {
 			branch = "└"
 		}
-		head := "     " + branch + " "
+		// Align the child under the title column (fixed is where titles start),
+		// with the branch in the two cells just before it. A session's empty id
+		// column would otherwise strand the child far to the left of its path.
+		head := strings.Repeat(" ", max(0, fixed-2)) + branch + " "
 		if s.childKey != "" {
 			head += s.childKey + "  "
 		}
