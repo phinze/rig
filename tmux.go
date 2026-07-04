@@ -96,6 +96,63 @@ func tmuxSessions() []tmuxSession {
 	return sessions
 }
 
+// agentChild is one claude-bearing tmux window: what the radar dangles under a
+// rig or session so the board reads as a HUD of every agent in flight. Window
+// is the window's name (a repo, for a rig), Target is the session:index a jump
+// lands on, and Context is the task the agent named for itself (empty when it's
+// still on the "Claude Code" placeholder).
+type agentChild struct {
+	Session string
+	Window  string
+	Target  string
+	Context string
+}
+
+// tmuxAgentChildren maps each session to its claude windows, in window order.
+// One list-panes -a sweeps the whole tree; a window counts once (its first
+// claude pane) even when it holds several. A pane is the agent when its command
+// is claude or its title still wears Claude Code's state glyph, so a claude
+// running under a wrapper process is still caught by the title. Returns nil when
+// tmux isn't running.
+func tmuxAgentChildren() map[string][]agentChild {
+	out, err := exec.Command("tmux", "list-panes", "-a", "-F",
+		"#{session_name}\t#{window_index}\t#{window_name}\t#{pane_current_command}\t#{pane_title}").Output()
+	if err != nil {
+		return nil
+	}
+	children := map[string][]agentChild{}
+	seen := map[string]bool{} // session\twindow — one child per window
+	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		f := strings.SplitN(line, "\t", 5)
+		if len(f) != 5 {
+			continue
+		}
+		session, windex, wname, cmd, title := f[0], f[1], f[2], f[3], f[4]
+		if cmd != "claude" && stripAgentGlyph(title) == title {
+			continue // not an agent pane: no claude command, no state glyph
+		}
+		key := session + "\t" + windex
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		ctx := stripAgentGlyph(title)
+		if ctx == agentPlaceholder {
+			ctx = "" // "Claude Code" default: agent open, no task named
+		}
+		children[session] = append(children[session], agentChild{
+			Session: session,
+			Window:  wname,
+			Target:  session + ":" + windex,
+			Context: ctx,
+		})
+	}
+	return children
+}
+
 // currentTmuxSession returns the name of the session the current process is
 // running inside, or "" if not inside tmux. `rig switch` drops this from the
 // list — you never switch to where you already are.

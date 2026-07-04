@@ -82,9 +82,10 @@ func runRadar(args []string) error {
 // up if it lacks one, and land in it. This is the tail of switch and wake,
 // executed after the TUI has released the terminal.
 func radarAct(s rigStatus) error {
-	// A bare tmux session is nothing but a name to land in — no manifest, no
-	// session to stand up, no PR to wake.
-	if s.bare {
+	// A bare session is nothing but a name to land in; a child is the same, its
+	// session field a session:index window target. No manifest, no session to
+	// stand up, no PR to wake.
+	if s.bare || s.child {
 		return attachOrReport(s.session)
 	}
 	// A create-row stands up a fresh session at a zoxide dir; promoting its
@@ -153,6 +154,7 @@ type radarScanMsg struct {
 	statuses []rigStatus
 	sessions []tmuxSession
 	attached map[string]int64
+	agents   map[string][]agentChild // session name → its claude windows
 	err      error
 }
 
@@ -189,6 +191,7 @@ func radarScanNow(home string) radarScanMsg {
 		statuses: rigStatuses(rigs, home, time.Now()),
 		sessions: sessions,
 		attached: attached,
+		agents:   tmuxAgentChildren(),
 	}
 }
 
@@ -499,6 +502,19 @@ func (m *radarModel) apply(scan radarScanMsg) {
 		sessions = append(sessions, bareSession(ts, m.home))
 	}
 
+	// Dangle each parent's live claude windows under it: rigs key off their
+	// computed session name, bare sessions off their own. A row with no agent
+	// running just gets no children.
+	attachAgents := func(rows []rigStatus, sessionOf func(rigStatus) string) {
+		for i := range rows {
+			rows[i].agents = scan.agents[sessionOf(rows[i])]
+		}
+	}
+	rigSession := func(s rigStatus) string { return tmuxSessionName(s.Path) }
+	attachAgents(inflight, rigSession)
+	attachAgents(parked, rigSession)
+	attachAgents(sessions, func(s rigStatus) string { return s.session })
+
 	m.inflight, m.parked, m.sessions = inflight, parked, sessions
 	m.resortKeeping(selected)
 }
@@ -539,10 +555,14 @@ func tildePath(path, home string) string {
 // slug, a bare session its name. Used to keep the cursor pinned to the same row
 // even as the board reorders under it.
 func rowKey(s rigStatus) string {
-	if s.bare {
+	switch {
+	case s.child:
+		return "child:" + s.session // session holds the window target
+	case s.bare:
 		return "sess:" + s.session
+	default:
+		return "slug:" + s.Slug
 	}
-	return "slug:" + s.Slug
 }
 
 // selectedKey is the identity of the row under the cursor, or "" when there's
@@ -587,26 +607,75 @@ func (m radarModel) rigRows() []rigStatus {
 	return out
 }
 
-// rows is the list the cursor walks and the board renders. With no filter it's
-// the three sections in board order. With a filter it collapses to one list
-// ranked best-match-first, so the top row (where the cursor snaps) is always
-// the strongest hit, the way fzf reorders under the query.
-func (m radarModel) rows() []rigStatus {
+// radarLine is one line the board draws: a section header (not selectable) or a
+// row. A row can be a parent or a dangled child; last marks the final child of a
+// parent so the tree closes with └ instead of ├.
+type radarLine struct {
+	header string
+	row    rigStatus
+	child  bool
+	last   bool
+}
+
+// displayItems is the single ordered list both the cursor and the renderer read,
+// so the two never drift. In board mode it's the three sections with each
+// parent's live claude windows dangled beneath it; under a filter it collapses
+// to one ranked list of parents (children are the resting HUD, not part of the
+// hunt); the NEW picker is its own header plus create-rows.
+func (m radarModel) displayItems() []radarLine {
+	var items []radarLine
+	parent := func(p rigStatus) {
+		items = append(items, radarLine{row: p})
+		for i, c := range p.agents {
+			key := c.Window
+			if len(p.agents) <= 1 {
+				key = "" // a lone child needs no window label to place it
+			}
+			items = append(items, radarLine{
+				row:   rigStatus{child: true, session: c.Target, Title: c.Context, childKey: key},
+				child: true,
+				last:  i == len(p.agents)-1,
+			})
+		}
+	}
 	switch m.mode {
 	case modeNew:
-		// The NEW picker is always filter-entry, so an empty query shows the
-		// frecency order zoxide handed us; a query re-ranks. The View windows
-		// whatever's long to the popup height, so there's no cap here.
-		return m.rankRows(m.newRows())
+		items = append(items, radarLine{header: "NEW SESSION"})
+		for _, s := range m.rankRows(m.newRows()) {
+			items = append(items, radarLine{row: s})
+		}
 	case modeBoardFilter:
-		return m.rankRows(m.rigRows(), m.sessions)
+		for _, s := range m.rankRows(m.rigRows(), m.sessions) {
+			items = append(items, radarLine{row: s})
+		}
 	default: // modeBoard
-		out := make([]rigStatus, 0, len(m.inflight)+len(m.parked)+len(m.sessions))
-		out = append(out, m.inflight...)
-		out = append(out, m.parked...)
-		out = append(out, m.sessions...)
-		return out
+		section := func(header string, parents []rigStatus) {
+			if len(parents) == 0 {
+				return
+			}
+			items = append(items, radarLine{header: header})
+			for _, p := range parents {
+				parent(p)
+			}
+		}
+		section("IN FLIGHT", m.inflight)
+		section("PARKED · AWAITING REVIEW", m.parked)
+		section("OTHER SESSIONS", m.sessions)
 	}
+	return items
+}
+
+// rows is the selectable list the cursor walks: every display item that isn't a
+// header, parents and dangled children alike.
+func (m radarModel) rows() []rigStatus {
+	items := m.displayItems()
+	out := make([]rigStatus, 0, len(items))
+	for _, it := range items {
+		if it.header == "" {
+			out = append(out, it.row)
+		}
+	}
+	return out
 }
 
 // rankRows scores the given sections against the query, drops the misses, and
@@ -678,6 +747,26 @@ func (m radarModel) openSessions() map[string]bool {
 		open[m.current] = true
 	}
 	return open
+}
+
+// agentPlaceholder is Claude Code's default title before a task is named — the
+// tell that an agent is open but idle-blank rather than mid-task.
+const agentPlaceholder = "Claude Code"
+
+// stripAgentGlyph peels Claude Code's leading state glyph off a pane title,
+// leaving just the task text. The glyph is either ✳ (the resting star) or a
+// braille spinner frame (U+2800–U+28FF) captured mid-animation; either way it's
+// one rune plus a space. A title with no such glyph comes back unchanged, which
+// is also how callers tell an agent pane from a plain shell.
+func stripAgentGlyph(title string) string {
+	r := []rune(title)
+	if len(r) == 0 {
+		return title
+	}
+	if r[0] == '✳' || (r[0] >= 0x2800 && r[0] <= 0x28FF) {
+		return strings.TrimSpace(string(r[1:]))
+	}
+	return title
 }
 
 // radarHaystack is the text a row is fuzzy-matched against: a rig by its id and
@@ -1022,8 +1111,14 @@ func (m radarModel) View() string {
 		footer = radarFaintStyle.Render("j/k move · enter go · / filter · n new · R refresh · q quit")
 	}
 
-	rows := m.rows()
-	if len(rows) == 0 {
+	items := m.displayItems()
+	selectable := 0
+	for _, it := range items {
+		if it.header == "" {
+			selectable++
+		}
+	}
+	if selectable == 0 {
 		msg := "  nothing to pick"
 		switch m.mode {
 		case modeBoardFilter:
@@ -1038,21 +1133,24 @@ func (m radarModel) View() string {
 		return "\n" + prompt + msg + "\n\n" + footer + "\n"
 	}
 
-	// Column widths come from local-only cells (id, age, titles), so the
-	// layout is stable from the first frame: the PR fan-out landing swaps a
-	// glyph in place and appends a tail, it never moves a column.
+	// Column widths come from parent rows' local cells (id, age, title) only, so
+	// dangled children never widen the columns and the PR fan-out landing swaps a
+	// glyph in place without moving anything.
 	var wID, wAge, wTitle int
-	for _, s := range rows {
-		wID = max(wID, lipgloss.Width(s.ID))
-		wAge = max(wAge, lipgloss.Width(age(s.Created)))
-		wTitle = max(wTitle, lipgloss.Width(s.Title))
+	for _, it := range items {
+		if it.header != "" || it.child {
+			continue
+		}
+		wID = max(wID, lipgloss.Width(it.row.ID))
+		wAge = max(wAge, lipgloss.Width(age(it.row.Created)))
+		wTitle = max(wTitle, lipgloss.Width(it.row.Title))
 	}
 	fixed := 2 + wID + 2 + wAge + 2 + 1 + 2 // gutter, id, age, glyph, gaps
 	if m.width > 0 {
 		wTitle = min(wTitle, max(20, m.width-fixed-radarTailReserve))
 	}
 
-	renderRow := func(i int, s rigStatus) string {
+	renderRow := func(selected bool, s rigStatus) string {
 		fetched := prsFetched(m.prs, s.Slug)
 		glyph, gstyle := radarGlyph(s, fetched)
 		title := radarTruncate(s.Title, wTitle)
@@ -1079,7 +1177,7 @@ func (m radarModel) View() string {
 			styledTail = append(styledTail, seg.styled)
 		}
 
-		if i == m.cursor {
+		if selected {
 			// One style over the whole line: inner color resets would chew
 			// through a wrapping reverse, so the selected row goes plain.
 			plain := fmt.Sprintf("▸ %-*s  %-*s  %s  %-*s  %s",
@@ -1091,52 +1189,58 @@ func (m radarModel) View() string {
 			wTitle, title, strings.Join(styledTail, "  "))
 	}
 
-	// Build every display line — section headers and rows interleaved — into one
+	// renderChild draws a dangled agent line: an indented tree branch, the window
+	// label when a parent has more than one, and the agent's current task (a faint
+	// dash when it hasn't named one). The line is faint — it's ambient context —
+	// and goes reverse-video when it's the selection.
+	renderChild := func(selected bool, s rigStatus, last bool) string {
+		branch := "├"
+		if last {
+			branch = "└"
+		}
+		head := "     " + branch + " "
+		if s.childKey != "" {
+			head += s.childKey + "  "
+		}
+		label := s.Title
+		if label == "" {
+			label = "—"
+		}
+		avail := int(^uint(0) >> 1)
+		if m.width > 0 {
+			avail = max(4, m.width-lipgloss.Width(head)-2)
+		}
+		plain := head + radarTruncate(label, avail)
+		if selected {
+			return radarCursorStyle.Render(plain)
+		}
+		return radarFaintStyle.Render(plain)
+	}
+
+	// Build every display line — headers, parent rows, dangled children — into one
 	// slice, remembering which line the cursor sits on. Windowing then trims the
 	// slice to the popup rather than letting the terminal scroll the top away.
 	var body []string
 	cursorLine := 0
-	appendRow := func(i int, s rigStatus) {
-		if i == m.cursor {
-			cursorLine = len(body)
-		}
-		body = append(body, renderRow(i, s))
-	}
-
-	switch m.mode {
-	case modeNew:
-		// The NEW picker is one list under a single header; every row is a
-		// would-be session, so there's nothing to section by.
-		body = append(body, radarHeaderStyle.Render("NEW SESSION"))
-		for i := range rows {
-			appendRow(i, rows[i])
-		}
-	case modeBoardFilter:
-		// Under a filter the board is one ranked list — no section headers, the
-		// order is pure score, and the cursor rides the top (best) match.
-		for i := range rows {
-			appendRow(i, rows[i])
-		}
-	default:
-		// The board proper: three sections, cursor index tracked section by
-		// section so it stays in lockstep with m.rows().
-		base := 0
-		section := func(header string, secRows []rigStatus) {
-			if len(secRows) == 0 {
-				return
-			}
-			if base > 0 {
+	sel := 0
+	for _, it := range items {
+		if it.header != "" {
+			if len(body) > 0 {
 				body = append(body, "") // blank line between sections
 			}
-			body = append(body, radarHeaderStyle.Render(header))
-			for i := range secRows {
-				appendRow(base+i, secRows[i])
-			}
-			base += len(secRows)
+			body = append(body, radarHeaderStyle.Render(it.header))
+			continue
 		}
-		section("IN FLIGHT", m.inflight)
-		section("PARKED · AWAITING REVIEW", m.parked)
-		section("OTHER SESSIONS", m.sessions)
+		selected := sel == m.cursor
+		if selected {
+			cursorLine = len(body)
+		}
+		if it.child {
+			body = append(body, renderChild(selected, it.row, it.last))
+		} else {
+			body = append(body, renderRow(selected, it.row))
+		}
+		sel++
 	}
 
 	// Reserve the fixed furniture (prompt, blank + footer, optional error) and

@@ -146,12 +146,18 @@ type rigStatus struct {
 	// radar-only, never serialized: a row that's a bare tmux session (not a
 	// rig) carries bare=true and the raw session name to attach to. A row in the
 	// NEW picker that stands up a fresh session at a zoxide dir carries
-	// create=true (Path is the dir). Everything PR- and agent-shaped is skipped
-	// for both; they exist so the radar can be a universal picker, not just a
-	// board over rigs.
-	bare    bool
-	create  bool
-	session string
+	// create=true (Path is the dir). A child row dangled under a parent carries
+	// child=true, session set to the window's session:index switch target, and
+	// childKey holding the window label. agents are the parent's claude windows,
+	// expanded into child rows at render. Everything PR- and agent-shaped is
+	// skipped for these; they exist so the radar can be a universal HUD, not just
+	// a board over rigs.
+	bare     bool
+	create   bool
+	child    bool
+	session  string
+	childKey string
+	agents   []agentChild
 }
 
 // rigPR is one of a rig's pull requests, tagged with the repo and branch it

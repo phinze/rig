@@ -411,12 +411,23 @@ func TestWindowBody(t *testing.T) {
 // checks the selected row survives into the visible window.
 func TestViewFitsHeight(t *testing.T) {
 	m := radarModel{
-		width:    120,
-		inflight: []rigStatus{{Slug: "a", ID: "MIR-1", Title: "one"}, {Slug: "b", ID: "MIR-2", Title: "two"}},
+		width: 120,
+		inflight: []rigStatus{
+			{Slug: "a", ID: "MIR-1", Title: "one", agents: []agentChild{
+				{Window: "runtime", Target: "a:0", Context: "doing runtime work"},
+				{Window: "rfd", Target: "a:1", Context: "doing rfd work"},
+			}},
+			{Slug: "b", ID: "MIR-2", Title: "two"},
+		},
 	}
 	for i := range 30 {
 		name := "sess" + string(rune('a'+i))
-		m.sessions = append(m.sessions, bareSession(tmuxSession{Name: name, Path: "/home/me/" + name, LastAttached: int64(1000 - i)}, "/home/me"))
+		s := bareSession(tmuxSession{Name: name, Path: "/home/me/" + name, LastAttached: int64(1000 - i)}, "/home/me")
+		// Dangle an agent under every other session so children pad the viewport.
+		if i%2 == 0 {
+			s.agents = []agentChild{{Window: "claude", Target: name + ":0", Context: "working on " + name}}
+		}
+		m.sessions = append(m.sessions, s)
 	}
 
 	for _, height := range []int{8, 14, 20, 40, 200} {
@@ -495,6 +506,82 @@ func TestRadarKeyFlow(t *testing.T) {
 	m, _ = m.handleKey("esc")
 	if m.mode != modeBoard {
 		t.Fatalf("esc did not leave NEW picker: mode=%d", m.mode)
+	}
+}
+
+// stripAgentGlyph peels Claude Code's leading state glyph — the ✳ star or a
+// braille spinner frame — leaving the task text; a title with no glyph (a plain
+// shell) is returned unchanged so callers can tell agent panes apart.
+func TestStripAgentGlyph(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"✳ Replace emoji in story", "Replace emoji in story"},
+		{"⠂ Add non-rig tmux sessions to radar", "Add non-rig tmux sessions to radar"},
+		{"✳ Claude Code", agentPlaceholder},
+		{"~/s/g/m/iso - fish", "~/s/g/m/iso - fish"},
+		{"", ""},
+	}
+	for _, c := range cases {
+		if got := stripAgentGlyph(c.in); got != c.want {
+			t.Errorf("stripAgentGlyph(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// The board dangles each parent's claude windows as selectable child rows: in
+// order, right under the parent, with the window label shown only when there's
+// more than one to disambiguate, and the last child closing the tree.
+func TestDisplayItemsChildren(t *testing.T) {
+	m := radarModel{
+		inflight: []rigStatus{{Slug: "a", ID: "mir-1", Title: "build the thing", agents: []agentChild{
+			{Window: "runtime", Target: "s:0", Context: "Plan the saga"},
+			{Window: "rfd", Target: "s:1", Context: "Draft the RFD"},
+		}}},
+		sessions: []rigStatus{{bare: true, session: "meet", Title: "~/src/meet", agents: []agentChild{
+			{Window: "claude", Target: "meet:0", Context: "Replace emoji"},
+		}}},
+	}
+
+	items := m.displayItems()
+	// header, parent, child, child, header, parent, child
+	if len(items) != 7 {
+		t.Fatalf("items = %d, want 7", len(items))
+	}
+	if items[0].header != "IN FLIGHT" || items[4].header != "OTHER SESSIONS" {
+		t.Fatalf("headers misplaced: %q ... %q", items[0].header, items[4].header)
+	}
+	// The rig's two children carry their window labels and the second closes.
+	c1, c2 := items[2], items[3]
+	if !c1.child || c1.row.childKey != "runtime" || c1.last {
+		t.Errorf("child 1 = %+v, want runtime non-last", c1)
+	}
+	if !c2.child || c2.row.childKey != "rfd" || !c2.last {
+		t.Errorf("child 2 = %+v, want rfd last", c2)
+	}
+	// The session's lone child drops the label (nothing to disambiguate).
+	c3 := items[6]
+	if !c3.child || c3.row.childKey != "" || c3.row.Title != "Replace emoji" || !c3.last {
+		t.Errorf("session child = %+v, want unlabeled last 'Replace emoji'", c3)
+	}
+
+	// Children are selectable rows with distinct keys, and switch to their window.
+	rows := m.rows()
+	if len(rows) != 5 { // 2 parents + 3 children
+		t.Fatalf("selectable rows = %d, want 5", len(rows))
+	}
+	if rowKey(rows[1]) == rowKey(rows[2]) {
+		t.Error("sibling children share a rowKey")
+	}
+	if rows[1].session != "s:0" {
+		t.Errorf("child switch target = %q, want s:0", rows[1].session)
+	}
+
+	// Under a filter the HUD collapses: children drop, parents only.
+	m.mode = modeBoardFilter
+	m.filter = "build"
+	for _, r := range m.rows() {
+		if r.child {
+			t.Error("filter mode should not surface child rows")
+		}
 	}
 }
 
