@@ -27,10 +27,12 @@ import (
 // wakes. The popup inherits $TMUX, so switch-client from inside it moves the
 // underlying client, and the -E popup tears down as we exit.
 //
-// It doubles as the universal session picker that replaces tmux-session-wizard:
-// below the rigs sits an OTHER SESSIONS section listing every non-rig tmux
-// session in MRU order, and typing fuzzy-filters the whole board the way the
-// old fzf front-end did, so `t`'s muscle memory carries over.
+// It doubles as the universal picker that replaces tmux-session-wizard. Below
+// the rigs sits an OTHER SESSIONS section listing every non-rig tmux session in
+// MRU order. The board is modal like k9s: bare letters are verbs (n opens a NEW
+// picker that stands up a session at a zoxide dir, R refreshes, q quits), and
+// `/` drops into a fuzzy filter that ranks the whole board best-match-first. The
+// NEW picker is where `rig up` and `rig review` will grow their own sources.
 func runRadar(args []string) error {
 	if len(args) != 0 {
 		return fmt.Errorf("usage: rig radar")
@@ -85,6 +87,11 @@ func radarAct(s rigStatus) error {
 	if s.bare {
 		return attachOrReport(s.session)
 	}
+	// A create-row stands up a fresh session at a zoxide dir; promoting its
+	// frecency first keeps the picker's order honest next time.
+	if s.create {
+		zoxideAdd(s.Path)
+	}
 	if s.Parked {
 		m, err := readManifest(s.Path)
 		if err != nil {
@@ -121,12 +128,25 @@ type radarModel struct {
 	fetchedAt map[string]time.Time // slug → when its PRs were fetched
 	pending   map[string]bool      // slug → PR fetch in flight
 
-	filter  string // fuzzy query; empty = show everything
+	mode    radarMode
+	newDirs []string // zoxide frecency list, fetched when the NEW picker opens
+	filter  string   // fuzzy query; empty = show everything
 	cursor  int
 	chosen  *rigStatus // set on Enter; acted on after the program exits
 	width   int
 	scanErr error
 }
+
+// radarMode is the picker's input mode. The board defaults to command keys
+// (letters are verbs); a slash drops into filter entry where letters are text;
+// n opens the NEW picker, a create-a-session view that's always filter-entry.
+type radarMode int
+
+const (
+	modeBoard       radarMode = iota // sections, command keys, / to filter
+	modeBoardFilter                  // board narrowed by a live fuzzy query
+	modeNew                          // NEW picker: zoxide dirs → fresh session
+)
 
 type radarScanMsg struct {
 	statuses []rigStatus
@@ -328,29 +348,24 @@ func (m radarModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // handleKey drives the picker in always-on filter mode, the way session-wizard's
-// fzf did: printable runes narrow the list as you type, arrows (and ctrl+n/p)
-// walk the survivors, enter lands. esc backs out of a query before it quits, so
-// there's always a way home without reaching for the mouse.
+// fzf did. The board proper is modal — letters are verbs (n new, R refresh, q
+// quit), and a slash drops into filter entry — while the filter and NEW modes
+// are pure text entry, where letters narrow the list and esc walks back out.
 func (m radarModel) handleKey(key string) (radarModel, tea.Cmd) {
+	// Keys shared by every mode: move, select, hard-quit.
 	switch key {
 	case "ctrl+c":
-		return m, tea.Quit
-	case "esc":
-		// First esc clears an active query; a second (or esc with no query)
-		// leaves. Typers expect the filter to peel back before the whole UI does.
-		if m.filter != "" {
-			m.setFilter("")
-			return m, nil
-		}
 		return m, tea.Quit
 	case "down", "ctrl+n":
 		if m.cursor < len(m.rows())-1 {
 			m.cursor++
 		}
+		return m, nil
 	case "up", "ctrl+p":
 		if m.cursor > 0 {
 			m.cursor--
 		}
+		return m, nil
 	case "enter":
 		rows := m.rows()
 		if len(rows) == 0 {
@@ -359,17 +374,37 @@ func (m radarModel) handleKey(key string) (radarModel, tea.Cmd) {
 		s := rows[m.cursor]
 		m.chosen = &s
 		return m, tea.Quit
-	case "ctrl+u":
-		m.setFilter("")
-		return m, nil
-	case "backspace":
-		if r := []rune(m.filter); len(r) > 0 {
-			m.setFilter(string(r[:len(r)-1]))
+	}
+	if m.mode == modeBoard {
+		return m.handleBoardKey(key)
+	}
+	return m.handleTypingKey(key)
+}
+
+// handleBoardKey runs the command-mode board: bare letters are verbs, so the
+// keymap reads like a launcher rather than a search box.
+func (m radarModel) handleBoardKey(key string) (radarModel, tea.Cmd) {
+	switch key {
+	case "q", "esc":
+		return m, tea.Quit
+	case "j":
+		if m.cursor < len(m.rows())-1 {
+			m.cursor++
 		}
-		return m, nil
-	case "ctrl+r":
-		// Refetch every rig's PRs; stale cells keep showing until the
-		// fresh answer lands rather than flashing back to "…".
+	case "k":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "/":
+		m.enter(modeBoardFilter)
+	case "n":
+		// Fetch the frecency list once, when the picker opens, so the board's
+		// 2s tick never pays for it.
+		m.newDirs = zoxideDirs()
+		m.enter(modeNew)
+	case "R":
+		// Refetch every rig's PRs; stale cells keep showing until the fresh
+		// answer lands rather than flashing back to "…".
 		var cmds []tea.Cmd
 		for _, s := range m.rigRows() {
 			if m.pending[s.Slug] {
@@ -379,6 +414,22 @@ func (m radarModel) handleKey(key string) (radarModel, tea.Cmd) {
 			cmds = append(cmds, radarFetchCmd(s))
 		}
 		return m, tea.Batch(cmds...)
+	}
+	return m, nil
+}
+
+// handleTypingKey runs the filter and NEW modes: printable runes narrow the
+// list, backspace trims, esc walks back to the board.
+func (m radarModel) handleTypingKey(key string) (radarModel, tea.Cmd) {
+	switch key {
+	case "esc":
+		m.enter(modeBoard)
+	case "ctrl+u":
+		m.setFilter("")
+	case "backspace":
+		if r := []rune(m.filter); len(r) > 0 {
+			m.setFilter(string(r[:len(r)-1]))
+		}
 	default:
 		// Any lone printable rune is filter input. Named keys (tab, f-keys)
 		// arrive as multi-rune strings and fall through untouched.
@@ -387,6 +438,14 @@ func (m radarModel) handleKey(key string) (radarModel, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// enter switches modes with a clean slate: the query resets and the cursor
+// snaps to the top so each mode opens on its best/first row.
+func (m *radarModel) enter(mode radarMode) {
+	m.mode = mode
+	m.filter = ""
+	m.cursor = 0
 }
 
 // setFilter changes the query and snaps the cursor to the top row, which under
@@ -531,36 +590,60 @@ func (m radarModel) rigRows() []rigStatus {
 // ranked best-match-first, so the top row (where the cursor snaps) is always
 // the strongest hit, the way fzf reorders under the query.
 func (m radarModel) rows() []rigStatus {
-	if m.filter == "" {
+	switch m.mode {
+	case modeNew:
+		// The NEW picker is always filter-entry, so an empty query shows the
+		// frecency order zoxide handed us, capped; a query re-ranks and re-caps.
+		return capRows(m.rankRows(m.newRows()), radarNewCap)
+	case modeBoardFilter:
+		return m.rankRows(m.rigRows(), m.sessions)
+	default: // modeBoard
 		out := make([]rigStatus, 0, len(m.inflight)+len(m.parked)+len(m.sessions))
 		out = append(out, m.inflight...)
 		out = append(out, m.parked...)
 		out = append(out, m.sessions...)
 		return out
 	}
-	return m.rankedRows()
 }
 
-// rankedRows scores every row against the query, drops the misses, and sorts
-// what's left by score descending. Ties keep section order (in-flight, then
-// parked, then sessions, each already MRU/urgency-sorted), so equally-good
-// matches still fall out in a sensible order.
-func (m radarModel) rankedRows() []rigStatus {
+// radarNewCap bounds how many create-rows the NEW picker shows at once. zoxide
+// history runs long; the radar has no scrolling viewport, so we window to the
+// top matches rather than overflow the popup.
+const radarNewCap = 20
+
+// capRows trims rows to at most n, leaving shorter lists untouched.
+func capRows(rows []rigStatus, n int) []rigStatus {
+	if len(rows) > n {
+		return rows[:n]
+	}
+	return rows
+}
+
+// rankRows scores the given sections against the query, drops the misses, and
+// sorts survivors by score descending. With no query it returns the sections
+// concatenated in order, untouched. Ties keep that order (each section is
+// already MRU/urgency/frecency-sorted), so equally-good matches still fall out
+// sensibly.
+func (m radarModel) rankRows(sections ...[]rigStatus) []rigStatus {
+	if m.filter == "" {
+		var out []rigStatus
+		for _, sec := range sections {
+			out = append(out, sec...)
+		}
+		return out
+	}
 	type scored struct {
 		s     rigStatus
 		score float64
 	}
 	var xs []scored
-	add := func(section []rigStatus) {
-		for _, s := range section {
+	for _, sec := range sections {
+		for _, s := range sec {
 			if score, ok := fuzzyScore(m.filter, radarHaystack(s)); ok {
 				xs = append(xs, scored{s, score})
 			}
 		}
 	}
-	add(m.inflight)
-	add(m.parked)
-	add(m.sessions)
 	sort.SliceStable(xs, func(i, j int) bool { return xs[i].score > xs[j].score })
 
 	out := make([]rigStatus, len(xs))
@@ -570,8 +653,46 @@ func (m radarModel) rankedRows() []rigStatus {
 	return out
 }
 
+// newRows builds the NEW picker's create-rows from the zoxide frecency list:
+// one row per dir that doesn't already have a session (rig, bare session, or
+// the current one), since a dir you're already in belongs on the board, not
+// here. Enter on one stands up a session at that dir.
+func (m radarModel) newRows() []rigStatus {
+	open := m.openSessions()
+	var out []rigStatus
+	for _, dir := range m.newDirs {
+		if open[tmuxSessionName(dir)] {
+			continue
+		}
+		out = append(out, rigStatus{
+			create: true,
+			Path:   dir,
+			Title:  tildePath(dir, m.home),
+		})
+	}
+	return out
+}
+
+// openSessions is the set of tmux session names already represented on the
+// board — every rig's computed name, every bare session, and the current one —
+// so the NEW picker can skip dirs you can already reach.
+func (m radarModel) openSessions() map[string]bool {
+	open := make(map[string]bool)
+	for _, s := range m.rigRows() {
+		open[tmuxSessionName(s.Path)] = true
+	}
+	for _, s := range m.sessions {
+		open[s.session] = true
+	}
+	if m.current != "" {
+		open[m.current] = true
+	}
+	return open
+}
+
 // radarHaystack is the text a row is fuzzy-matched against: a rig by its id and
-// title, a bare session by its path-title and session name.
+// title, a bare session or create-row by its path-title (plus the session name
+// for a bare row, since that's what you'd half-remember typing).
 func radarHaystack(s rigStatus) string {
 	if s.bare {
 		return s.Title + " " + s.session
@@ -794,6 +915,10 @@ func radarGlyph(s rigStatus, fetched bool) (string, lipgloss.Style) {
 		// as "just a place to land" without competing with the rigs' dots.
 		return "○", radarFaintStyle
 	}
+	if s.create {
+		// A NEW-picker row is a session that doesn't exist yet; the plus says so.
+		return "+", radarGoodStyle
+	}
 	if s.Parked {
 		if !fetched {
 			return "…", radarFaintStyle
@@ -860,7 +985,7 @@ type tailSeg struct {
 // PR as number + CI glyph, repo-prefixed when the rig spans repos. Loading
 // reads as a bare "…"; an in-flight rig with no PR trails nothing at all.
 func radarTailSegs(s rigStatus, fetched bool) []tailSeg {
-	if s.bare {
+	if s.bare || s.create {
 		return nil
 	}
 	if !fetched {
@@ -888,19 +1013,37 @@ func radarTailSegs(s rigStatus, fetched bool) []tailSeg {
 }
 
 func (m radarModel) View() string {
-	// The prompt rides at the top so the query is always where fzf trained the
-	// eye, and stays put while the list below narrows.
+	// In the typing modes a prompt rides at the top so the query is always where
+	// fzf trained the eye, and stays put while the list below narrows. The board
+	// proper is command-mode, so it shows no prompt.
+	typing := m.mode == modeBoardFilter || m.mode == modeNew
 	prompt := ""
-	if m.filter != "" {
+	if typing {
 		prompt = radarFaintStyle.Render("/ ") + m.filter + radarFaintStyle.Render("▌") + "\n\n"
 	}
-	footer := radarFaintStyle.Render("↑/↓ move · enter go · type to filter · esc back · ^r refresh · ^c quit")
+
+	var footer string
+	switch m.mode {
+	case modeBoardFilter:
+		footer = radarFaintStyle.Render("type to filter · enter go · esc back")
+	case modeNew:
+		footer = radarFaintStyle.Render("type to find · enter start session · esc back")
+	default:
+		footer = radarFaintStyle.Render("j/k move · enter go · / filter · n new · R refresh · q quit")
+	}
 
 	rows := m.rows()
 	if len(rows) == 0 {
 		msg := "  nothing to pick"
-		if m.filter != "" {
+		switch m.mode {
+		case modeBoardFilter:
 			msg = radarFaintStyle.Render("  no matches")
+		case modeNew:
+			if len(m.newDirs) == 0 {
+				msg = radarFaintStyle.Render("  no zoxide history")
+			} else {
+				msg = radarFaintStyle.Render("  no matches")
+			}
 		}
 		return "\n" + prompt + msg + "\n\n" + footer + "\n"
 	}
@@ -962,13 +1105,21 @@ func (m radarModel) View() string {
 		b.WriteString("\n")
 	}
 
-	if m.filter != "" {
+	switch m.mode {
+	case modeNew:
+		// The NEW picker is one list under a single header; every row is a
+		// would-be session, so there's nothing to section by.
+		b.WriteString(radarHeaderStyle.Render("NEW SESSION") + "\n")
+		for i := range rows {
+			line(i, rows[i])
+		}
+	case modeBoardFilter:
 		// Under a filter the board is one ranked list — no section headers, the
 		// order is pure score, and the cursor rides the top (best) match.
 		for i := range rows {
 			line(i, rows[i])
 		}
-	} else {
+	default:
 		// The board proper: three sections, cursor index tracked section by
 		// section so it stays in lockstep with m.rows().
 		base := 0

@@ -144,10 +144,13 @@ type rigStatus struct {
 	PRs         []rigPR    `json:"prs,omitempty"`         // populated only under --full
 
 	// radar-only, never serialized: a row that's a bare tmux session (not a
-	// rig) carries bare=true and the raw session name to attach to. Everything
-	// PR- and agent-shaped is skipped for these; they exist so the radar can be
-	// a universal session picker, not just a board over rigs.
+	// rig) carries bare=true and the raw session name to attach to. A row in the
+	// NEW picker that stands up a fresh session at a zoxide dir carries
+	// create=true (Path is the dir). Everything PR- and agent-shaped is skipped
+	// for both; they exist so the radar can be a universal picker, not just a
+	// board over rigs.
 	bare    bool
+	create  bool
 	session string
 }
 

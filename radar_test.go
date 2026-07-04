@@ -259,6 +259,7 @@ func TestMatchScoreRanking(t *testing.T) {
 // hit sorts above the scattered one regardless of section order.
 func TestRankedRowsOrder(t *testing.T) {
 	m := radarModel{
+		mode: modeBoardFilter,
 		sessions: []rigStatus{
 			bareSession(tmuxSession{Name: "raging", Path: "/raging"}, ""),
 			bareSession(tmuxSession{Name: "rig", Path: "/rig"}, ""),
@@ -320,6 +321,7 @@ func TestRadarFilterRows(t *testing.T) {
 		t.Fatalf("rigRows = %d, want 2", got)
 	}
 
+	m.mode = modeBoardFilter
 	m.filter = "radar"
 	rows := m.rows()
 	if len(rows) != 1 || rows[0].Slug != "a" {
@@ -328,6 +330,108 @@ func TestRadarFilterRows(t *testing.T) {
 	// rigRows ignores the filter — enrichment shouldn't depend on what's shown.
 	if got := len(m.rigRows()); got != 2 {
 		t.Errorf("rigRows under filter = %d, want 2", got)
+	}
+}
+
+// The NEW picker lists zoxide dirs as create-rows, skipping any dir that
+// already has a session (rig, bare session, or the current one), and stands up
+// a session at the dir on Enter.
+func TestRadarNewRows(t *testing.T) {
+	m := radarModel{
+		home:     "/home/me",
+		current:  tmuxSessionName("/home/me/here"),
+		inflight: []rigStatus{{Slug: "rig", Path: "/home/me/work/rig"}},
+		sessions: []rigStatus{bareSession(tmuxSession{Name: tmuxSessionName("/home/me/open"), Path: "/home/me/open"}, "/home/me")},
+		newDirs: []string{
+			"/home/me/work/rig", // has a rig session — skip
+			"/home/me/open",     // has a bare session — skip
+			"/home/me/here",     // the current session — skip
+			"/home/me/fresh",    // no session — keep
+			"/home/me/notes",    // no session — keep
+		},
+	}
+	rows := m.newRows()
+	if len(rows) != 2 {
+		t.Fatalf("newRows = %d (%+v), want 2", len(rows), rows)
+	}
+	for _, r := range rows {
+		if !r.create {
+			t.Errorf("row %q not marked create", r.Title)
+		}
+	}
+	if rows[0].Title != "~/fresh" || rows[1].Title != "~/notes" {
+		t.Errorf("titles = %q, %q; want ~/fresh, ~/notes", rows[0].Title, rows[1].Title)
+	}
+	// A create-row reads as a fresh session: plus glyph, no PR tail.
+	if g, _ := radarGlyph(rows[0], false); g != "+" {
+		t.Errorf("create glyph = %q, want +", g)
+	}
+	if segs := radarTailSegs(rows[0], false); segs != nil {
+		t.Errorf("create tail = %v, want nil", segs)
+	}
+}
+
+// The NEW picker caps its list so a long zoxide history can't overflow the
+// popup, and ranks by fuzzy score once a query is typed.
+func TestRadarNewPickerCapAndRank(t *testing.T) {
+	m := radarModel{mode: modeNew}
+	for i := range radarNewCap + 10 {
+		m.newDirs = append(m.newDirs, "/home/me/dir"+string(rune('a'+i%26))+string(rune('0'+i/26)))
+	}
+	if got := len(m.rows()); got != radarNewCap {
+		t.Errorf("uncapped rows = %d, want %d", got, radarNewCap)
+	}
+}
+
+// Switching modes wipes the query and snaps the cursor to the top, so each mode
+// opens clean on its first row.
+func TestRadarEnterMode(t *testing.T) {
+	m := radarModel{mode: modeBoardFilter, filter: "stale", cursor: 4}
+	m.enter(modeNew)
+	if m.mode != modeNew || m.filter != "" || m.cursor != 0 {
+		t.Errorf("enter(modeNew) = {mode:%d filter:%q cursor:%d}, want {new empty 0}", m.mode, m.filter, m.cursor)
+	}
+}
+
+// Drive the mode state machine through keystrokes: the board is command-mode
+// (letters are verbs), `/` opens filter entry where letters are text, esc walks
+// back, and `n` opens the NEW picker. Guards the wiring the UI depends on.
+func TestRadarKeyFlow(t *testing.T) {
+	m := radarModel{
+		inflight: []rigStatus{{Slug: "a", ID: "PROJ-1", Title: "add radar"}},
+	}
+
+	// A bare letter on the board is a command, not filter input.
+	m, _ = m.handleKey("x")
+	if m.mode != modeBoard || m.filter != "" {
+		t.Fatalf("letter on board leaked into filter: mode=%d filter=%q", m.mode, m.filter)
+	}
+
+	// Slash opens filter entry; now letters are text.
+	m, _ = m.handleKey("/")
+	if m.mode != modeBoardFilter {
+		t.Fatalf("/ did not open filter: mode=%d", m.mode)
+	}
+	m, _ = m.handleKey("r")
+	m, _ = m.handleKey("a")
+	if m.filter != "ra" {
+		t.Fatalf("filter = %q, want ra", m.filter)
+	}
+
+	// esc walks back to the board and clears the query.
+	m, _ = m.handleKey("esc")
+	if m.mode != modeBoard || m.filter != "" {
+		t.Fatalf("esc did not return to a clean board: mode=%d filter=%q", m.mode, m.filter)
+	}
+
+	// n opens the NEW picker.
+	m, _ = m.handleKey("n")
+	if m.mode != modeNew {
+		t.Fatalf("n did not open NEW picker: mode=%d", m.mode)
+	}
+	m, _ = m.handleKey("esc")
+	if m.mode != modeBoard {
+		t.Fatalf("esc did not leave NEW picker: mode=%d", m.mode)
 	}
 }
 
