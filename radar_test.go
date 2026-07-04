@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 // dispRank drives both waiting's table order and the radar's parked section;
@@ -582,6 +584,82 @@ func TestDisplayItemsChildren(t *testing.T) {
 		if r.child {
 			t.Error("filter mode should not surface child rows")
 		}
+	}
+}
+
+// A board's screen lines number the selectable rows, mark headers/blanks as
+// unlandable, and drop a blank between sections — the same layout the mouse
+// handler hit-tests, so a click maps to the row drawn under it.
+func mouseBoard() radarModel {
+	return radarModel{
+		height: 40, width: 100,
+		prs:       map[string][]rigPR{},
+		fetchedAt: map[string]time.Time{},
+		inflight: []rigStatus{
+			{Slug: "a", ID: "A", Title: "aa", agents: []agentChild{{Window: "w", Target: "a:0", Context: "doing"}}},
+			{Slug: "b", ID: "B", Title: "bb"},
+		},
+		sessions: []rigStatus{{bare: true, session: "s", Title: "~/s"}},
+	}
+}
+
+func TestBoardLinesAndHitTest(t *testing.T) {
+	m := mouseBoard()
+	// header, A(0), child(1), B(2), blank, header, S(3)
+	want := []int{-1, 0, 1, 2, -1, -1, 3}
+	lines := m.boardLines()
+	if len(lines) != len(want) {
+		t.Fatalf("lines = %d, want %d", len(lines), len(want))
+	}
+	for i, w := range want {
+		if lines[i].cursor != w {
+			t.Errorf("line %d cursor = %d, want %d", i, lines[i].cursor, w)
+		}
+	}
+	// rowAtY maps each screen row (no prompt, no windowing at height 40).
+	for y, wantCur := range map[int]int{1: 0, 2: 1, 3: 2, 6: 3} {
+		if got, ok := m.rowAtY(y); !ok || got != wantCur {
+			t.Errorf("rowAtY(%d) = (%d,%v), want (%d,true)", y, got, ok, wantCur)
+		}
+	}
+	// Headers and blanks aren't landable.
+	for _, y := range []int{0, 4, 5} {
+		if _, ok := m.rowAtY(y); ok {
+			t.Errorf("rowAtY(%d) hit a header/blank", y)
+		}
+	}
+}
+
+// The wheel walks the cursor; a click selects the row under it, and clicking the
+// already-selected row activates it.
+func TestRadarMouse(t *testing.T) {
+	m := mouseBoard()
+
+	nm, _ := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown})
+	m = nm.(radarModel)
+	if m.cursor != 1 {
+		t.Fatalf("wheel down: cursor = %d, want 1", m.cursor)
+	}
+
+	// Click the session row (screen line 6 → cursor 3): selects, doesn't act.
+	nm, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Y: 6})
+	m = nm.(radarModel)
+	if m.cursor != 3 || m.chosen != nil {
+		t.Fatalf("first click: cursor=%d chosen=%v, want select to 3, no activate", m.cursor, m.chosen)
+	}
+
+	// Click the same row again: activates it.
+	nm, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Y: 6})
+	m = nm.(radarModel)
+	if m.chosen == nil || m.chosen.session != "s" {
+		t.Fatalf("second click: chosen = %v, want the session", m.chosen)
+	}
+
+	// A release event is ignored (only the press acts).
+	m2 := mouseBoard()
+	nm, _ = m2.Update(tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft, Y: 6})
+	if nm.(radarModel).cursor != 0 {
+		t.Error("release event moved the cursor")
 	}
 }
 

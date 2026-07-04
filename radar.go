@@ -67,7 +67,7 @@ func runRadar(args []string) error {
 	}
 	m.apply(scan)
 
-	final, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
+	final, err := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
 	if err != nil {
 		return err
 	}
@@ -309,6 +309,36 @@ func (m radarModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		return m, nil
+
+	case tea.MouseMsg:
+		// Basic mouse: the wheel walks the cursor, a left click selects the row
+		// under the pointer, and clicking the already-selected row activates it —
+		// so a double-click reads as select-then-go. Release and motion events
+		// are ignored so only the press acts.
+		if msg.Action != tea.MouseActionPress {
+			return m, nil
+		}
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			if m.cursor > 0 {
+				m.cursor--
+			}
+		case tea.MouseButtonWheelDown:
+			if m.cursor < len(m.rows())-1 {
+				m.cursor++
+			}
+		case tea.MouseButtonLeft:
+			if cur, ok := m.rowAtY(msg.Y); ok {
+				if cur == m.cursor {
+					rows := m.rows()
+					s := rows[cur]
+					m.chosen = &s
+					return m, tea.Quit
+				}
+				m.cursor = cur
+			}
+		}
 		return m, nil
 
 	case tea.KeyMsg:
@@ -663,6 +693,36 @@ func (m radarModel) displayItems() []radarLine {
 		section("OTHER SESSIONS", m.sessions)
 	}
 	return items
+}
+
+// screenLine is one rendered row of the board: a blank separator, a section
+// header, or a display item, tagged with the selectable cursor index it maps to
+// (-1 when it can't be landed on). View renders from this and the mouse handler
+// hit-tests against it, so the two share one notion of what sits on each line.
+type screenLine struct {
+	item   radarLine
+	blank  bool
+	cursor int
+}
+
+// boardLines expands the display items into the exact sequence of screen lines,
+// blank section-separators included, numbering the selectable ones. len(result)
+// is precisely how many lines View emits.
+func (m radarModel) boardLines() []screenLine {
+	var lines []screenLine
+	sel := 0
+	for _, it := range m.displayItems() {
+		if it.header != "" {
+			if len(lines) > 0 {
+				lines = append(lines, screenLine{blank: true, cursor: -1})
+			}
+			lines = append(lines, screenLine{item: it, cursor: -1})
+			continue
+		}
+		lines = append(lines, screenLine{item: it, cursor: sel})
+		sel++
+	}
+	return lines
 }
 
 // rows is the selectable list the cursor walks: every display item that isn't a
@@ -1220,44 +1280,36 @@ func (m radarModel) View() string {
 		return radarFaintStyle.Render(plain)
 	}
 
-	// Build every display line — headers, parent rows, dangled children — into one
-	// slice, remembering which line the cursor sits on. Windowing then trims the
-	// slice to the popup rather than letting the terminal scroll the top away.
-	var body []string
+	// Render every screen line — headers, blanks, parent rows, dangled children —
+	// into one slice, remembering which line the cursor sits on. Windowing then
+	// trims the slice to the popup rather than letting the terminal scroll the top
+	// away. boardLines is the same layout the mouse handler hit-tests, so a click
+	// lands on exactly the row drawn under it.
+	lines := m.boardLines()
+	body := make([]string, 0, len(lines))
 	cursorLine := 0
-	sel := 0
-	for _, it := range items {
-		if it.header != "" {
-			if len(body) > 0 {
-				body = append(body, "") // blank line between sections
+	for _, ln := range lines {
+		switch {
+		case ln.blank:
+			body = append(body, "")
+		case ln.item.header != "":
+			body = append(body, radarHeaderStyle.Render(ln.item.header))
+		default:
+			selected := ln.cursor == m.cursor
+			if selected {
+				cursorLine = len(body)
 			}
-			body = append(body, radarHeaderStyle.Render(it.header))
-			continue
+			if ln.item.child {
+				body = append(body, renderChild(selected, ln.item.row, ln.item.last))
+			} else {
+				body = append(body, renderRow(selected, ln.item.row))
+			}
 		}
-		selected := sel == m.cursor
-		if selected {
-			cursorLine = len(body)
-		}
-		if it.child {
-			body = append(body, renderChild(selected, it.row, it.last))
-		} else {
-			body = append(body, renderRow(selected, it.row))
-		}
-		sel++
 	}
 
-	// Reserve the fixed furniture (prompt, blank + footer, optional error) and
-	// window the body to what's left, scrolled to keep the cursor in view. An
-	// arrow in the footer says when rows sit above or below the fold.
-	chrome := 3 // blank line + footer, plus a row of slack off the bottom cell
-	if typing {
-		chrome += 2 // prompt line + blank
-	}
-	if m.scanErr != nil {
-		chrome++
-	}
-	if m.height > 0 {
-		budget := max(1, m.height-chrome)
+	// Window the body to the popup, scrolled to keep the cursor in view. An arrow
+	// in the footer says when rows sit above or below the fold.
+	if _, budget := m.viewportChrome(); budget >= 0 {
 		start, end := windowBody(len(body), cursorLine, budget)
 		if start > 0 || end < len(body) {
 			hint := ""
@@ -1277,6 +1329,60 @@ func (m radarModel) View() string {
 		out += "\n" + radarErrStyle.Render("scan: "+m.scanErr.Error())
 	}
 	return out
+}
+
+// viewportChrome reports the furniture the View spends around the body:
+// promptRows is how many lines precede it (the prompt and its blank in the
+// typing modes), and budget is how many body lines fit the popup, or -1 when the
+// height isn't known yet (no windowing). The mouse handler subtracts the same so
+// a click lines up with the row drawn under it.
+func (m radarModel) viewportChrome() (promptRows, budget int) {
+	typing := m.mode == modeBoardFilter || m.mode == modeNew
+	if typing {
+		promptRows = 2 // prompt line + blank
+	}
+	if m.height <= 0 {
+		return promptRows, -1
+	}
+	chrome := 3 // blank line + footer, plus a row of slack off the bottom cell
+	if typing {
+		chrome += promptRows
+	}
+	if m.scanErr != nil {
+		chrome++
+	}
+	return promptRows, max(1, m.height-chrome)
+}
+
+// rowAtY maps a mouse Y (a popup screen row) to the selectable cursor index
+// drawn there, reproducing the View's prompt offset and windowing. The bool is
+// false when the click landed on a header, a blank, or empty space.
+func (m radarModel) rowAtY(y int) (int, bool) {
+	lines := m.boardLines()
+	if len(lines) == 0 {
+		return 0, false
+	}
+	cursorLine := 0
+	for i, ln := range lines {
+		if ln.cursor == m.cursor {
+			cursorLine = i
+			break
+		}
+	}
+	promptRows, budget := m.viewportChrome()
+	start, end := 0, len(lines)
+	if budget >= 0 {
+		start, end = windowBody(len(lines), cursorLine, budget)
+	}
+	vy := y - promptRows
+	if vy < 0 || vy >= end-start {
+		return 0, false
+	}
+	idx := start + vy
+	if lines[idx].cursor < 0 {
+		return 0, false
+	}
+	return lines[idx].cursor, true
 }
 
 // windowBody returns the [start, end) slice of a body of n display lines that
