@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/term"
 )
@@ -106,6 +107,7 @@ type agentChild struct {
 	Window  string
 	Target  string
 	Context string
+	Working bool // window produced output within agentActiveWindow
 }
 
 // tmuxAgentChildren maps each session to its claude panes, in pane order. One
@@ -118,29 +120,33 @@ type agentChild struct {
 // running.
 func tmuxAgentChildren() map[string][]agentChild {
 	out, err := exec.Command("tmux", "list-panes", "-a", "-F",
-		"#{session_name}\t#{window_index}\t#{pane_index}\t#{window_name}\t#{pane_current_command}\t#{pane_title}").Output()
+		"#{session_name}\t#{window_index}\t#{pane_index}\t#{window_name}\t#{pane_current_command}\t#{window_activity}\t#{pane_title}").Output()
 	if err != nil {
 		return nil
 	}
-	return parseAgentPanes(string(out))
+	return parseAgentPanes(string(out), time.Now().Unix())
 }
 
 // parseAgentPanes is tmuxAgentChildren's pure core: it turns list-panes output
-// (tab-separated session, window index, pane index, window name, command, title
-// per line) into the per-session child list, applying the agent filter and the
-// same-window-same-context dedup.
-func parseAgentPanes(out string) map[string][]agentChild {
+// (tab-separated session, window index, pane index, window name, command, window
+// activity, title per line) into the per-session child list, applying the agent
+// filter and the same-window-same-context dedup. window_activity is when the
+// window last produced output — a stable working signal that idles off after a
+// few quiet minutes, unlike the animating title glyph, which is why the glyph
+// carries only the task text and never the state. now is the current unix time.
+func parseAgentPanes(out string, now int64) map[string][]agentChild {
+	activeWithin := int64(agentActiveWindow / time.Second)
 	children := map[string][]agentChild{}
 	seen := map[string]bool{} // session\twindow\tcontext — collapse exact dups
 	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
 		if line == "" {
 			continue
 		}
-		f := strings.SplitN(line, "\t", 6)
-		if len(f) != 6 {
+		f := strings.SplitN(line, "\t", 7)
+		if len(f) != 7 {
 			continue
 		}
-		session, windex, pindex, wname, cmd, title := f[0], f[1], f[2], f[3], f[4], f[5]
+		session, windex, pindex, wname, cmd, activity, title := f[0], f[1], f[2], f[3], f[4], f[5], f[6]
 		if cmd != "claude" && stripAgentGlyph(title) == title {
 			continue // not an agent pane: no claude command, no state glyph
 		}
@@ -153,11 +159,13 @@ func parseAgentPanes(out string) map[string][]agentChild {
 			continue
 		}
 		seen[key] = true
+		act, _ := strconv.ParseInt(activity, 10, 64)
 		children[session] = append(children[session], agentChild{
 			Session: session,
 			Window:  wname,
 			Target:  session + ":" + windex + "." + pindex,
 			Context: ctx,
+			Working: act > 0 && now-act < activeWithin,
 		})
 	}
 	return children

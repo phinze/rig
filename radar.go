@@ -669,8 +669,12 @@ func (m radarModel) displayItems() []radarLine {
 			if showLabel {
 				key = c.Window
 			}
+			agent := ""
+			if c.Working {
+				agent = "working"
+			}
 			items = append(items, radarLine{
-				row:   rigStatus{child: true, session: c.Target, Title: c.Context, childKey: key},
+				row:   rigStatus{child: true, session: c.Target, Title: c.Context, childKey: key, Agent: agent},
 				child: true,
 				last:  i == len(p.agents)-1,
 			})
@@ -1257,21 +1261,31 @@ func (m radarModel) View() string {
 			wTitle, title, strings.Join(styledTail, "  "))
 	}
 
-	// renderChild draws a dangled agent line: an indented tree branch, the window
-	// label when a parent has more than one, and the agent's current task (a faint
-	// dash when it hasn't named one). The line is faint — it's ambient context —
-	// and goes reverse-video when it's the selection.
+	// renderChild draws a dangled agent line: an indented tree branch, a working
+	// dot for an agent that's produced output lately, the window label when a
+	// parent has more than one, and the current task (a faint dash when it hasn't
+	// named one). Idle children stay faint — ambient context — while a working one
+	// gets a green dot and full-strength text so the eye lands on what's live. The
+	// selected row goes reverse-video.
 	renderChild := func(selected bool, s rigStatus, last bool) string {
 		branch := "├"
 		if last {
 			branch = "└"
 		}
+		working := s.Agent == "working"
+		// A working agent flags with ●; idle leaves the slot blank so the board
+		// stays calm and only live work draws the eye. Both are two cells wide so
+		// the labels line up either way.
+		dot := "  "
+		if working {
+			dot = "● "
+		}
 		// Put the branch glyph directly under the title's first char (fixed is
 		// where titles start), so the child text steps in one notch and reads as
 		// nested. A session's empty id column would otherwise strand it far left.
-		head := strings.Repeat(" ", fixed) + branch + " "
+		prefix := strings.Repeat(" ", fixed) + branch + " " + dot
 		if s.childKey != "" {
-			head += s.childKey + "  "
+			prefix += s.childKey + "  "
 		}
 		label := s.Title
 		if label == "" {
@@ -1279,13 +1293,29 @@ func (m radarModel) View() string {
 		}
 		avail := int(^uint(0) >> 1)
 		if m.width > 0 {
-			avail = max(4, m.width-lipgloss.Width(head)-2)
+			avail = max(4, m.width-lipgloss.Width(prefix)-2)
 		}
-		plain := head + radarTruncate(label, avail)
+		label = radarTruncate(label, avail)
 		if selected {
-			return radarCursorStyle.Render(plain)
+			return radarCursorStyle.Render(prefix + label)
 		}
-		return radarFaintStyle.Render(plain)
+		// The branch and any label stay faint; the dot is green and, when working,
+		// the task text renders at full strength to stand out from idle siblings.
+		out := strings.Repeat(" ", fixed) + radarFaintStyle.Render(branch+" ")
+		if working {
+			out += radarGoodStyle.Render("● ")
+		} else {
+			out += "  "
+		}
+		if s.childKey != "" {
+			out += radarFaintStyle.Render(s.childKey + "  ")
+		}
+		if working {
+			out += label
+		} else {
+			out += radarFaintStyle.Render(label)
+		}
+		return out
 	}
 
 	// Render every screen line — headers, blanks, parent rows, dangled children —
