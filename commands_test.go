@@ -6,6 +6,34 @@ import (
 	"time"
 )
 
+// enrichWithPRs must populate, not augment: the radar merges a rig's cached PRs
+// back into its status before asking for a refresh, so a second call has to land
+// on the same one PR rather than doubling it. This guards the cache-growth bug.
+func TestEnrichWithPRsIdempotent(t *testing.T) {
+	fakeGh(t)
+	dir := t.TempDir()
+	m := manifest{
+		ID:       "r1",
+		Repos:    map[string]string{"repo": "o/r"},
+		Branches: map[string][]string{"repo": {"feat"}},
+	}
+	if err := writeManifest(dir, m); err != nil {
+		t.Fatal(err)
+	}
+	statuses := []rigStatus{{Slug: "r1", Path: dir}}
+
+	enrichWithPRs(statuses)
+	if len(statuses[0].PRs) != 1 {
+		t.Fatalf("first pass: got %d PRs, want 1", len(statuses[0].PRs))
+	}
+	// Second pass with PRs already populated (the radar refetch path) must not
+	// grow the slice.
+	enrichWithPRs(statuses)
+	if len(statuses[0].PRs) != 1 {
+		t.Fatalf("second pass: got %d PRs, want 1 (append-doubling regression)", len(statuses[0].PRs))
+	}
+}
+
 func TestAgentState(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	recent := now.Add(-time.Minute)

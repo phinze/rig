@@ -258,6 +258,15 @@ func shortRepo(nameWithOwner string) string {
 // (one per repo it touches). gh failures and branchless repos degrade to a
 // blank column rather than failing the whole listing.
 func enrichWithPRs(statuses []rigStatus) {
+	// Populate from scratch, never augment. The radar merges each rig's cached
+	// PRs back into its status before asking for a refresh, so appending onto
+	// whatever's already there would re-add the whole set every refetch — the
+	// cache grew to dozens of copies of the same PR. Clearing up front keeps the
+	// call idempotent for any caller.
+	for i := range statuses {
+		statuses[i].PRs = nil
+	}
+
 	type task struct {
 		rig    int
 		repo   string // owner/repo
