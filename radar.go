@@ -27,12 +27,13 @@ import (
 // wakes. The popup inherits $TMUX, so switch-client from inside it moves the
 // underlying client, and the -E popup tears down as we exit.
 //
-// It doubles as the universal picker that replaces tmux-session-wizard. Below
-// the rigs sits an OTHER SESSIONS section listing every non-rig tmux session in
-// MRU order. The board is modal like k9s: bare letters are verbs (n opens a NEW
-// picker that stands up a session at a zoxide dir, R refreshes, q quits), and
-// `/` drops into a fuzzy filter that ranks the whole board best-match-first. The
-// NEW picker is where `rig up` and `rig review` will grow their own sources.
+// It doubles as the universal picker that replaces tmux-session-wizard: rigs and
+// every non-rig tmux session share one flat list, most-recently-touched first,
+// each dangling its live claude windows as a HUD of what's in flight. The board
+// is modal like k9s: bare letters are verbs (n opens a NEW picker that stands up
+// a session at a zoxide dir, R refreshes, q quits), and `/` drops into a fuzzy
+// filter that ranks the whole board best-match-first. The NEW picker is where
+// `rig up` and `rig review` will grow their own sources.
 func runRadar(args []string) error {
 	if len(args) != 0 {
 		return fmt.Errorf("usage: rig radar")
@@ -604,17 +605,14 @@ func (m *radarModel) selectedKey() string {
 	return ""
 }
 
-// resort re-sorts every section and keeps the cursor on the row it's on, so a
-// rig climbing the board doesn't yank the selection off it.
+// resort keeps the cursor on the row it's on after the board reorders, so a rig
+// climbing the MRU list doesn't yank the selection off it. The ordering itself
+// lives in rows()/boardRows(); this only re-pins the cursor.
 func (m *radarModel) resort() {
 	m.resortKeeping(m.selectedKey())
 }
 
 func (m *radarModel) resortKeeping(selected string) {
-	radarSortInflight(m.inflight, m.attached)
-	radarSortParked(m.parked, m.prs)
-	radarSortSessions(m.sessions)
-
 	rows := m.rows()
 	m.cursor = 0
 	for i, s := range rows {
@@ -648,10 +646,11 @@ type radarLine struct {
 }
 
 // displayItems is the single ordered list both the cursor and the renderer read,
-// so the two never drift. In board mode it's the three sections with each
-// parent's live claude windows dangled beneath it; under a filter it collapses
-// to one ranked list of parents (children are the resting HUD, not part of the
-// hunt); the NEW picker is its own header plus create-rows.
+// so the two never drift. In board mode it's one flat list — rigs and sessions
+// together, most-recently-touched first — with each parent's live claude windows
+// dangled beneath it; under a filter it collapses to one ranked list of parents
+// (children are the resting HUD, not part of the hunt); the NEW picker is its own
+// header plus create-rows.
 func (m radarModel) displayItems() []radarLine {
 	var items []radarLine
 	parent := func(p rigStatus) {
@@ -691,20 +690,46 @@ func (m radarModel) displayItems() []radarLine {
 			items = append(items, radarLine{row: s})
 		}
 	default: // modeBoard
-		section := func(header string, parents []rigStatus) {
-			if len(parents) == 0 {
-				return
-			}
-			items = append(items, radarLine{header: header})
-			for _, p := range parents {
-				parent(p)
-			}
+		for _, p := range m.boardRows() {
+			parent(p)
 		}
-		section("IN FLIGHT", m.inflight)
-		section("PARKED · AWAITING REVIEW", m.parked)
-		section("OTHER SESSIONS", m.sessions)
 	}
 	return items
+}
+
+// boardRows is the flat MRU board: every rig and session in one list, most-
+// recently-touched first. Sections turned out not to earn their keep — a rig and
+// a plain session read the same way, and what you want is "what did I last touch"
+// across all of them.
+func (m radarModel) boardRows() []rigStatus {
+	all := make([]rigStatus, 0, len(m.inflight)+len(m.parked)+len(m.sessions))
+	all = append(all, m.inflight...)
+	all = append(all, m.parked...)
+	all = append(all, m.sessions...)
+	sort.SliceStable(all, func(i, j int) bool {
+		return m.recency(all[i]) > m.recency(all[j])
+	})
+	return all
+}
+
+// recency is a row's most-recent-touch stamp: when its tmux session was last
+// attached, or — for a parked or sessionless rig with no live session — the
+// newest claude turn, falling back to when it was created. Never-touched rows
+// come back 0 and sink.
+func (m radarModel) recency(s rigStatus) int64 {
+	var r int64
+	if s.bare {
+		r = m.attached[s.session]
+	} else {
+		r = m.attached[tmuxSessionName(s.Path)]
+	}
+	if s.LastActive != nil && s.LastActive.Unix() > r {
+		r = s.LastActive.Unix()
+	}
+	if c := s.Created.Unix(); c > r {
+		r = c
+	}
+	return r
 }
 
 // screenLine is one rendered row of the board: a blank separator, a section
@@ -971,45 +996,6 @@ func matchScore(needle, hay string) (float64, bool) {
 		return 0, false
 	}
 	return final, true
-}
-
-// radarSortInflight orders live rigs the way switch does: most-recently-
-// attached first, sessionless rigs sinking, ties broken newest-created.
-func radarSortInflight(statuses []rigStatus, attached map[string]int64) {
-	sort.SliceStable(statuses, func(i, j int) bool {
-		ai := attached[tmuxSessionName(statuses[i].Path)]
-		aj := attached[tmuxSessionName(statuses[j].Path)]
-		if ai != aj {
-			return ai > aj
-		}
-		return statuses[i].Created.After(statuses[j].Created)
-	})
-}
-
-// radarSortParked orders parked rigs the way waiting does: most-actionable
-// disposition first, oldest-created within a bucket. Rigs whose PR fetch
-// hasn't landed sink to the bottom until it does.
-func radarSortParked(statuses []rigStatus, prs map[string][]rigPR) {
-	sort.SliceStable(statuses, func(i, j int) bool {
-		ri := dispRank(radarStateCell(statuses[i], prsFetched(prs, statuses[i].Slug)))
-		rj := dispRank(radarStateCell(statuses[j], prsFetched(prs, statuses[j].Slug)))
-		if ri != rj {
-			return ri < rj
-		}
-		return statuses[i].Created.Before(statuses[j].Created)
-	})
-}
-
-// radarSortSessions orders bare tmux sessions most-recently-attached first
-// (Created carries last-attached for these), the MRU the picker is meant to
-// front. Never-attached sessions sink; name breaks ties for a stable order.
-func radarSortSessions(sessions []rigStatus) {
-	sort.SliceStable(sessions, func(i, j int) bool {
-		if !sessions[i].Created.Equal(sessions[j].Created) {
-			return sessions[i].Created.After(sessions[j].Created)
-		}
-		return sessions[i].session < sessions[j].session
-	})
 }
 
 func prsFetched(prs map[string][]rigPR, slug string) bool {

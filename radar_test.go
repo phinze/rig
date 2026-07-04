@@ -22,51 +22,40 @@ func TestDispRank(t *testing.T) {
 	}
 }
 
-// The parked section ranks by disposition with created-oldest breaking ties,
-// and unfetched rigs sink until their PR fan-out lands.
-func TestRadarSortParked(t *testing.T) {
-	day := func(n int) time.Time { return time.Date(2026, 7, n, 0, 0, 0, 0, time.UTC) }
-	statuses := []rigStatus{
-		{Slug: "unfetched", Parked: true, Created: day(1)},
-		{Slug: "merged", Parked: true, Created: day(2), PRs: []rigPR{{prInfo: prInfo{State: "MERGED"}}}},
-		{Slug: "changes-new", Parked: true, Created: day(4), PRs: []rigPR{{prInfo: prInfo{State: "OPEN", Review: "CHANGES_REQUESTED"}}}},
-		{Slug: "changes-old", Parked: true, Created: day(3), PRs: []rigPR{{prInfo: prInfo{State: "OPEN", Review: "CHANGES_REQUESTED"}}}},
-		{Slug: "approved", Parked: true, Created: day(5), PRs: []rigPR{{prInfo: prInfo{State: "OPEN", Review: "APPROVED"}}}},
+// The board is one flat MRU list mixing rigs and sessions, ranked by recency:
+// tmux last-attached, or the newest claude turn / creation time for a rig with
+// no live session. Newest first; never-touched rows sink.
+func TestBoardRowsMRU(t *testing.T) {
+	at := func(u int64) *time.Time { tm := time.Unix(u, 0); return &tm }
+	m := radarModel{
+		attached: map[string]int64{
+			tmuxSessionName("/w/live"): 500, // live rig, attached recently
+			"sess-old":                 100, // bare session, old attach
+		},
+		inflight: []rigStatus{
+			{Slug: "live", Path: "/w/live", Created: time.Unix(1, 0)},                        // recency 500 (attach)
+			{Slug: "agent", Path: "/w/agent", Created: time.Unix(1, 0), LastActive: at(400)}, // recency 400 (claude turn, no attach)
+		},
+		parked: []rigStatus{
+			{Slug: "parked", Path: "/w/parked", Created: time.Unix(300, 0)}, // recency 300 (created)
+		},
+		sessions: []rigStatus{
+			{bare: true, session: "sess-old", Created: time.Unix(100, 0)}, // recency 100 (attach)
+		},
 	}
-	prs := map[string][]rigPR{}
-	for _, s := range statuses {
-		if s.Slug != "unfetched" {
-			prs[s.Slug] = s.PRs
+
+	var got []string
+	for _, s := range m.boardRows() {
+		if s.bare {
+			got = append(got, s.session)
+		} else {
+			got = append(got, s.Slug)
 		}
 	}
-
-	radarSortParked(statuses, prs)
-
-	want := []string{"changes-old", "changes-new", "approved", "merged", "unfetched"}
+	want := []string{"live", "agent", "parked", "sess-old"}
 	for i, w := range want {
-		if statuses[i].Slug != w {
-			t.Fatalf("order[%d] = %q, want %q", i, statuses[i].Slug, w)
-		}
-	}
-}
-
-// In-flight order mirrors switch: most-recently-attached first, sessionless
-// rigs sinking, ties broken newest-created.
-func TestRadarSortInflight(t *testing.T) {
-	day := func(n int) time.Time { return time.Date(2026, 7, n, 0, 0, 0, 0, time.UTC) }
-	statuses := []rigStatus{
-		{Slug: "stale", Path: "/w/stale", Created: day(1)},
-		{Slug: "fresh", Path: "/w/fresh", Created: day(2)},
-		{Slug: "recent", Path: "/w/recent", Created: day(1)},
-	}
-	attached := map[string]int64{tmuxSessionName("/w/recent"): 100}
-
-	radarSortInflight(statuses, attached)
-
-	want := []string{"recent", "fresh", "stale"}
-	for i, w := range want {
-		if statuses[i].Slug != w {
-			t.Fatalf("order[%d] = %q, want %q", i, statuses[i].Slug, w)
+		if got[i] != w {
+			t.Fatalf("MRU order = %v, want %v", got, want)
 		}
 	}
 }
@@ -186,33 +175,6 @@ func TestRadarTailSegs(t *testing.T) {
 			if got[i] != c.want[i] {
 				t.Errorf("%s: seg[%d] = %q, want %q", c.name, i, got[i], c.want[i])
 			}
-		}
-	}
-}
-
-// Bare tmux sessions sort most-recently-attached first (Created carries the
-// last-attached stamp), never-attached sessions sink, and name breaks ties.
-func TestRadarSortSessions(t *testing.T) {
-	sess := func(name string, attached int64) rigStatus {
-		s := rigStatus{bare: true, session: name}
-		if attached > 0 {
-			s.Created = time.Unix(attached, 0)
-		}
-		return s
-	}
-	sessions := []rigStatus{
-		sess("never", 0),
-		sess("old", 100),
-		sess("recent", 300),
-		sess("also-never", 0),
-	}
-
-	radarSortSessions(sessions)
-
-	want := []string{"recent", "old", "also-never", "never"}
-	for i, w := range want {
-		if sessions[i].session != w {
-			t.Fatalf("order[%d] = %q, want %q", i, sessions[i].session, w)
 		}
 	}
 }
@@ -544,15 +506,15 @@ func TestDisplayItemsChildren(t *testing.T) {
 	}
 
 	items := m.displayItems()
-	// header, parent, child, child, header, parent, child
-	if len(items) != 7 {
-		t.Fatalf("items = %d, want 7", len(items))
+	// Flat, no section headers: parent, child, child, parent, child.
+	if len(items) != 5 {
+		t.Fatalf("items = %d, want 5", len(items))
 	}
-	if items[0].header != "IN FLIGHT" || items[4].header != "OTHER SESSIONS" {
-		t.Fatalf("headers misplaced: %q ... %q", items[0].header, items[4].header)
+	if items[0].header != "" || items[3].header != "" {
+		t.Fatalf("unexpected header in flat board: %q ... %q", items[0].header, items[3].header)
 	}
 	// The rig's two children carry their window labels and the second closes.
-	c1, c2 := items[2], items[3]
+	c1, c2 := items[1], items[2]
 	if !c1.child || c1.row.childKey != "runtime" || c1.last {
 		t.Errorf("child 1 = %+v, want runtime non-last", c1)
 	}
@@ -560,7 +522,7 @@ func TestDisplayItemsChildren(t *testing.T) {
 		t.Errorf("child 2 = %+v, want rfd last", c2)
 	}
 	// The session's lone child drops the label (nothing to disambiguate).
-	c3 := items[6]
+	c3 := items[4]
 	if !c3.child || c3.row.childKey != "" || c3.row.Title != "Replace emoji" || !c3.last {
 		t.Errorf("session child = %+v, want unlabeled last 'Replace emoji'", c3)
 	}
@@ -587,9 +549,9 @@ func TestDisplayItemsChildren(t *testing.T) {
 	}
 }
 
-// A board's screen lines number the selectable rows, mark headers/blanks as
-// unlandable, and drop a blank between sections — the same layout the mouse
-// handler hit-tests, so a click maps to the row drawn under it.
+// A board's screen lines number the selectable rows — parents and dangled
+// children — the same layout the mouse handler hit-tests, so a click maps to the
+// row drawn under it. With sections gone the list is flat: no headers, no blanks.
 func mouseBoard() radarModel {
 	return radarModel{
 		height: 40, width: 100,
@@ -605,8 +567,8 @@ func mouseBoard() radarModel {
 
 func TestBoardLinesAndHitTest(t *testing.T) {
 	m := mouseBoard()
-	// header, A(0), child(1), B(2), blank, header, S(3)
-	want := []int{-1, 0, 1, 2, -1, -1, 3}
+	// Flat MRU list (all recency 0 → append order): A(0), child(1), B(2), S(3).
+	want := []int{0, 1, 2, 3}
 	lines := m.boardLines()
 	if len(lines) != len(want) {
 		t.Fatalf("lines = %d, want %d", len(lines), len(want))
@@ -616,17 +578,15 @@ func TestBoardLinesAndHitTest(t *testing.T) {
 			t.Errorf("line %d cursor = %d, want %d", i, lines[i].cursor, w)
 		}
 	}
-	// rowAtY maps each screen row (no prompt, no windowing at height 40).
-	for y, wantCur := range map[int]int{1: 0, 2: 1, 3: 2, 6: 3} {
+	// rowAtY maps each screen row directly (no prompt, no windowing at height 40).
+	for y, wantCur := range map[int]int{0: 0, 1: 1, 2: 2, 3: 3} {
 		if got, ok := m.rowAtY(y); !ok || got != wantCur {
 			t.Errorf("rowAtY(%d) = (%d,%v), want (%d,true)", y, got, ok, wantCur)
 		}
 	}
-	// Headers and blanks aren't landable.
-	for _, y := range []int{0, 4, 5} {
-		if _, ok := m.rowAtY(y); ok {
-			t.Errorf("rowAtY(%d) hit a header/blank", y)
-		}
+	// A click past the last row lands nowhere.
+	if _, ok := m.rowAtY(4); ok {
+		t.Error("rowAtY(4) hit a row past the end")
 	}
 }
 
@@ -641,15 +601,15 @@ func TestRadarMouse(t *testing.T) {
 		t.Fatalf("wheel down: cursor = %d, want 1", m.cursor)
 	}
 
-	// Click the session row (screen line 6 → cursor 3): selects, doesn't act.
-	nm, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Y: 6})
+	// Click the session row (screen line 3 → cursor 3): selects, doesn't act.
+	nm, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Y: 3})
 	m = nm.(radarModel)
 	if m.cursor != 3 || m.chosen != nil {
 		t.Fatalf("first click: cursor=%d chosen=%v, want select to 3, no activate", m.cursor, m.chosen)
 	}
 
 	// Click the same row again: activates it.
-	nm, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Y: 6})
+	nm, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Y: 3})
 	m = nm.(radarModel)
 	if m.chosen == nil || m.chosen.session != "s" {
 		t.Fatalf("second click: chosen = %v, want the session", m.chosen)
@@ -657,7 +617,7 @@ func TestRadarMouse(t *testing.T) {
 
 	// A release event is ignored (only the press acts).
 	m2 := mouseBoard()
-	nm, _ = m2.Update(tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft, Y: 6})
+	nm, _ = m2.Update(tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft, Y: 3})
 	if nm.(radarModel).cursor != 0 {
 		t.Error("release event moved the cursor")
 	}
