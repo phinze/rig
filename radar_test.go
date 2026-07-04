@@ -372,14 +372,29 @@ func TestRadarNewRows(t *testing.T) {
 }
 
 // The NEW picker caps its list so a long zoxide history can't overflow the
-// popup, and ranks by fuzzy score once a query is typed.
-func TestRadarNewPickerCapAndRank(t *testing.T) {
+// popup: the fixed fallback before we know a height, then a height-derived
+// budget once the popup reports its size, so nothing lands below the fold.
+func TestRadarNewPickerCap(t *testing.T) {
 	m := radarModel{mode: modeNew}
-	for i := range radarNewCap + 10 {
+	for i := range 200 {
 		m.newDirs = append(m.newDirs, "/home/me/dir"+string(rune('a'+i%26))+string(rune('0'+i/26)))
 	}
+
+	// No height yet → fixed fallback.
 	if got := len(m.rows()); got != radarNewCap {
-		t.Errorf("uncapped rows = %d, want %d", got, radarNewCap)
+		t.Errorf("fallback rows = %d, want %d", got, radarNewCap)
+	}
+
+	// A short popup shows only what fits above the footer.
+	m.height = 24
+	if want := 24 - radarNewChrome; len(m.rows()) != want {
+		t.Errorf("rows at height 24 = %d, want %d", len(m.rows()), want)
+	}
+
+	// A tiny popup still shows at least one row rather than none.
+	m.height = 3
+	if got := len(m.rows()); got != 1 {
+		t.Errorf("rows at height 3 = %d, want 1", got)
 	}
 }
 
