@@ -595,9 +595,9 @@ func (m radarModel) rows() []rigStatus {
 	switch m.mode {
 	case modeNew:
 		// The NEW picker is always filter-entry, so an empty query shows the
-		// frecency order zoxide handed us, capped to what the popup can show; a
-		// query re-ranks and re-caps.
-		return capRows(m.rankRows(m.newRows()), m.newCap())
+		// frecency order zoxide handed us; a query re-ranks. The View windows
+		// whatever's long to the popup height, so there's no cap here.
+		return m.rankRows(m.newRows())
 	case modeBoardFilter:
 		return m.rankRows(m.rigRows(), m.sessions)
 	default: // modeBoard
@@ -607,34 +607,6 @@ func (m radarModel) rows() []rigStatus {
 		out = append(out, m.sessions...)
 		return out
 	}
-}
-
-// radarNewCap is the fallback bound on NEW-picker rows before the first
-// WindowSizeMsg tells us the popup height. zoxide history runs long and the
-// radar has no scrolling viewport, so we window to the top matches.
-const radarNewCap = 20
-
-// radarNewChrome is the rows the NEW picker spends on furniture rather than
-// results: the prompt line and its blank, the section header, and the blank +
-// footer, plus one for slack. newCap subtracts it so the last result never
-// lands below the fold where the cursor couldn't reach it.
-const radarNewChrome = 6
-
-// newCap is how many create-rows fit in the current popup: the height minus the
-// furniture, or the fixed fallback until we've been told a height.
-func (m radarModel) newCap() int {
-	if m.height <= 0 {
-		return radarNewCap
-	}
-	return max(1, m.height-radarNewChrome)
-}
-
-// capRows trims rows to at most n, leaving shorter lists untouched.
-func capRows(rows []rigStatus, n int) []rigStatus {
-	if len(rows) > n {
-		return rows[:n]
-	}
-	return rows
 }
 
 // rankRows scores the given sections against the query, drops the misses, and
@@ -1080,9 +1052,7 @@ func (m radarModel) View() string {
 		wTitle = min(wTitle, max(20, m.width-fixed-radarTailReserve))
 	}
 
-	var b strings.Builder
-	b.WriteString(prompt)
-	line := func(i int, s rigStatus) {
+	renderRow := func(i int, s rigStatus) string {
 		fetched := prsFetched(m.prs, s.Slug)
 		glyph, gstyle := radarGlyph(s, fetched)
 		title := radarTruncate(s.Title, wTitle)
@@ -1114,56 +1084,113 @@ func (m radarModel) View() string {
 			// through a wrapping reverse, so the selected row goes plain.
 			plain := fmt.Sprintf("▸ %-*s  %-*s  %s  %-*s  %s",
 				wID, s.ID, wAge, age(s.Created), glyph, wTitle, title, strings.Join(plainTail, "  "))
-			b.WriteString(radarCursorStyle.Render(strings.TrimRight(plain, " ")))
-		} else {
-			fmt.Fprintf(&b, "  %-*s  %-*s  %s  %-*s  %s",
-				wID, s.ID, wAge, age(s.Created), gstyle.Render(glyph),
-				wTitle, title, strings.Join(styledTail, "  "))
+			return radarCursorStyle.Render(strings.TrimRight(plain, " "))
 		}
-		b.WriteString("\n")
+		return fmt.Sprintf("  %-*s  %-*s  %s  %-*s  %s",
+			wID, s.ID, wAge, age(s.Created), gstyle.Render(glyph),
+			wTitle, title, strings.Join(styledTail, "  "))
+	}
+
+	// Build every display line — section headers and rows interleaved — into one
+	// slice, remembering which line the cursor sits on. Windowing then trims the
+	// slice to the popup rather than letting the terminal scroll the top away.
+	var body []string
+	cursorLine := 0
+	appendRow := func(i int, s rigStatus) {
+		if i == m.cursor {
+			cursorLine = len(body)
+		}
+		body = append(body, renderRow(i, s))
 	}
 
 	switch m.mode {
 	case modeNew:
 		// The NEW picker is one list under a single header; every row is a
 		// would-be session, so there's nothing to section by.
-		b.WriteString(radarHeaderStyle.Render("NEW SESSION") + "\n")
+		body = append(body, radarHeaderStyle.Render("NEW SESSION"))
 		for i := range rows {
-			line(i, rows[i])
+			appendRow(i, rows[i])
 		}
 	case modeBoardFilter:
 		// Under a filter the board is one ranked list — no section headers, the
 		// order is pure score, and the cursor rides the top (best) match.
 		for i := range rows {
-			line(i, rows[i])
+			appendRow(i, rows[i])
 		}
 	default:
 		// The board proper: three sections, cursor index tracked section by
 		// section so it stays in lockstep with m.rows().
 		base := 0
-		section := func(header string, rows []rigStatus) {
-			if len(rows) == 0 {
+		section := func(header string, secRows []rigStatus) {
+			if len(secRows) == 0 {
 				return
 			}
 			if base > 0 {
-				b.WriteString("\n")
+				body = append(body, "") // blank line between sections
 			}
-			b.WriteString(radarHeaderStyle.Render(header) + "\n")
-			for i := range rows {
-				line(base+i, rows[i])
+			body = append(body, radarHeaderStyle.Render(header))
+			for i := range secRows {
+				appendRow(base+i, secRows[i])
 			}
-			base += len(rows)
+			base += len(secRows)
 		}
 		section("IN FLIGHT", m.inflight)
 		section("PARKED · AWAITING REVIEW", m.parked)
 		section("OTHER SESSIONS", m.sessions)
 	}
 
-	b.WriteString("\n" + footer)
-	if m.scanErr != nil {
-		b.WriteString("\n" + radarErrStyle.Render("scan: "+m.scanErr.Error()))
+	// Reserve the fixed furniture (prompt, blank + footer, optional error) and
+	// window the body to what's left, scrolled to keep the cursor in view. An
+	// arrow in the footer says when rows sit above or below the fold.
+	chrome := 3 // blank line + footer, plus a row of slack off the bottom cell
+	if typing {
+		chrome += 2 // prompt line + blank
 	}
-	return b.String()
+	if m.scanErr != nil {
+		chrome++
+	}
+	if m.height > 0 {
+		budget := max(1, m.height-chrome)
+		start, end := windowBody(len(body), cursorLine, budget)
+		if start > 0 || end < len(body) {
+			hint := ""
+			if start > 0 {
+				hint += "↑"
+			}
+			if end < len(body) {
+				hint += "↓"
+			}
+			footer += radarFaintStyle.Render("  " + hint + " more")
+		}
+		body = body[start:end]
+	}
+
+	out := prompt + strings.Join(body, "\n") + "\n\n" + footer
+	if m.scanErr != nil {
+		out += "\n" + radarErrStyle.Render("scan: "+m.scanErr.Error())
+	}
+	return out
+}
+
+// windowBody returns the [start, end) slice of a body of n display lines that
+// fits budget rows while keeping cursorLine visible: the list holds at the top
+// until the cursor would fall off the bottom, then scrolls just enough to keep
+// it on screen. A zero or oversized budget shows everything.
+func windowBody(n, cursorLine, budget int) (int, int) {
+	if budget <= 0 || n <= budget {
+		return 0, n
+	}
+	start := 0
+	if cursorLine >= budget {
+		start = cursorLine - budget + 1
+	}
+	if start > n-budget {
+		start = n - budget
+	}
+	if start < 0 {
+		start = 0
+	}
+	return start, start + budget
 }
 
 // radarTruncate clips s to width cells (rune-counted — close enough for issue

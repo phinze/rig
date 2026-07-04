@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -371,30 +372,77 @@ func TestRadarNewRows(t *testing.T) {
 	}
 }
 
-// The NEW picker caps its list so a long zoxide history can't overflow the
-// popup: the fixed fallback before we know a height, then a height-derived
-// budget once the popup reports its size, so nothing lands below the fold.
-func TestRadarNewPickerCap(t *testing.T) {
+// windowBody keeps the cursor's line on screen: the list holds at the top until
+// the cursor would drop off the bottom, then scrolls just enough to follow it,
+// and never returns more than the budget.
+func TestWindowBody(t *testing.T) {
+	cases := []struct {
+		name               string
+		n, cursor, budget  int
+		wantStart, wantEnd int
+	}{
+		{"fits whole", 5, 2, 10, 0, 5},
+		{"zero budget shows all", 5, 2, 0, 0, 5},
+		{"cursor near top holds", 30, 3, 10, 0, 10},
+		{"cursor at fold holds", 30, 9, 10, 0, 10},
+		{"cursor past fold scrolls", 30, 10, 10, 1, 11},
+		{"cursor deep scrolls", 30, 25, 10, 16, 26},
+		{"cursor at end clamps", 30, 29, 10, 20, 30},
+	}
+	for _, c := range cases {
+		start, end := windowBody(c.n, c.cursor, c.budget)
+		if start != c.wantStart || end != c.wantEnd {
+			t.Errorf("%s: windowBody(%d,%d,%d) = [%d,%d), want [%d,%d)",
+				c.name, c.n, c.cursor, c.budget, start, end, c.wantStart, c.wantEnd)
+		}
+		if c.budget > 0 && c.n > c.budget {
+			if end-start != c.budget {
+				t.Errorf("%s: window size = %d, want budget %d", c.name, end-start, c.budget)
+			}
+			if c.cursor < start || c.cursor >= end {
+				t.Errorf("%s: cursor %d not visible in [%d,%d)", c.name, c.cursor, start, end)
+			}
+		}
+	}
+}
+
+// The board must never render taller than the popup, whatever the mode or how
+// far the cursor has scrolled — that's the whole point of the viewport. Also
+// checks the selected row survives into the visible window.
+func TestViewFitsHeight(t *testing.T) {
+	m := radarModel{
+		width:    120,
+		inflight: []rigStatus{{Slug: "a", ID: "MIR-1", Title: "one"}, {Slug: "b", ID: "MIR-2", Title: "two"}},
+	}
+	for i := range 30 {
+		name := "sess" + string(rune('a'+i))
+		m.sessions = append(m.sessions, bareSession(tmuxSession{Name: name, Path: "/home/me/" + name, LastAttached: int64(1000 - i)}, "/home/me"))
+	}
+
+	for _, height := range []int{8, 14, 20, 40, 200} {
+		m.height = height
+		for _, cursor := range []int{0, 5, 15, 31} {
+			m.cursor = cursor
+			if cursor >= len(m.rows()) {
+				continue
+			}
+			lines := strings.Count(m.View(), "\n") + 1
+			if lines > height {
+				t.Errorf("height=%d cursor=%d: View is %d lines, exceeds popup", height, cursor, lines)
+			}
+		}
+	}
+}
+
+// The NEW picker no longer caps its list — windowing handles overflow — so every
+// session-less zoxide dir is reachable by scrolling.
+func TestRadarNewPickerNoCap(t *testing.T) {
 	m := radarModel{mode: modeNew}
 	for i := range 200 {
 		m.newDirs = append(m.newDirs, "/home/me/dir"+string(rune('a'+i%26))+string(rune('0'+i/26)))
 	}
-
-	// No height yet → fixed fallback.
-	if got := len(m.rows()); got != radarNewCap {
-		t.Errorf("fallback rows = %d, want %d", got, radarNewCap)
-	}
-
-	// A short popup shows only what fits above the footer.
-	m.height = 24
-	if want := 24 - radarNewChrome; len(m.rows()) != want {
-		t.Errorf("rows at height 24 = %d, want %d", len(m.rows()), want)
-	}
-
-	// A tiny popup still shows at least one row rather than none.
-	m.height = 3
-	if got := len(m.rows()); got != 1 {
-		t.Errorf("rows at height 3 = %d, want 1", got)
+	if got := len(m.rows()); got != 200 {
+		t.Errorf("new rows = %d, want all 200", got)
 	}
 }
 
