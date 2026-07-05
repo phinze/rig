@@ -82,10 +82,21 @@ func TestRadarStateCell(t *testing.T) {
 	}
 }
 
+// isolateRadarCache redirects the radar cache into a throwaway HOME so the
+// test never touches the real user cache. We point HOME rather than
+// XDG_CACHE_HOME because radarCachePath goes through os.UserCacheDir, and on
+// darwin that returns $HOME/Library/Caches and ignores XDG entirely. Under the
+// Nix build sandbox HOME is the read-only /homeless-shelter, so an
+// XDG-only override left the cache mkdir failing on macOS builds.
+func isolateRadarCache(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", "")
+}
+
 // The PR cache round-trips through disk, and entries past the save horizon
 // are dropped rather than resurrected stale.
 func TestRadarCacheRoundTrip(t *testing.T) {
-	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	isolateRadarCache(t)
 	now := time.Now().Round(time.Second)
 	prs := map[string][]rigPR{
 		"fresh":   {{Repo: "o/r", Branch: "b", prInfo: prInfo{Number: 7, State: "OPEN", Checks: "passing"}}},
@@ -115,7 +126,7 @@ func TestRadarCacheRoundTrip(t *testing.T) {
 
 // loadRadarCache degrades to empty on a missing or torn file.
 func TestRadarCacheDegrades(t *testing.T) {
-	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	isolateRadarCache(t)
 	if got := loadRadarCache(); got != nil {
 		t.Errorf("missing file: got %v, want nil", got)
 	}
