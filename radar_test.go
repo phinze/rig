@@ -167,14 +167,14 @@ func TestRadarTailSegs(t *testing.T) {
 		{"parked no pr", rigStatus{Parked: true}, true, []string{"no PR"}},
 		{"single pr", rigStatus{PRs: []rigPR{
 			{Repo: "o/api", prInfo: prInfo{Number: 7, State: "OPEN", Checks: "passing"}},
-		}}, true, []string{"#7 "}},
+		}}, true, []string{"#7  "}},
 		{"multi repo", rigStatus{PRs: []rigPR{
 			{Repo: "o/api", prInfo: prInfo{Number: 7, State: "OPEN"}},
 			{Repo: "o/web", prInfo: prInfo{Number: 9, State: "OPEN", Checks: "failing"}},
-		}}, true, []string{"api #7", "web #9 "}},
+		}}, true, []string{"api #7 ", "web #9  "}},
 		{"parked changes", rigStatus{Parked: true, PRs: []rigPR{
 			{Repo: "o/api", prInfo: prInfo{Number: 7, State: "OPEN", Review: "CHANGES_REQUESTED"}},
-		}}, true, []string{"changes requested", "#7"}},
+		}}, true, []string{"changes requested", "#7 "}},
 	}
 	for _, c := range cases {
 		got := plains(radarTailSegs(c.s, c.fetched))

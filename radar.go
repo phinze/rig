@@ -1209,13 +1209,13 @@ func radarGlyph(s rigStatus, fetched bool) (string, lipgloss.Style) {
 		case "changes requested":
 			return "", radarHotStyle // comment
 		case "approved":
-			return "", radarGoodStyle // check
+			return "", radarGoodStyle // thumbs-up: approved
 		case "merged":
 			return "", radarDoneStyle // git merge
 		case "no PR":
 			return "·", radarFaintStyle
 		default: // waiting
-			return "", radarFaintStyle // clock
+			return "", radarFaintStyle // eye: awaiting review
 		}
 	}
 	switch s.Agent {
@@ -1225,6 +1225,25 @@ func radarGlyph(s rigStatus, fetched bool) (string, lipgloss.Style) {
 		return "●", radarFaintStyle
 	default:
 		return "·", radarFaintStyle
+	}
+}
+
+// radarReviewGlyph is the per-PR review glyph for the tail: where the PR stands
+// with human review, drawn from a different icon family than radarChecksGlyph's
+// CI so an approved review (thumbs-up) never wears the same check as passing CI,
+// nor awaiting-review (eye) the same clock as pending CI. A merged or closed PR
+// has no live review to show, so it trails no review glyph.
+func radarReviewGlyph(pr rigPR) (string, lipgloss.Style) {
+	if pr.State != "OPEN" {
+		return "", radarFaintStyle
+	}
+	switch pr.Review {
+	case "CHANGES_REQUESTED":
+		return "", radarHotStyle // comment: your move
+	case "APPROVED":
+		return "", radarGoodStyle // thumbs-up: go merge
+	default: // REVIEW_REQUIRED or "" — still out for review
+		return "", radarFaintStyle // eye: awaiting review
 	}
 }
 
@@ -1263,9 +1282,11 @@ type tailSeg struct {
 }
 
 // radarTailSegs builds the append-only detail that trails a row: for a parked
-// rig the disposition spelled out (the glyph's legend rides along), then each
-// PR as number + CI glyph, repo-prefixed when the rig spans repos. Loading
-// reads as a bare "…"; an in-flight rig with no PR trails nothing at all.
+// rig the disposition spelled out (the glyph's legend rides along), then each PR
+// as number + review glyph + CI glyph, repo-prefixed when the rig spans repos.
+// The review glyph is what surfaces review state on in-flight rigs too, not just
+// parked ones. Loading reads as a bare "…"; an in-flight rig with no PR trails
+// nothing at all.
 func radarTailSegs(s rigStatus, fetched bool) []tailSeg {
 	if s.bare || s.create {
 		return nil
@@ -1285,6 +1306,10 @@ func radarTailSegs(s rigStatus, fetched bool) []tailSeg {
 			plain = shortRepo(pr.Repo) + " " + plain
 		}
 		styled := radarPRNumStyle(pr.State).Render(plain)
+		if g, st := radarReviewGlyph(pr); g != "" {
+			plain += " " + g
+			styled += " " + st.Render(g)
+		}
 		if g, st := radarChecksGlyph(pr.Checks); g != "" {
 			plain += " " + g
 			styled += " " + st.Render(g)
