@@ -53,21 +53,21 @@ func TestWorkspaceTeardownBlocker(t *testing.T) {
 
 	t.Run("merged PR clears the gate", func(t *testing.T) {
 		t.Setenv("GH_FAKE_STATE", "MERGED")
-		if reason := workspaceTeardownBlocker(ws, "o/r", "fakerepo", []string{"feat"}); reason != "" {
+		if reason := workspaceTeardownBlocker(ws, "o/r", "fakerepo", []string{"feat"}, false, ""); reason != "" {
 			t.Errorf("expected merged PR to reap, blocked by: %q", reason)
 		}
 	})
 
 	t.Run("open PR keeps the rig", func(t *testing.T) {
 		t.Setenv("GH_FAKE_STATE", "OPEN")
-		if reason := workspaceTeardownBlocker(ws, "o/r", "fakerepo", []string{"feat"}); reason == "" {
+		if reason := workspaceTeardownBlocker(ws, "o/r", "fakerepo", []string{"feat"}, false, ""); reason == "" {
 			t.Error("expected open PR to keep the rig")
 		}
 	})
 
 	t.Run("no PR keeps the rig", func(t *testing.T) {
 		t.Setenv("GH_FAKE_NOPR", "1")
-		if reason := workspaceTeardownBlocker(ws, "o/r", "fakerepo", []string{"feat"}); reason == "" {
+		if reason := workspaceTeardownBlocker(ws, "o/r", "fakerepo", []string{"feat"}, false, ""); reason == "" {
 			t.Error("expected missing PR to keep the rig")
 		}
 	})
@@ -75,7 +75,7 @@ func TestWorkspaceTeardownBlocker(t *testing.T) {
 	t.Run("no branch keeps the rig without asking gh", func(t *testing.T) {
 		// No recorded branch means we can't map the work to a PR; the local
 		// off-trunk commit alone keeps the rig, no gh round-trip.
-		if reason := workspaceTeardownBlocker(ws, "o/r", "fakerepo", nil); reason == "" {
+		if reason := workspaceTeardownBlocker(ws, "o/r", "fakerepo", nil, false, ""); reason == "" {
 			t.Error("expected a branchless workspace to keep the rig")
 		}
 	})
@@ -86,9 +86,43 @@ func TestWorkspaceTeardownBlocker(t *testing.T) {
 		write("more.txt", "kept working\n")
 		run("jj", "commit", "-m", "more")
 		t.Setenv("GH_FAKE_STATE", "MERGED")
-		reason := workspaceTeardownBlocker(ws, "o/r", "fakerepo", []string{"feat"})
+		reason := workspaceTeardownBlocker(ws, "o/r", "fakerepo", []string{"feat"}, false, "")
 		if reason == "" {
 			t.Error("expected post-merge work to keep the rig")
+		}
+	})
+
+	// Review-rig gate (review=true): the same off-trunk author commits that
+	// block an authoring rig are irrelevant here — what matters is whether "me"
+	// has posted a review. The PR stays OPEN throughout, proving merge state is
+	// beside the point for a review.
+	t.Run("review rig: unreviewed PR keeps the rig", func(t *testing.T) {
+		t.Setenv("GH_FAKE_STATE", "OPEN")
+		t.Setenv("GH_FAKE_REVIEWS", `[]`)
+		reason := workspaceTeardownBlocker(ws, "o/r", "fakerepo", []string{"feat"}, true, "me")
+		if reason == "" {
+			t.Error("expected an unreviewed PR to keep the review rig")
+		}
+	})
+
+	t.Run("review rig: my posted review clears the gate", func(t *testing.T) {
+		t.Setenv("GH_FAKE_STATE", "OPEN")
+		t.Setenv("GH_FAKE_REVIEWS", `[{"author":{"login":"me"},"state":"COMMENTED"}]`)
+		// Park @ on a fresh empty child so gate 2 (uncommitted changes) is clear;
+		// the author's commits sit in @'s parents, which the review gate ignores.
+		run("jj", "new")
+		reason := workspaceTeardownBlocker(ws, "o/r", "fakerepo", []string{"feat"}, true, "me")
+		if reason != "" {
+			t.Errorf("expected my posted review to reap the rig, blocked by: %q", reason)
+		}
+	})
+
+	t.Run("review rig: someone else's review doesn't count", func(t *testing.T) {
+		t.Setenv("GH_FAKE_STATE", "OPEN")
+		t.Setenv("GH_FAKE_REVIEWS", `[{"author":{"login":"someone-else"},"state":"APPROVED"}]`)
+		reason := workspaceTeardownBlocker(ws, "o/r", "fakerepo", []string{"feat"}, true, "me")
+		if reason == "" {
+			t.Error("expected another user's review to keep my review rig")
 		}
 	})
 }

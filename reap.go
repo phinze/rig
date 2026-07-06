@@ -130,6 +130,17 @@ func rigTeardownBlocker(basedir string, fetched map[string]bool) string {
 	if err != nil {
 		return fmt.Sprintf("reading manifest: %v", err)
 	}
+	// A review rig's terminal check is "have I posted a review?", which needs my
+	// GitHub login. Resolve it once, up front, only when this rig is a review —
+	// authoring rigs never touch it.
+	login := ""
+	if m.isReview() {
+		l, err := ghCurrentLogin()
+		if err != nil {
+			return fmt.Sprintf("resolving GitHub login: %v", err)
+		}
+		login = l
+	}
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -153,7 +164,7 @@ func rigTeardownBlocker(basedir string, fetched map[string]bool) string {
 		if err != nil {
 			return fmt.Sprintf("%s: resolving branches: %v", e.Name(), err)
 		}
-		if reason := workspaceTeardownBlocker(ws, m.Repos[e.Name()], e.Name(), branches); reason != "" {
+		if reason := workspaceTeardownBlocker(ws, m.Repos[e.Name()], e.Name(), branches, m.isReview(), login); reason != "" {
 			return reason
 		}
 	}
@@ -167,43 +178,25 @@ func rigTeardownBlocker(basedir string, fetched map[string]bool) string {
 // fully-merged workspace reaps without a round-trip. `rig down` layers an eager
 // all-PRs-merged gate on top (unmergedPRsBlocker); reap leans on this alone.
 //
-// Two gates after the cheap off-trunk probe, all fail-closed:
+// Two gates, all fail-closed. The first differs by rig kind, because "done"
+// does: an authoring rig guards its own committed work (authoringTeardownBlocker,
+// gate 1a), while a review rig guards nothing of yours and instead requires that
+// you've posted a review (reviewTeardownBlocker, gate 1b) — its off-trunk commits
+// are the PR author's, fetched read-only, so their merge state is beside the
+// point. Then a shared gate 2:
 //
-//  1. Off-trunk commits reachable from @ must all sit under a merged branch. A
-//     squash merge lands on trunk as a brand-new commit, so the branch's
-//     originals never become trunk ancestors and look unmerged forever —
-//     subtracting each merged recorded branch's ancestry (once GitHub confirms
-//     it merged) is how we see past that. Anything left is genuine unmerged
-//     work. A gh error keeps the rig.
 //  2. @ itself gets one allowance: the direnv anchor rig wrote at setup. jj
 //     auto-tracks it, leaving @ permanently non-empty in repos that ship no
 //     .envrc of their own; without the carve-out no such rig would ever reap.
-//     Anything else dirty blocks.
-func workspaceTeardownBlocker(ws, nameWithOwner, label string, branches []string) string {
-	// Cheap first: any non-empty off-trunk commit reachable from @? If not,
-	// there's no local work to lose and nothing to verify against GitHub.
-	empty, err := jjRevsetEmpty(ws, "::@ & ~@ & ~empty() & ~::trunk()")
-	if err != nil {
-		return fmt.Sprintf("%s: jj check failed: %v", label, err)
-	}
-	if !empty {
-		clauses := []string{"::@ & ~@ & ~empty() & ~::trunk()"}
-		for _, b := range branches {
-			pr, err := prForBranch(nameWithOwner, b)
-			if err != nil {
-				return fmt.Sprintf("%s: checking PR for %s: %v", label, b, err)
-			}
-			if pr != nil && pr.State == "MERGED" {
-				clauses = append(clauses, fmt.Sprintf("~::%q", b))
-			}
+//     Anything else dirty blocks — including scratch you edited in a review
+//     workspace, since the author's commits are @'s parents, not @ itself.
+func workspaceTeardownBlocker(ws, nameWithOwner, label string, branches []string, review bool, login string) string {
+	if review {
+		if reason := reviewTeardownBlocker(nameWithOwner, label, branches, login); reason != "" {
+			return reason
 		}
-		beyond, err := jjRevsetEmpty(ws, strings.Join(clauses, " & "))
-		if err != nil {
-			return fmt.Sprintf("%s: jj check failed: %v", label, err)
-		}
-		if !beyond {
-			return fmt.Sprintf("%s has unmerged work", label)
-		}
+	} else if reason := authoringTeardownBlocker(ws, nameWithOwner, label, branches); reason != "" {
+		return reason
 	}
 
 	atEmpty, err := jjRevsetEmpty(ws, "@ & ~empty() & ~::trunk()")
@@ -212,6 +205,64 @@ func workspaceTeardownBlocker(ws, nameWithOwner, label string, branches []string
 	}
 	if !atEmpty && !anchorOnlyWIP(ws) {
 		return fmt.Sprintf("%s has uncommitted changes", label)
+	}
+	return ""
+}
+
+// authoringTeardownBlocker is gate 1a: an authoring rig's off-trunk commits must
+// all sit under a merged branch, or it's genuine unmerged work. Returns "" when
+// the workspace's committed history is safe to drop.
+func authoringTeardownBlocker(ws, nameWithOwner, label string, branches []string) string {
+	// Cheap first: any non-empty off-trunk commit reachable from @? If not,
+	// there's no local work to lose and nothing to verify against GitHub.
+	empty, err := jjRevsetEmpty(ws, "::@ & ~@ & ~empty() & ~::trunk()")
+	if err != nil {
+		return fmt.Sprintf("%s: jj check failed: %v", label, err)
+	}
+	if empty {
+		return ""
+	}
+	clauses := []string{"::@ & ~@ & ~empty() & ~::trunk()"}
+	for _, b := range branches {
+		pr, err := prForBranch(nameWithOwner, b)
+		if err != nil {
+			return fmt.Sprintf("%s: checking PR for %s: %v", label, b, err)
+		}
+		if pr != nil && pr.State == "MERGED" {
+			clauses = append(clauses, fmt.Sprintf("~::%q", b))
+		}
+	}
+	beyond, err := jjRevsetEmpty(ws, strings.Join(clauses, " & "))
+	if err != nil {
+		return fmt.Sprintf("%s: jj check failed: %v", label, err)
+	}
+	if !beyond {
+		return fmt.Sprintf("%s has unmerged work", label)
+	}
+	return ""
+}
+
+// reviewTeardownBlocker is gate 1b: a review rig is done once you've posted a
+// review on every recorded branch that has a PR. The branch's commits are the
+// author's, so their merge state is irrelevant — only your review is. An
+// unreviewed branch (or a gh error) keeps the rig; login is the reviewer's
+// GitHub identity, resolved once by the caller.
+func reviewTeardownBlocker(nameWithOwner, label string, branches []string, login string) string {
+	for _, b := range branches {
+		pr, err := prForBranch(nameWithOwner, b)
+		if err != nil {
+			return fmt.Sprintf("%s: checking PR for %s: %v", label, b, err)
+		}
+		if pr == nil {
+			continue // no PR for this branch — nothing to review
+		}
+		reviewed, err := reviewSubmittedByMe(nameWithOwner, b, login)
+		if err != nil {
+			return fmt.Sprintf("%s: checking your review on %s: %v", label, b, err)
+		}
+		if !reviewed {
+			return fmt.Sprintf("%s PR #%d (%s) has no review from you yet", label, pr.Number, b)
+		}
 	}
 	return ""
 }

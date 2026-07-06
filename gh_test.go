@@ -10,13 +10,19 @@ import (
 // behavior is steered by env vars the test sets: GH_FAKE_STATE picks the PR
 // state it reports, GH_FAKE_REVIEW sets its reviewDecision, GH_FAKE_NOPR makes
 // it answer "no pull requests found", and GH_FAKE_ERR makes it fail like an
-// offline/unauthorized gh.
+// offline/unauthorized gh. For the review-rig path, GH_FAKE_REVIEWS supplies the
+// `reviews` array a `--json reviews` query returns (default empty), and
+// GH_FAKE_LOGIN sets the login `gh api user` reports (default "me").
 func fakeGh(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
 	// GH_FAKE_ROLLUP steers the emitted statusCheckRollup (defaults to a single
 	// passing CheckRun); tests set it to "" for a bare PR or a failing item.
 	script := `#!/bin/sh
+if [ "$1" = "api" ] && [ "$2" = "user" ]; then
+  printf '%s\n' "${GH_FAKE_LOGIN:-me}"
+  exit 0
+fi
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
   if [ -n "$GH_FAKE_ERR" ]; then
     echo "could not connect to github.com" >&2
@@ -26,6 +32,12 @@ if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
     echo "no pull requests found for branch \"x\"" >&2
     exit 1
   fi
+  case "$*" in
+  *"--json reviews"*)
+    printf '{"reviews":%s}\n' "${GH_FAKE_REVIEWS:-[]}"
+    exit 0
+    ;;
+  esac
   rollup='[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"}]'
   if [ -n "${GH_FAKE_ROLLUP+set}" ]; then rollup="$GH_FAKE_ROLLUP"; fi
   printf '{"number":7,"state":"%s","url":"https://github.com/o/r/pull/7","statusCheckRollup":%s,"reviewDecision":"%s"}\n' \
@@ -84,6 +96,73 @@ func TestPrForBranch(t *testing.T) {
 			t.Fatal("expected an error when gh fails")
 		}
 	})
+}
+
+func TestReviewSubmittedByMe(t *testing.T) {
+	fakeGh(t)
+
+	t.Run("my submitted review counts", func(t *testing.T) {
+		t.Setenv("GH_FAKE_REVIEWS", `[{"author":{"login":"me"},"state":"CHANGES_REQUESTED"}]`)
+		got, err := reviewSubmittedByMe("o/r", "feat", "me")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !got {
+			t.Error("expected my CHANGES_REQUESTED review to count")
+		}
+	})
+
+	t.Run("a still-pending draft doesn't count", func(t *testing.T) {
+		t.Setenv("GH_FAKE_REVIEWS", `[{"author":{"login":"me"},"state":"PENDING"}]`)
+		got, err := reviewSubmittedByMe("o/r", "feat", "me")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got {
+			t.Error("expected an unsent PENDING draft not to count as reviewed")
+		}
+	})
+
+	t.Run("another user's review doesn't count", func(t *testing.T) {
+		t.Setenv("GH_FAKE_REVIEWS", `[{"author":{"login":"someone-else"},"state":"APPROVED"}]`)
+		got, err := reviewSubmittedByMe("o/r", "feat", "me")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got {
+			t.Error("expected another user's review not to count as mine")
+		}
+	})
+
+	t.Run("no PR for branch reads as not-yet, no error", func(t *testing.T) {
+		t.Setenv("GH_FAKE_NOPR", "1")
+		got, err := reviewSubmittedByMe("o/r", "feat", "me")
+		if err != nil {
+			t.Fatalf("expected nil error for missing PR, got %v", err)
+		}
+		if got {
+			t.Error("expected a missing PR to read as not-yet-reviewed")
+		}
+	})
+
+	t.Run("gh failure propagates", func(t *testing.T) {
+		t.Setenv("GH_FAKE_ERR", "1")
+		if _, err := reviewSubmittedByMe("o/r", "feat", "me"); err == nil {
+			t.Fatal("expected an error when gh fails")
+		}
+	})
+}
+
+func TestGhCurrentLogin(t *testing.T) {
+	fakeGh(t)
+	t.Setenv("GH_FAKE_LOGIN", "octocat")
+	login, err := ghCurrentLogin()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if login != "octocat" {
+		t.Fatalf("got %q, want octocat", login)
+	}
 }
 
 func TestRollupChecks(t *testing.T) {

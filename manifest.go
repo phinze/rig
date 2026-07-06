@@ -17,6 +17,14 @@ type manifest struct {
 	ID      string
 	Title   string
 	Created time.Time
+	// Kind records how the rig came to be, which sets its terminal condition.
+	// "" and "up" are authoring rigs — done when the work merges, so teardown
+	// guards their local commits. "review" is a `rig review` pickup of someone
+	// else's PR: the workspace holds the author's commits fetched read-only, so
+	// there's nothing of yours to merge and the rig is done once you've posted a
+	// review, never gated on the PR itself merging. Absent on rigs predating this
+	// field, which read as authoring — the safe default.
+	Kind string
 	// Parked, when non-zero, marks a rig as dormant: its work is done and up
 	// for human review, so it drops out of `rig switch` and its tmux session is
 	// killed, but the basedir (and its claude session history) stay on disk.
@@ -42,10 +50,17 @@ type manifest struct {
 	Branches map[string][]string
 }
 
+// isReview reports whether this rig is a `rig review` pickup, whose terminal
+// condition is "review posted" rather than "work merged".
+func (m manifest) isReview() bool { return m.Kind == "review" }
+
 func writeManifest(basedir string, m manifest) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "id    = %q\n", m.ID)
 	fmt.Fprintf(&b, "title = %q\n", m.Title)
+	if m.Kind != "" {
+		fmt.Fprintf(&b, "kind  = %q\n", m.Kind)
+	}
 	if !m.Created.IsZero() {
 		fmt.Fprintf(&b, "created = %q\n", m.Created.Format(time.RFC3339))
 	}
@@ -157,6 +172,8 @@ func readManifest(basedir string) (manifest, error) {
 				m.ID = val
 			case "title":
 				m.Title = val
+			case "kind":
+				m.Kind = val
 			case "created":
 				if t, err := time.Parse(time.RFC3339, val); err == nil {
 					m.Created = t

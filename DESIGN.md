@@ -275,7 +275,15 @@ switcher seat on rigs alone.
   rather than an archive dir: `down` tears the basedir down but refuses to
   drop unmerged work, `park` keeps a finished rig on disk while its review
   is out, and `reap` bulk-collects the merged-and-idle. The safety gate
-  turned out to matter more than an archive would have.
+  turned out to matter more than an archive would have. One wrinkle the gate
+  had to grow: "done" means different things for authoring versus reviewing.
+  An authoring rig is done when its work merges, so teardown guards its local
+  commits. A `rig review` pickup holds the *author's* commits, fetched
+  read-only — nothing of yours to merge, and the PR staying open is the whole
+  point — so its terminal condition is "you've posted a review", not "the PR
+  merged". The manifest records the rig's `kind` so the shared teardown
+  judgment can tell them apart; a review rig with no review from you yet stays
+  put (and `--force` still overrides).
 
 ## Next actions
 

@@ -70,6 +70,65 @@ func rollupChecks(items []checkItem) string {
 	}
 }
 
+// ghCurrentLogin returns the authenticated user's GitHub login, the identity a
+// review rig's terminal check compares against ("have *I* reviewed this?").
+func ghCurrentLogin() (string, error) {
+	out, err := exec.Command("gh", "api", "user", "--jq", ".login").Output()
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			return "", fmt.Errorf("gh api user: %s", strings.TrimSpace(string(ee.Stderr)))
+		}
+		return "", fmt.Errorf("gh api user: %w", err)
+	}
+	login := strings.TrimSpace(string(out))
+	if login == "" {
+		return "", fmt.Errorf("gh api user returned an empty login")
+	}
+	return login, nil
+}
+
+// reviewSubmittedByMe reports whether login has submitted a review on the PR
+// whose head is branch. A submitted review is any state other than PENDING (an
+// unsent draft) — APPROVED, CHANGES_REQUESTED, COMMENTED, or DISMISSED all mean
+// you weighed in, which is a review rig's terminal signal. Missing PR or no such
+// branch reads as not-yet (false, no error), matching prForBranch; a genuine gh
+// failure comes back as an error so teardown fails closed rather than reaping an
+// unreviewed pickup.
+func reviewSubmittedByMe(nameWithOwner, branch, login string) (bool, error) {
+	cmd := exec.Command("gh", "pr", "view", branch,
+		"-R", nameWithOwner, "--json", "reviews")
+	out, err := cmd.Output()
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			if strings.Contains(strings.ToLower(string(ee.Stderr)), "no pull requests found") {
+				return false, nil
+			}
+			return false, fmt.Errorf("gh pr view %s (%s): %s",
+				branch, nameWithOwner, strings.TrimSpace(string(ee.Stderr)))
+		}
+		return false, fmt.Errorf("gh pr view %s (%s): %w", branch, nameWithOwner, err)
+	}
+	var v struct {
+		Reviews []struct {
+			Author struct {
+				Login string `json:"login"`
+			} `json:"author"`
+			State string `json:"state"`
+		} `json:"reviews"`
+	}
+	if err := json.Unmarshal(out, &v); err != nil {
+		return false, fmt.Errorf("parsing gh pr view %s (%s): %w", branch, nameWithOwner, err)
+	}
+	for _, r := range v.Reviews {
+		if r.Author.Login == login && r.State != "PENDING" {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // prForBranch asks gh for the PR whose head is branch in repo (owner/repo),
 // including its CI rollup. It returns nil (and no error) when gh finds no PR
 // for the branch — the ordinary "pushed but not PR'd yet" or "no such branch"

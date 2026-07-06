@@ -93,11 +93,19 @@ func downRefusal(reason string) error {
 // workspace WIP check it always asks GitHub, which is what lets `rig down`
 // refuse on an OPEN PR even when the workspace holds no local commits — the
 // disjoint secondary-PR case reap's lazy path skips. A branch with no PR doesn't
-// block (nothing to merge); a gh error blocks, fail-closed.
+// block (nothing to merge); a gh error blocks, fail-closed. Review rigs are
+// exempt — merge state isn't their terminal condition (see below).
 func unmergedPRsBlocker(basedir string) string {
 	m, err := readManifest(basedir)
 	if err != nil {
 		return fmt.Sprintf("reading manifest: %v", err)
+	}
+	// Review rigs are exempt: an OPEN PR is the whole point of reviewing it, not
+	// a reason to keep the basedir. Their terminal condition ("you've posted a
+	// review") is enforced by the shared rigTeardownBlocker, so this eager
+	// all-PRs-merged gate would only ever wrongly refuse them.
+	if m.isReview() {
+		return ""
 	}
 	subdirs := make([]string, 0, len(m.Repos))
 	for sub := range m.Repos {

@@ -53,7 +53,7 @@ func runReview(args []string) error {
 		return err
 	}
 
-	m := manifest{ID: rigID, Title: title}
+	m := manifest{ID: rigID, Title: title, Kind: "review"}
 	if err := createBasedir(basedir, m); err != nil {
 		return err
 	}
