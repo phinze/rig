@@ -29,11 +29,12 @@ import (
 //
 // It doubles as the universal picker that replaces tmux-session-wizard: rigs and
 // every non-rig tmux session share one flat list, most-recently-touched first,
-// each dangling its live claude windows as a HUD of what's in flight. The board
-// is modal like k9s: bare letters are verbs (n opens a NEW picker that stands up
-// a session at a zoxide dir, R refreshes, q quits), and `/` drops into a fuzzy
-// filter that ranks the whole board best-match-first. The NEW picker is where
-// `rig up` and `rig review` will grow their own sources.
+// each dangling its live claude windows as a HUD of what's in flight. You just
+// type to fuzzy-filter — the list ranks best-match-first and the matched runes
+// bold in place — with the verbs on modifier keys so they never fight the query:
+// ctrl+t opens a NEW picker that stands up a session at a zoxide dir, ctrl+r
+// refreshes, esc clears a live query then quits. The NEW picker is where `rig up`
+// and `rig review` will grow their own sources.
 func runRadar(args []string) error {
 	if len(args) != 0 {
 		return fmt.Errorf("usage: rig radar")
@@ -140,15 +141,15 @@ type radarModel struct {
 	scanErr error
 }
 
-// radarMode is the picker's input mode. The board defaults to command keys
-// (letters are verbs); a slash drops into filter entry where letters are text;
-// n opens the NEW picker, a create-a-session view that's always filter-entry.
+// radarMode is the picker's input mode. The board is always type-to-filter:
+// printable keys narrow the list live and the verbs ride modifier keys so they
+// don't collide with the query. ctrl+t opens the NEW picker, a create-a-session
+// view that's likewise type-to-find.
 type radarMode int
 
 const (
-	modeBoard       radarMode = iota // sections, command keys, / to filter
-	modeBoardFilter                  // board narrowed by a live fuzzy query
-	modeNew                          // NEW picker: zoxide dirs → fresh session
+	modeBoard radarMode = iota // the board: type to filter, verbs on modifiers
+	modeNew                    // NEW picker: zoxide dirs → fresh session
 )
 
 type radarScanMsg struct {
@@ -383,10 +384,10 @@ func (m radarModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// handleKey drives the picker in always-on filter mode, the way session-wizard's
-// fzf did. The board proper is modal — letters are verbs (n new, R refresh, q
-// quit), and a slash drops into filter entry — while the filter and NEW modes
-// are pure text entry, where letters narrow the list and esc walks back out.
+// handleKey drives the picker as an always-on fuzzy filter, the way session-
+// wizard's fzf did: printable keys narrow the list, the cursor rides the best
+// match, and the verbs live on modifier keys so they never collide with the
+// query. The NEW picker is the same grammar over zoxide dirs.
 func (m radarModel) handleKey(key string) (radarModel, tea.Cmd) {
 	// Keys shared by every mode: move, select, hard-quit.
 	switch key {
@@ -411,34 +412,35 @@ func (m radarModel) handleKey(key string) (radarModel, tea.Cmd) {
 		m.chosen = &s
 		return m, tea.Quit
 	}
-	if m.mode == modeBoard {
-		return m.handleBoardKey(key)
+	if m.mode == modeNew {
+		return m.handleNewKey(key)
 	}
-	return m.handleTypingKey(key)
+	return m.handleBoardKey(key)
 }
 
-// handleBoardKey runs the command-mode board: bare letters are verbs, so the
-// keymap reads like a launcher rather than a search box.
+// handleBoardKey runs the board: printable runes narrow the filter, the verbs
+// hang off modifiers (ctrl+t new, ctrl+r refresh), and esc clears a live query
+// before it quits so a search is never one keystroke from dropping the popup.
 func (m radarModel) handleBoardKey(key string) (radarModel, tea.Cmd) {
 	switch key {
-	case "q", "esc":
+	case "esc":
+		if m.filter != "" {
+			m.setFilter("")
+			return m, nil
+		}
 		return m, tea.Quit
-	case "j":
-		if m.cursor < len(m.rows())-1 {
-			m.cursor++
+	case "ctrl+u":
+		m.setFilter("")
+	case "backspace":
+		if r := []rune(m.filter); len(r) > 0 {
+			m.setFilter(string(r[:len(r)-1]))
 		}
-	case "k":
-		if m.cursor > 0 {
-			m.cursor--
-		}
-	case "/":
-		m.enter(modeBoardFilter)
-	case "n":
+	case "ctrl+t":
 		// Fetch the frecency list once, when the picker opens, so the board's
 		// 2s tick never pays for it.
 		m.newDirs = zoxideDirs()
 		m.enter(modeNew)
-	case "R":
+	case "ctrl+r":
 		// Refetch every rig's PRs; stale cells keep showing until the fresh
 		// answer lands rather than flashing back to "…".
 		var cmds []tea.Cmd
@@ -450,13 +452,15 @@ func (m radarModel) handleBoardKey(key string) (radarModel, tea.Cmd) {
 			cmds = append(cmds, radarFetchCmd(s))
 		}
 		return m, tea.Batch(cmds...)
+	default:
+		m = m.typeInto(key)
 	}
 	return m, nil
 }
 
-// handleTypingKey runs the filter and NEW modes: printable runes narrow the
-// list, backspace trims, esc walks back to the board.
-func (m radarModel) handleTypingKey(key string) (radarModel, tea.Cmd) {
+// handleNewKey runs the NEW picker: printable runes narrow the dir list, esc
+// walks back to the board.
+func (m radarModel) handleNewKey(key string) (radarModel, tea.Cmd) {
 	switch key {
 	case "esc":
 		m.enter(modeBoard)
@@ -467,13 +471,18 @@ func (m radarModel) handleTypingKey(key string) (radarModel, tea.Cmd) {
 			m.setFilter(string(r[:len(r)-1]))
 		}
 	default:
-		// Any lone printable rune is filter input. Named keys (tab, f-keys)
-		// arrive as multi-rune strings and fall through untouched.
-		if r := []rune(key); len(r) == 1 && unicode.IsGraphic(r[0]) {
-			m.setFilter(m.filter + key)
-		}
+		m = m.typeInto(key)
 	}
 	return m, nil
+}
+
+// typeInto appends a lone printable rune to the filter. Named keys (tab, f-keys,
+// arrows) arrive as multi-rune strings and are left untouched.
+func (m radarModel) typeInto(key string) radarModel {
+	if r := []rune(key); len(r) == 1 && unicode.IsGraphic(r[0]) {
+		m.setFilter(m.filter + key)
+	}
+	return m
 }
 
 // enter switches modes with a clean slate: the query resets and the cursor
@@ -647,10 +656,10 @@ type radarLine struct {
 
 // displayItems is the single ordered list both the cursor and the renderer read,
 // so the two never drift. In board mode it's one flat list — rigs and sessions
-// together, most-recently-touched first — with each parent's live claude windows
-// dangled beneath it; under a filter it collapses to one ranked list of parents
-// (children are the resting HUD, not part of the hunt); the NEW picker is its own
-// header plus create-rows.
+// together, most-recently-touched first, or fuzzy-ranked best-match-first once a
+// filter is typed — with each surviving parent's live claude windows dangled
+// beneath it either way, so the HUD holds through a search. The NEW picker is its
+// own header plus create-rows.
 func (m radarModel) displayItems() []radarLine {
 	var items []radarLine
 	parent := func(p rigStatus) {
@@ -685,12 +694,8 @@ func (m radarModel) displayItems() []radarLine {
 		for _, s := range m.rankRows(m.newRows()) {
 			items = append(items, radarLine{row: s})
 		}
-	case modeBoardFilter:
-		for _, s := range m.rankRows(m.rigRows(), m.sessions) {
-			items = append(items, radarLine{row: s})
-		}
 	default: // modeBoard
-		for _, p := range m.boardRows() {
+		for _, p := range m.orderedParents() {
 			parent(p)
 		}
 	}
@@ -710,6 +715,17 @@ func (m radarModel) boardRows() []rigStatus {
 		return m.recency(all[i]) > m.recency(all[j])
 	})
 	return all
+}
+
+// orderedParents is the board's parent rows in display order: most-recently-
+// touched when the query is empty, fuzzy-ranked best-match-first once it isn't.
+// Children dangle under whichever parents survive, so typing narrows the board
+// without flattening the HUD.
+func (m radarModel) orderedParents() []rigStatus {
+	if m.filter == "" {
+		return m.boardRows()
+	}
+	return m.rankRows(m.inflight, m.parked, m.sessions)
 }
 
 // recency is a row's most-recent-touch stamp: when its tmux session was last
@@ -866,14 +882,85 @@ func stripAgentGlyph(title string) string {
 	return title
 }
 
-// radarHaystack is the text a row is fuzzy-matched against: a rig by its id and
-// title, a bare session or create-row by its path-title (plus the session name
-// for a bare row, since that's what you'd half-remember typing).
-func radarHaystack(s rigStatus) string {
+// hayField is one segment of a row's fuzzy haystack, tagged with the rendered
+// column it maps back to ("id", "title") or "" when it's match-only text with no
+// cell of its own (a bare session's raw name). The tag is what lets a match light
+// up the exact runes it landed on.
+type hayField struct {
+	text  string
+	field string
+}
+
+// radarHayFields is a row's fuzzy haystack split into rendered fields: a rig by
+// its id and title, a bare session or create-row by its path-title plus the raw
+// session name (what you'd half-remember typing, though it has no column to
+// bold).
+func radarHayFields(s rigStatus) []hayField {
 	if s.bare {
-		return s.Title + " " + s.session
+		return []hayField{{s.Title, "title"}, {s.session, ""}}
 	}
-	return s.ID + " " + s.Title
+	return []hayField{{s.ID, "id"}, {s.Title, "title"}}
+}
+
+// radarHaystack is the flat text a row is fuzzy-matched against: its fields
+// joined by spaces.
+func radarHaystack(s rigStatus) string {
+	fields := radarHayFields(s)
+	parts := make([]string, len(fields))
+	for i, f := range fields {
+		parts[i] = f.text
+	}
+	return strings.Join(parts, " ")
+}
+
+// radarMatchFields buckets the query's matched haystack positions back into the
+// rendered id and title columns, so renderRow can bold exactly the runes that
+// matched. Positions on the joining spaces or in a match-only field (a bare
+// session's name) have no cell and are dropped.
+func radarMatchFields(query string, s rigStatus) (idHits, titleHits map[int]bool) {
+	idHits, titleHits = map[int]bool{}, map[int]bool{}
+	if query == "" {
+		return
+	}
+	fields := radarHayFields(s)
+	var runes []rune
+	starts := make([]int, len(fields))
+	for i, f := range fields {
+		if i > 0 {
+			runes = append(runes, ' ')
+		}
+		starts[i] = len(runes)
+		runes = append(runes, []rune(f.text)...)
+	}
+	hits := fuzzyPositions(query, string(runes))
+	for i, f := range fields {
+		start, n := starts[i], len([]rune(f.text))
+		for p := range hits {
+			if p < start || p >= start+n {
+				continue
+			}
+			switch f.field {
+			case "id":
+				idHits[p-start] = true
+			case "title":
+				titleHits[p-start] = true
+			}
+		}
+	}
+	return
+}
+
+// fuzzyPositions is the set of haystack rune indices the query matched, unioned
+// across its space-separated terms — the highlight companion to fuzzyScore.
+func fuzzyPositions(query, hay string) map[int]bool {
+	hits := map[int]bool{}
+	lower := strings.ToLower(hay)
+	for term := range strings.FieldsSeq(strings.ToLower(query)) {
+		for _, p := range matchPositions(term, lower) {
+			hits[p] = true
+		}
+	}
+	return hits
 }
 
 // fuzzyMatch reports whether a row survives the query at all (used where only
@@ -936,19 +1023,12 @@ func matchBonus(prev rune) float64 {
 	}
 }
 
-// matchScore aligns needle against hay with a two-matrix DP (fzy's): D[i][j] is
-// the best score ending with needle[i] on hay[j], M[i][j] the best over
-// hay[0..j]. Returns (score, true) or (0, false) when needle isn't a
-// subsequence at all. Cost is O(len(needle)·len(hay)); both are short here.
-func matchScore(needle, hay string) (float64, bool) {
-	nr, hr := []rune(needle), []rune(hay)
+// matchMatrices runs fzy's two-matrix DP of needle against hay: D[i][j] is the
+// best score ending with needle[i] aligned on hay[j], M[i][j] the best over
+// hay[0..j]. Both callers — the score and the highlight backtrace — share it.
+// Caller guarantees 0 < len(needle) <= len(hay).
+func matchMatrices(nr, hr []rune) (D, M [][]float64) {
 	n, m := len(nr), len(hr)
-	if n == 0 {
-		return 0, true
-	}
-	if n > m {
-		return 0, false
-	}
 
 	// Boundary bonus per haystack position; the string start counts as a slash
 	// so a leading match is treated as a segment start.
@@ -960,8 +1040,8 @@ func matchScore(needle, hay string) (float64, bool) {
 	}
 
 	negInf := math.Inf(-1)
-	D := make([][]float64, n)
-	M := make([][]float64, n)
+	D = make([][]float64, n)
+	M = make([][]float64, n)
 	for i := range D {
 		D[i] = make([]float64, m)
 		M[i] = make([]float64, m)
@@ -991,11 +1071,64 @@ func matchScore(needle, hay string) (float64, bool) {
 			}
 		}
 	}
+	return D, M
+}
+
+// matchScore aligns needle against hay with fzy's DP and returns the total
+// score, or (0, false) when needle isn't a subsequence of hay at all. Cost is
+// O(len(needle)·len(hay)); both are short here.
+func matchScore(needle, hay string) (float64, bool) {
+	nr, hr := []rune(needle), []rune(hay)
+	n, m := len(nr), len(hr)
+	if n == 0 {
+		return 0, true
+	}
+	if n > m {
+		return 0, false
+	}
+	_, M := matchMatrices(nr, hr)
 	final := M[n-1][m-1]
 	if math.IsInf(final, -1) {
 		return 0, false
 	}
 	return final, true
+}
+
+// matchPositions returns, for a matching needle, the hay rune index each needle
+// rune aligns to under the optimal score — fzy's backtrace through the same DP
+// matchScore rates. Nil when needle isn't a subsequence. It walks the rows back
+// to front, taking the cell that realized M's best and locking onto consecutive
+// runs (a match that earned the consecutive bonus must have had its predecessor
+// adjacent), which reproduces the alignment the score rewarded.
+func matchPositions(needle, hay string) []int {
+	nr, hr := []rune(needle), []rune(hay)
+	n, m := len(nr), len(hr)
+	if n == 0 || n > m {
+		return nil
+	}
+	D, M := matchMatrices(nr, hr)
+	if math.IsInf(M[n-1][m-1], -1) {
+		return nil
+	}
+	positions := make([]int, n)
+	matchRequired := false
+	j := m - 1
+	for i := n - 1; i >= 0; i-- {
+		for ; j >= 0; j-- {
+			if math.IsInf(D[i][j], -1) {
+				continue
+			}
+			if matchRequired || D[i][j] == M[i][j] {
+				if i > 0 && j > 0 && M[i][j] == D[i-1][j-1]+scoreMatchConsecutive {
+					matchRequired = true
+				}
+				positions[i] = j
+				j--
+				break
+			}
+		}
+	}
+	return positions
 }
 
 func prsFetched(prs map[string][]rigPR, slug string) bool {
@@ -1024,6 +1157,7 @@ var (
 	radarWarnStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
 	radarDoneStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("5"))
 	radarErrStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Faint(true)
+	radarMatchStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Bold(true)
 )
 
 // radarStateStyle colors a state word by urgency: red for what wants you
@@ -1150,23 +1284,24 @@ func radarTailSegs(s rigStatus, fetched bool) []tailSeg {
 }
 
 func (m radarModel) View() string {
-	// In the typing modes a prompt rides at the top so the query is always where
-	// fzf trained the eye, and stays put while the list below narrows. The board
-	// proper is command-mode, so it shows no prompt.
-	typing := m.mode == modeBoardFilter || m.mode == modeNew
+	// A prompt rides at the top whenever there's a query to show (or the NEW
+	// picker, which is a search from the moment it opens), so the text lands
+	// where fzf trained the eye and stays put while the list below narrows. The
+	// resting board shows no prompt — it reads as a clean HUD until you type.
+	typing := m.mode == modeNew || m.filter != ""
 	prompt := ""
 	if typing {
 		prompt = radarFaintStyle.Render("/ ") + m.filter + radarFaintStyle.Render("▌") + "\n\n"
 	}
 
 	var footer string
-	switch m.mode {
-	case modeBoardFilter:
-		footer = radarFaintStyle.Render("type to filter · enter go · esc back")
-	case modeNew:
+	switch {
+	case m.mode == modeNew:
 		footer = radarFaintStyle.Render("type to find · enter start session · esc back")
+	case m.filter != "":
+		footer = radarFaintStyle.Render("type to filter · enter go · esc clear")
 	default:
-		footer = radarFaintStyle.Render("j/k move · enter go · / filter · n new · R refresh · q quit")
+		footer = radarFaintStyle.Render("type filter · enter go · ^t new · ^r refresh · esc quit")
 	}
 
 	items := m.displayItems()
@@ -1178,15 +1313,15 @@ func (m radarModel) View() string {
 	}
 	if selectable == 0 {
 		msg := "  nothing to pick"
-		switch m.mode {
-		case modeBoardFilter:
-			msg = radarFaintStyle.Render("  no matches")
-		case modeNew:
+		switch {
+		case m.mode == modeNew:
 			if len(m.newDirs) == 0 {
 				msg = radarFaintStyle.Render("  no zoxide history")
 			} else {
 				msg = radarFaintStyle.Render("  no matches")
 			}
+		case m.filter != "":
+			msg = radarFaintStyle.Render("  no matches")
 		}
 		return "\n" + prompt + msg + "\n\n" + footer + "\n"
 	}
@@ -1237,14 +1372,29 @@ func (m radarModel) View() string {
 
 		if selected {
 			// One style over the whole line: inner color resets would chew
-			// through a wrapping reverse, so the selected row goes plain.
+			// through a wrapping reverse, so the selected row goes plain — the
+			// reverse-video already marks it, no match bolding needed.
 			plain := fmt.Sprintf("▸ %-*s  %-*s  %s  %-*s  %s",
 				wID, s.ID, wAge, age(s.Created), glyph, wTitle, title, strings.Join(plainTail, "  "))
 			return radarCursorStyle.Render(strings.TrimRight(plain, " "))
 		}
-		return fmt.Sprintf("  %-*s  %-*s  %s  %-*s  %s",
-			wID, s.ID, wAge, age(s.Created), gstyle.Render(glyph),
-			wTitle, title, strings.Join(styledTail, "  "))
+		// Bold the runes the query matched, in the id and title cells. Because a
+		// highlighted cell carries ANSI, pad by display width (padRight) rather
+		// than fmt's %-*s, which would count the escape bytes.
+		idCell, titleCell := s.ID, title
+		if m.filter != "" {
+			idHits, titleHits := radarMatchFields(m.filter, s)
+			idCell = highlightRunes(s.ID, idHits)
+			titleCell = highlightRunes(title, titleHits)
+		}
+		line := "  " + padRight(idCell, wID) + "  " +
+			padRight(age(s.Created), wAge) + "  " +
+			gstyle.Render(glyph) + "  " +
+			padRight(titleCell, wTitle)
+		if tail := strings.Join(styledTail, "  "); tail != "" {
+			line += "  " + tail
+		}
+		return line
 	}
 
 	// renderChild draws a dangled agent line: an indented tree branch, a working
@@ -1361,7 +1511,7 @@ func (m radarModel) View() string {
 // height isn't known yet (no windowing). The mouse handler subtracts the same so
 // a click lines up with the row drawn under it.
 func (m radarModel) viewportChrome() (promptRows, budget int) {
-	typing := m.mode == modeBoardFilter || m.mode == modeNew
+	typing := m.mode == modeNew || m.filter != ""
 	if typing {
 		promptRows = 2 // prompt line + blank
 	}
@@ -1428,6 +1578,42 @@ func windowBody(n, cursorLine, budget int) (int, int) {
 		start = 0
 	}
 	return start, start + budget
+}
+
+// highlightRunes bolds the runes of s at the given indices, leaving the rest
+// verbatim, so a fuzzy match lights up exactly where it landed. Consecutive hits
+// render as one styled run. No hits returns s untouched.
+func highlightRunes(s string, hits map[int]bool) string {
+	if len(hits) == 0 {
+		return s
+	}
+	runes := []rune(s)
+	var b strings.Builder
+	for i := 0; i < len(runes); {
+		hit := hits[i]
+		j := i
+		for j < len(runes) && hits[j] == hit {
+			j++
+		}
+		seg := string(runes[i:j])
+		if hit {
+			b.WriteString(radarMatchStyle.Render(seg))
+		} else {
+			b.WriteString(seg)
+		}
+		i = j
+	}
+	return b.String()
+}
+
+// padRight pads s to w display cells with trailing spaces, counting display
+// width so any ANSI styling in s doesn't throw the padding off. It stands in for
+// fmt's %-*s wherever a cell may carry match highlighting.
+func padRight(s string, w int) string {
+	if gap := w - lipgloss.Width(s); gap > 0 {
+		return s + strings.Repeat(" ", gap)
+	}
+	return s
 }
 
 // radarTruncate clips s to width cells (rune-counted — close enough for issue

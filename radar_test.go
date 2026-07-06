@@ -231,11 +231,68 @@ func TestMatchScoreRanking(t *testing.T) {
 	}
 }
 
+// matchPositions marks the runes the needle aligned to, preferring the
+// consecutive, boundary-aligned run the score rewards over a scattered earlier
+// subsequence — so highlighting lands on the obvious match.
+func TestMatchPositions(t *testing.T) {
+	// "rig" in "/rig" is the trailing three runes, not the stray r/i/g.
+	got := matchPositions("rig", "/rig")
+	want := []int{1, 2, 3}
+	if len(got) != len(want) {
+		t.Fatalf("positions = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("positions = %v, want %v", got, want)
+		}
+	}
+	if matchPositions("zzz", "/rig") != nil {
+		t.Error("non-subsequence should yield nil positions")
+	}
+}
+
+// radarMatchFields buckets matched positions into the rendered columns: a rig
+// lights up its id and title, while the joining space and a bare session's raw
+// name (no column of their own) never do.
+func TestRadarMatchFields(t *testing.T) {
+	s := rigStatus{ID: "MIR-1", Title: "add radar"}
+	idHits, titleHits := radarMatchFields("mir radar", s)
+	for _, i := range []int{0, 1, 2} { // "mir" at the head of the id
+		if !idHits[i] {
+			t.Errorf("id rune %d not highlighted", i)
+		}
+	}
+	for _, i := range []int{4, 5, 6, 7, 8} { // "radar" run in the title ("add ")
+		if !titleHits[i] {
+			t.Errorf("title rune %d not highlighted", i)
+		}
+	}
+
+	// A bare session matched only through its raw name lights up no cell.
+	b := bareSession(tmuxSession{Name: "notes-box", Path: "/n"}, "")
+	_, tHits := radarMatchFields("box", b)
+	if len(tHits) != 0 {
+		t.Errorf("session-name-only match lit the title: %v", tHits)
+	}
+}
+
+// highlightRunes bolds only the hit runes, coalescing a consecutive run into one
+// styled segment and leaving an unmatched string untouched.
+func TestHighlightRunes(t *testing.T) {
+	if got := highlightRunes("plain", nil); got != "plain" {
+		t.Errorf("no hits should pass through: got %q", got)
+	}
+	got := highlightRunes("radar", map[int]bool{0: true, 1: true})
+	want := radarMatchStyle.Render("ra") + "dar"
+	if got != want {
+		t.Errorf("highlightRunes = %q, want %q", got, want)
+	}
+}
+
 // Under a filter, rows() collapses to one list ranked best-first: the exact-ish
 // hit sorts above the scattered one regardless of section order.
 func TestRankedRowsOrder(t *testing.T) {
 	m := radarModel{
-		mode: modeBoardFilter,
 		sessions: []rigStatus{
 			bareSession(tmuxSession{Name: "raging", Path: "/raging"}, ""),
 			bareSession(tmuxSession{Name: "rig", Path: "/rig"}, ""),
@@ -297,7 +354,6 @@ func TestRadarFilterRows(t *testing.T) {
 		t.Fatalf("rigRows = %d, want 2", got)
 	}
 
-	m.mode = modeBoardFilter
 	m.filter = "radar"
 	rows := m.rows()
 	if len(rows) != 1 || rows[0].Slug != "a" {
@@ -435,48 +491,45 @@ func TestRadarNewPickerNoCap(t *testing.T) {
 // Switching modes wipes the query and snaps the cursor to the top, so each mode
 // opens clean on its first row.
 func TestRadarEnterMode(t *testing.T) {
-	m := radarModel{mode: modeBoardFilter, filter: "stale", cursor: 4}
+	m := radarModel{mode: modeBoard, filter: "stale", cursor: 4}
 	m.enter(modeNew)
 	if m.mode != modeNew || m.filter != "" || m.cursor != 0 {
 		t.Errorf("enter(modeNew) = {mode:%d filter:%q cursor:%d}, want {new empty 0}", m.mode, m.filter, m.cursor)
 	}
 }
 
-// Drive the mode state machine through keystrokes: the board is command-mode
-// (letters are verbs), `/` opens filter entry where letters are text, esc walks
-// back, and `n` opens the NEW picker. Guards the wiring the UI depends on.
+// Drive the input state machine through keystrokes: the board is always a fuzzy
+// filter (printable keys narrow it), backspace trims, esc clears a live query
+// before it would quit, and ctrl+t opens the NEW picker. Guards the wiring the
+// UI depends on.
 func TestRadarKeyFlow(t *testing.T) {
 	m := radarModel{
 		inflight: []rigStatus{{Slug: "a", ID: "PROJ-1", Title: "add radar"}},
 	}
 
-	// A bare letter on the board is a command, not filter input.
-	m, _ = m.handleKey("x")
-	if m.mode != modeBoard || m.filter != "" {
-		t.Fatalf("letter on board leaked into filter: mode=%d filter=%q", m.mode, m.filter)
-	}
-
-	// Slash opens filter entry; now letters are text.
-	m, _ = m.handleKey("/")
-	if m.mode != modeBoardFilter {
-		t.Fatalf("/ did not open filter: mode=%d", m.mode)
-	}
+	// Bare letters land straight in the filter — no mode to enter first.
 	m, _ = m.handleKey("r")
 	m, _ = m.handleKey("a")
-	if m.filter != "ra" {
-		t.Fatalf("filter = %q, want ra", m.filter)
+	if m.mode != modeBoard || m.filter != "ra" {
+		t.Fatalf("typing did not filter the board: mode=%d filter=%q", m.mode, m.filter)
 	}
 
-	// esc walks back to the board and clears the query.
+	// Backspace trims the query a rune at a time.
+	m, _ = m.handleKey("backspace")
+	if m.filter != "r" {
+		t.Fatalf("backspace: filter = %q, want r", m.filter)
+	}
+
+	// esc with a live query clears it but stays on the board.
 	m, _ = m.handleKey("esc")
 	if m.mode != modeBoard || m.filter != "" {
-		t.Fatalf("esc did not return to a clean board: mode=%d filter=%q", m.mode, m.filter)
+		t.Fatalf("esc did not clear to a clean board: mode=%d filter=%q", m.mode, m.filter)
 	}
 
-	// n opens the NEW picker.
-	m, _ = m.handleKey("n")
+	// ctrl+t opens the NEW picker; esc walks back out.
+	m, _ = m.handleKey("ctrl+t")
 	if m.mode != modeNew {
-		t.Fatalf("n did not open NEW picker: mode=%d", m.mode)
+		t.Fatalf("ctrl+t did not open NEW picker: mode=%d", m.mode)
 	}
 	m, _ = m.handleKey("esc")
 	if m.mode != modeBoard {
@@ -550,13 +603,21 @@ func TestDisplayItemsChildren(t *testing.T) {
 		t.Errorf("child switch target = %q, want s:0", rows[1].session)
 	}
 
-	// Under a filter the HUD collapses: children drop, parents only.
-	m.mode = modeBoardFilter
-	m.filter = "build"
-	for _, r := range m.rows() {
+	// Under a filter the HUD holds: a matched parent still dangles its children,
+	// and rows that miss drop out entirely.
+	m.filter = "build" // matches the rig "build the thing", not the meet session
+	frows := m.rows()
+	if len(frows) != 3 { // matched parent + its two children
+		t.Fatalf("filtered rows = %d, want 3 (matched parent keeps its HUD)", len(frows))
+	}
+	kids := 0
+	for _, r := range frows {
 		if r.child {
-			t.Error("filter mode should not surface child rows")
+			kids++
 		}
+	}
+	if kids != 2 {
+		t.Errorf("filtered children = %d, want 2", kids)
 	}
 }
 
