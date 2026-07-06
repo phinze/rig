@@ -289,6 +289,23 @@ func TestHighlightRunes(t *testing.T) {
 	}
 }
 
+// highlightRunesBase wraps each un-matched run in the base style (so a faint
+// child line keeps its faint between bolded hits, no reset bleed) while hits
+// still get the match style. A nil base is plain passthrough.
+func TestHighlightRunesBase(t *testing.T) {
+	if got := highlightRunesBase("plain", nil, nil); got != "plain" {
+		t.Errorf("nil base, no hits should pass through: got %q", got)
+	}
+	if got := highlightRunesBase("radar", nil, &radarFaintStyle); got != radarFaintStyle.Render("radar") {
+		t.Errorf("no hits with a base should render the whole string faint: got %q", got)
+	}
+	got := highlightRunesBase("radar", map[int]bool{0: true, 1: true}, &radarFaintStyle)
+	want := radarMatchStyle.Render("ra") + radarFaintStyle.Render("dar")
+	if got != want {
+		t.Errorf("highlightRunesBase = %q, want %q", got, want)
+	}
+}
+
 // Under a filter, rows() collapses to one list ranked best-first: the exact-ish
 // hit sorts above the scattered one regardless of section order.
 func TestRankedRowsOrder(t *testing.T) {
@@ -308,6 +325,34 @@ func TestRankedRowsOrder(t *testing.T) {
 	}
 	if m.cursor != 0 {
 		t.Errorf("cursor = %d, want 0 (snapped to best)", m.cursor)
+	}
+}
+
+// A row is findable by its live agent's task context, not just its path/title:
+// two near-identical dev-session paths both match "ups" through path junk, but
+// the one whose agent is doing "Evaluate UPS options" carries a clean
+// consecutive hit and must rank first. Guards the fix for bare sessions being
+// searched by directory instead of the task text the board actually shows.
+func TestRankByAgentContext(t *testing.T) {
+	nix := rigStatus{
+		bare: true, session: "~/src/github.com/phinze/nix-config",
+		Title:  "~/src/github.com/phinze/nix-config",
+		agents: []agentChild{{Context: "Evaluate UPS options for homelab rack"}},
+	}
+	media := rigStatus{
+		bare: true, session: "~/src/github.com/phinze/media-stuff",
+		Title: "~/src/github.com/phinze/media-stuff",
+	}
+	// Sanity: the decoy really does match "ups" on its path alone, so the win
+	// below is the agent context outscoring it, not the decoy dropping out.
+	if !fuzzyMatch("ups", radarHaystack(media)) {
+		t.Fatal("expected the decoy path to match ups on its own")
+	}
+	m := radarModel{sessions: []rigStatus{media, nix}}
+	m.setFilter("ups")
+	rows := m.rows()
+	if len(rows) == 0 || rows[0].session != nix.session {
+		t.Fatalf("best match = %+v, want the nix-config row (agent context win)", rows[0])
 	}
 }
 

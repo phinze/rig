@@ -894,12 +894,23 @@ type hayField struct {
 // radarHayFields is a row's fuzzy haystack split into rendered fields: a rig by
 // its id and title, a bare session or create-row by its path-title plus the raw
 // session name (what you'd half-remember typing, though it has no column to
-// bold).
+// bold). Each live agent's task context rides along too, so a row is findable by
+// the text the board actually shows on its dangled children — "Evaluate UPS
+// options", not just the repo path. Those are match-only (no column of their
+// own): the hit lights up on the child row that carries the words, not up here.
 func radarHayFields(s rigStatus) []hayField {
+	var fields []hayField
 	if s.bare {
-		return []hayField{{s.Title, "title"}, {s.session, ""}}
+		fields = []hayField{{s.Title, "title"}, {s.session, ""}}
+	} else {
+		fields = []hayField{{s.ID, "id"}, {s.Title, "title"}}
 	}
-	return []hayField{{s.ID, "id"}, {s.Title, "title"}}
+	for _, c := range s.agents {
+		if ctx := strings.TrimSpace(c.Context); ctx != "" {
+			fields = append(fields, hayField{ctx, ""})
+		}
+	}
+	return fields
 }
 
 // radarHaystack is the flat text a row is fuzzy-matched against: its fields
@@ -1446,10 +1457,18 @@ func (m radarModel) View() string {
 		if s.childKey != "" {
 			out += radarFaintStyle.Render(s.childKey + "  ")
 		}
+		// Bold the runes the query matched — this is the row the search text you
+		// typed actually lives on (folded into the parent's haystack so the parent
+		// surfaces; lit up here where you read it). Positions are taken against the
+		// already-truncated label so the indices line up.
+		var hits map[int]bool
+		if m.filter != "" {
+			hits = fuzzyPositions(m.filter, label)
+		}
 		if working {
-			out += label
+			out += highlightRunes(label, hits)
 		} else {
-			out += radarFaintStyle.Render(label)
+			out += highlightRunesBase(label, hits, &radarFaintStyle)
 		}
 		return out
 	}
@@ -1584,8 +1603,23 @@ func windowBody(n, cursorLine, budget int) (int, int) {
 // verbatim, so a fuzzy match lights up exactly where it landed. Consecutive hits
 // render as one styled run. No hits returns s untouched.
 func highlightRunes(s string, hits map[int]bool) string {
+	return highlightRunesBase(s, hits, nil)
+}
+
+// highlightRunesBase is highlightRunes with a base style for the un-matched
+// runs, so a faint child line can still bold its matched runes without the match
+// style's reset bleeding the faint away for the rest of the string: each run,
+// matched or not, is wrapped on its own. base nil renders un-matched runs
+// verbatim (the plain highlightRunes behavior).
+func highlightRunesBase(s string, hits map[int]bool, base *lipgloss.Style) string {
+	render := func(seg string) string {
+		if base == nil {
+			return seg
+		}
+		return base.Render(seg)
+	}
 	if len(hits) == 0 {
-		return s
+		return render(s)
 	}
 	runes := []rune(s)
 	var b strings.Builder
@@ -1599,7 +1633,7 @@ func highlightRunes(s string, hits map[int]bool) string {
 		if hit {
 			b.WriteString(radarMatchStyle.Render(seg))
 		} else {
-			b.WriteString(seg)
+			b.WriteString(render(seg))
 		}
 		i = j
 	}
