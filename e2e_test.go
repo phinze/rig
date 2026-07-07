@@ -230,12 +230,18 @@ func TestReview(t *testing.T) {
 	mustRun(t, repoDir, env, "git", "commit", "-q", "--allow-empty", "-m", "pr work")
 	mustRun(t, repoDir, env, "git", "checkout", "-q", "main")
 
-	// Fake gh: only `gh pr view N -R owner/repo --json headRefName,title`.
+	// Fake gh: `gh pr view` reports the head branch, title, and an author who
+	// is NOT the current user, and `gh api user` names that current user — so
+	// the authorship split routes this pickup to review, not authoring.
 	ghScript := `#!/bin/sh
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
   cat <<JSON
-{"headRefName":"pr-branch","title":"fix the thing"}
+{"headRefName":"pr-branch","title":"fix the thing","author":{"login":"someoneelse"}}
 JSON
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "user" ]; then
+  echo "testuser"
   exit 0
 fi
 echo "fake gh: unsupported invocation $*" >&2
@@ -319,6 +325,128 @@ exit 1
 	}
 	if _, err := os.Stat(basedir); err == nil {
 		t.Errorf("basedir still exists after down")
+	}
+}
+
+// TestUpFromOwnPR exercises `rig up <pr-url>` where the PR is the current
+// user's: the authorship split routes it to authoring, not review. Same fake
+// repo + PR branch as TestReview, but gh reports the author as the current user,
+// so the rig comes out authoring (no kind=review) and lands on the branch you'd
+// keep pushing to.
+func TestUpFromOwnPR(t *testing.T) {
+	realTmux, err := exec.LookPath("tmux")
+	if err != nil {
+		t.Skip("tmux not installed")
+	}
+
+	home := t.TempDir()
+	bin := filepath.Join(home, "bin")
+	repoDir := filepath.Join(home, "src", "github.com", "fakeowner", "fakerepo")
+	rigBin := filepath.Join(home, "rig")
+
+	mustMkdir(t, bin)
+	mustMkdir(t, repoDir)
+
+	build := exec.Command("go", "build", "-o", rigBin, ".")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+
+	env := append(os.Environ(),
+		"HOME="+home,
+		"PATH="+bin+":"+os.Getenv("PATH"),
+		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.com",
+		"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@example.com",
+		"JJ_USER=Test", "JJ_EMAIL=test@example.com",
+	)
+
+	// Source repo with a main commit and a separate branch commit standing in
+	// for the PR head. resolveStartRev prefers branch@origin but falls back to
+	// the local branch, which is what it finds here (no origin remote).
+	mustRun(t, repoDir, env, "git", "init", "-q", "-b", "main")
+	mustRun(t, repoDir, env, "git", "commit", "-q", "--allow-empty", "-m", "init")
+	mustRun(t, repoDir, env, "git", "checkout", "-q", "-b", "pr-branch")
+	mustRun(t, repoDir, env, "git", "commit", "-q", "--allow-empty", "-m", "pr work")
+	mustRun(t, repoDir, env, "git", "checkout", "-q", "main")
+
+	// Fake gh: the PR's author IS the current user, so authorship routes to
+	// authoring. `gh api user` names that same login.
+	ghScript := `#!/bin/sh
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  cat <<JSON
+{"headRefName":"pr-branch","title":"fix the thing","author":{"login":"testuser"}}
+JSON
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "user" ]; then
+  echo "testuser"
+  exit 0
+fi
+echo "fake gh: unsupported invocation $*" >&2
+exit 1
+`
+	mustWriteExec(t, filepath.Join(bin, "gh"), ghScript)
+
+	ghqScript := fmt.Sprintf("#!/bin/sh\nif [ \"$1\" = \"root\" ]; then echo %s; exit 0; fi\nexit 0\n", filepath.Join(home, "src"))
+	mustWriteExec(t, filepath.Join(bin, "ghq"), ghqScript)
+
+	tmuxWrap := fmt.Sprintf("#!/bin/sh\nexec %s -L rig-e2e-up-pr \"$@\"\n", realTmux)
+	mustWriteExec(t, filepath.Join(bin, "tmux"), tmuxWrap)
+
+	sleeper := "#!/bin/sh\nexec sleep infinity\n"
+	mustWriteExec(t, filepath.Join(bin, "recto"), sleeper)
+	mustWriteExec(t, filepath.Join(bin, "claude"), sleeper)
+
+	t.Cleanup(func() {
+		_ = exec.Command(realTmux, "-L", "rig-e2e-up-pr", "kill-server").Run()
+	})
+
+	// --- rig up <url> --- run from $HOME; up resolves the repo from the PR.
+	upCmd := exec.Command(rigBin, "up", "https://github.com/fakeowner/fakerepo/pull/42")
+	upCmd.Dir = home
+	upCmd.Env = env
+	if out, err := upCmd.CombinedOutput(); err != nil {
+		t.Fatalf("rig up <own-pr>: %v\n%s", err, out)
+	}
+
+	basedir := filepath.Join(home, "workspaces", "pr-42-fix-the-thing")
+	manifest := string(mustReadFile(t, filepath.Join(basedir, ".rig.toml")))
+	if !strings.Contains(manifest, `id    = "pr-42"`) {
+		t.Errorf("manifest missing id:\n%s", manifest)
+	}
+	// The whole point: this is authoring, not review, so kind must be unset.
+	if strings.Contains(manifest, `kind  = "review"`) {
+		t.Errorf("own-PR pickup should be authoring, but manifest is kind=review:\n%s", manifest)
+	}
+	// The branch is recorded so pr/ls/reap resolve this rig's own PR.
+	if !strings.Contains(manifest, `fakerepo = ["pr-branch"]`) {
+		t.Errorf("manifest missing branch record:\n%s", manifest)
+	}
+
+	// Workspace sits on the PR branch commit, ready to keep pushing.
+	desc := mustOutput(t, filepath.Join(basedir, "fakerepo"), env, "jj", "log", "-r", "@-", "--no-graph", "-T", "description")
+	if !strings.Contains(desc, "pr work") {
+		t.Errorf("workspace not on PR branch; @- description was:\n%s", desc)
+	}
+
+	// Idempotent: a second `rig up` on the same PR switches instead of erroring.
+	reUp := exec.Command(rigBin, "up", "https://github.com/fakeowner/fakerepo/pull/42")
+	reUp.Dir = home
+	reUp.Env = env
+	if out, err := reUp.CombinedOutput(); err != nil {
+		t.Fatalf("second rig up <own-pr>: %v\n%s", err, out)
+	} else if !strings.Contains(string(out), "already up") {
+		t.Errorf("expected second up to switch to the existing rig, got:\n%s", out)
+	}
+
+	// Tear down so the temp HOME cleans up (the live session and workspace
+	// otherwise keep the dir busy). --force because this authoring rig's PR
+	// hasn't merged, which the guardrail would rightly block.
+	downCmd := exec.Command(rigBin, "down", "--force")
+	downCmd.Dir = basedir
+	downCmd.Env = env
+	if out, err := downCmd.CombinedOutput(); err != nil {
+		t.Fatalf("rig down --force: %v\n%s", err, out)
 	}
 }
 

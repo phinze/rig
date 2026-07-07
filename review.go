@@ -11,33 +11,74 @@ import (
 	"strings"
 )
 
-// runReview is the jreview sibling of runUp: it resolves a PR, makes sure the
-// repo is cloned and colocated, fetches the PR head (fork-safe), drops a jj
-// workspace on that branch, and spawns a recto --pr + /review-pr session.
+// runReview is the review half of the pickup pair: point it at someone else's
+// PR and it drops a read-only rig around it. A URL may turn out to be your own
+// PR, in which case pickupPR reroutes you to authoring (up); the no-arg picker
+// only ever offers review-requested PRs, which are others' by construction, so
+// it skips straight to the review pickup.
 func runReview(args []string) error {
-	pr, err := resolvePR(args)
+	if len(args) >= 1 {
+		pr := parsePRURL(args[0])
+		if pr == nil {
+			return fmt.Errorf("usage: rig review [https://github.com/OWNER/REPO/pull/NUMBER]")
+		}
+		return pickupPR(pr, "review")
+	}
+
+	pr, err := pickReviewPR()
 	if err != nil {
 		return err
 	}
 	if pr == nil {
 		return nil // picker cancelled
 	}
-
-	branch, title, err := prDetails(pr.Owner, pr.Repo, pr.Number)
+	meta, err := prDetails(pr.Owner, pr.Repo, pr.Number)
 	if err != nil {
 		return err
 	}
+	return reviewPickupPR(pr, meta)
+}
 
+// pickupPR materializes a rig around an existing PR, choosing authoring vs
+// review by who owns it. verb is the command the user reached for; when
+// authorship disagrees with it we say so and do the right thing anyway, because
+// "my work" has exactly one home (up) and "other work" exactly one (review).
+func pickupPR(pr *prRef, verb string) error {
+	meta, err := prDetails(pr.Owner, pr.Repo, pr.Number)
+	if err != nil {
+		return err
+	}
+	login, err := ghCurrentLogin()
+	if err != nil {
+		return err
+	}
+	mine := meta.Author != "" && strings.EqualFold(meta.Author, login)
+
+	if mine {
+		if verb == "review" {
+			fmt.Fprintf(os.Stderr, "rig: PR #%d is yours — picking it up to author, not review\n", pr.Number)
+		}
+		return authorPickupPR(pr, meta)
+	}
+	if verb == "up" {
+		fmt.Fprintf(os.Stderr, "rig: PR #%d isn't yours — setting up a review, not authoring\n", pr.Number)
+	}
+	return reviewPickupPR(pr, meta)
+}
+
+// reviewPickupPR builds a read-only review rig: the PR head fetched fork-safe
+// via pull/N/head, kind=review (done when you've posted a review, never gated
+// on merge), recto --pr showing just the branch's diff, and claude dropped
+// straight into /review-pr.
+func reviewPickupPR(pr *prRef, meta prMeta) error {
 	repoPath, err := ensureGhqClone(pr.Owner, pr.Repo)
 	if err != nil {
 		return err
 	}
-
 	if err := ensureJJColocated(repoPath); err != nil {
 		return fmt.Errorf("colocating jj on %s: %w", repoPath, err)
 	}
-
-	if err := fetchPRHead(repoPath, branch, pr.Number); err != nil {
+	if err := fetchPRHead(repoPath, meta.Branch, pr.Number); err != nil {
 		return err
 	}
 
@@ -47,26 +88,22 @@ func runReview(args []string) error {
 	// derives from the PR title (Linear-style id-plus-title shape) rather than
 	// the branch, which often embeds a whole ticket slug of its own.
 	rigID := fmt.Sprintf("pr-%d", pr.Number)
-	basedirName := taskSlug(rigID, title)
-	basedir, err := basedirPath(basedirName)
+	basedir, err := basedirPath(taskSlug(rigID, meta.Title))
 	if err != nil {
 		return err
 	}
 
-	m := manifest{ID: rigID, Title: title, Kind: "review"}
+	m := manifest{ID: rigID, Title: meta.Title, Kind: "review"}
 	if err := createBasedir(basedir, m); err != nil {
 		return err
 	}
 
 	repo := repoRef{Owner: pr.Owner, Name: pr.Repo, Path: repoPath}
-	repoDest, err := addRepoWorkspace(basedir, rigID, repo, branch, branch)
+	repoDest, err := addRepoWorkspace(basedir, rigID, repo, meta.Branch, meta.Branch)
 	if err != nil {
 		return err
 	}
 
-	// recto --pr shows just the branch's diff (merge-base against trunk), and
-	// claude jumps straight into the review skill since we're already parked
-	// on the PR branch in a dedicated workspace.
 	sess := sessionSpec{
 		rectoCmd: "recto --pr",
 		prompt: fmt.Sprintf(
@@ -83,6 +120,65 @@ func runReview(args []string) error {
 	return attachOrReport(session)
 }
 
+// authorPickupPR builds an authoring rig around your own PR: you're coming back
+// to keep working, not to review. It starts the workspace at branch@origin (via
+// resolveStartRev) so your pushed commits come back and you stay on a pushable
+// branch — the crucial difference from review's read-only pull/N/head — and
+// leaves kind unset (authoring: done when the work merges). Idempotent like
+// issue-up, so re-upping a PR whose rig exists (or was down'd) resurfaces it.
+func authorPickupPR(pr *prRef, meta prMeta) error {
+	rigID := fmt.Sprintf("pr-%d", pr.Number)
+	if done, err := attachExistingRig(rigID); err != nil {
+		return err
+	} else if done {
+		return nil
+	}
+
+	repoPath, err := ensureGhqClone(pr.Owner, pr.Repo)
+	if err != nil {
+		return err
+	}
+	if err := ensureJJColocated(repoPath); err != nil {
+		return fmt.Errorf("colocating jj on %s: %w", repoPath, err)
+	}
+
+	// Your branch lives on origin, so start there: resolveStartRev fetches then
+	// prefers branch@origin, recovering whatever you'd pushed even if the local
+	// rig was long gone. The durable state was always the PR plus origin.
+	startRev := resolveStartRev(repoPath, meta.Branch)
+
+	basedir, err := basedirPath(taskSlug(rigID, meta.Title))
+	if err != nil {
+		return err
+	}
+
+	m := manifest{ID: rigID, Title: meta.Title} // kind "" = authoring
+	if err := createBasedir(basedir, m); err != nil {
+		return err
+	}
+
+	repo := repoRef{Owner: pr.Owner, Name: pr.Repo, Path: repoPath}
+	repoDest, err := addRepoWorkspace(basedir, rigID, repo, startRev, meta.Branch)
+	if err != nil {
+		return err
+	}
+
+	sess := sessionSpec{
+		rectoCmd: "recto",
+		prompt: fmt.Sprintf(
+			"Resuming your PR #%d (%s) on its branch in a dedicated jj workspace. Read the PR and any review feedback, then help me address it.",
+			pr.Number, meta.Title,
+		),
+	}
+	session, err := spawnSession(basedir, repoDest, sess)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(os.Stderr, "rig: up %s/%s#%d — %s\n", pr.Owner, pr.Repo, pr.Number, basedir)
+	return attachOrReport(session)
+}
+
 type prRef struct {
 	Owner  string
 	Repo   string
@@ -91,19 +187,23 @@ type prRef struct {
 
 var prURLRe = regexp.MustCompile(`github\.com/([^/]+)/([^/]+)/pull/([0-9]+)`)
 
-// resolvePR turns `rig review` args into a PR reference. A GitHub PR URL is
-// parsed directly; no args opens an fzf picker over PRs awaiting your review.
-// Returns nil (no error) when the picker is cancelled.
-func resolvePR(args []string) (*prRef, error) {
-	if len(args) >= 1 {
-		m := prURLRe.FindStringSubmatch(args[0])
-		if m == nil {
-			return nil, fmt.Errorf("usage: rig review [https://github.com/OWNER/REPO/pull/NUMBER]")
-		}
-		n, _ := strconv.Atoi(m[3])
-		return &prRef{Owner: m[1], Repo: m[2], Number: n}, nil
+// parsePRURL pulls an owner/repo/number out of a GitHub PR URL, or returns nil
+// when the string isn't one. Shared by `rig up` (a PR URL means "author my own
+// PR") and `rig review` (a PR URL to review).
+func parsePRURL(s string) *prRef {
+	m := prURLRe.FindStringSubmatch(s)
+	if m == nil {
+		return nil
 	}
+	n, _ := strconv.Atoi(m[3])
+	return &prRef{Owner: m[1], Repo: m[2], Number: n}
+}
 
+// pickReviewPR opens an fzf picker over the open PRs awaiting your review. These
+// are others' work by construction (you don't request review from yourself), so
+// callers skip the authorship check and go straight to the review pickup.
+// Returns nil (no error) when the picker is cancelled.
+func pickReviewPR() (*prRef, error) {
 	out, err := exec.Command("gh", "search", "prs",
 		"--review-requested=@me", "--state=open",
 		"--json", "repository,number,title,url",
@@ -140,24 +240,37 @@ func resolvePR(args []string) (*prRef, error) {
 	return &prRef{Owner: owner, Repo: repo, Number: n}, nil
 }
 
-// prDetails fetches the PR's head branch and title via gh.
-func prDetails(owner, repo string, number int) (branch, title string, err error) {
+// prMeta is what a single `gh pr view` tells us about a PR at pickup time: its
+// head branch, title, and author login. Author is here so the authorship split
+// (authoring vs review) rides the same gh call as the branch/title we need
+// anyway, no extra round-trip.
+type prMeta struct {
+	Branch string
+	Title  string
+	Author string
+}
+
+// prDetails fetches a PR's head branch, title, and author login via gh.
+func prDetails(owner, repo string, number int) (prMeta, error) {
 	out, err := exec.Command("gh", "pr", "view", strconv.Itoa(number),
-		"-R", owner+"/"+repo, "--json", "headRefName,title").Output()
+		"-R", owner+"/"+repo, "--json", "headRefName,title,author").Output()
 	if err != nil {
-		return "", "", fmt.Errorf("gh pr view %s/%s#%d: %w", owner, repo, number, err)
+		return prMeta{}, fmt.Errorf("gh pr view %s/%s#%d: %w", owner, repo, number, err)
 	}
 	var v struct {
 		HeadRefName string `json:"headRefName"`
 		Title       string `json:"title"`
+		Author      struct {
+			Login string `json:"login"`
+		} `json:"author"`
 	}
 	if err := json.Unmarshal(out, &v); err != nil {
-		return "", "", fmt.Errorf("parsing gh pr view output: %w", err)
+		return prMeta{}, fmt.Errorf("parsing gh pr view output: %w", err)
 	}
 	if v.HeadRefName == "" {
-		return "", "", fmt.Errorf("no head branch for %s/%s#%d", owner, repo, number)
+		return prMeta{}, fmt.Errorf("no head branch for %s/%s#%d", owner, repo, number)
 	}
-	return v.HeadRefName, v.Title, nil
+	return prMeta{Branch: v.HeadRefName, Title: v.Title, Author: v.Author.Login}, nil
 }
 
 // ensureGhqClone makes sure owner/repo is cloned under the ghq root, cloning

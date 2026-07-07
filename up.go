@@ -8,6 +8,21 @@ import (
 )
 
 func runUp(args []string) error {
+	// A PR URL means "pick up my own work on this PR" — authoring, not the issue
+	// flow. pickupPR sorts authoring vs review by who owns the PR (and reroutes
+	// to review if it's not yours). Check for an existing rig first, by pr-<n>
+	// straight off the URL, so the fast re-up path stays network-free.
+	if len(args) >= 1 {
+		if pr := parsePRURL(args[0]); pr != nil {
+			if done, err := attachExistingRig(fmt.Sprintf("pr-%d", pr.Number)); err != nil {
+				return err
+			} else if done {
+				return nil
+			}
+			return pickupPR(pr, "up")
+		}
+	}
+
 	id, err := resolveIssueID(args)
 	if err != nil {
 		return err

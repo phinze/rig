@@ -61,10 +61,14 @@ func usage() {
 	fmt.Fprint(os.Stderr, `rig: workspace tool for task-shaped work
 
 usage:
-  rig up [issue-id|query]   pitch a new rig from a Linear issue
-                            (exact id, search terms, or fzf picker with no args)
-  rig review [pr-url]       pitch a review rig for a PR
-                            (url, or fzf picker over review-requested PRs)
+  rig up [issue|query|pr]   go to your rig for a task, creating it if it's new
+                            (Linear id, search terms, no-arg fzf picker, or a PR
+                            of yours to resume; idempotent — re-up just switches.
+                            Picks the repo from cwd or, from anywhere, an fzf
+                            picker over ghq repos)
+  rig review [pr-url]       pitch a review rig for someone else's PR
+                            (url, or fzf picker over review-requested PRs;
+                            a URL that turns out to be yours routes to up)
   rig pr                    open the rig's PR in the browser
                             (gh pr view -w, but it knows the jj branch)
   rig track [branch]        record a secondary PR branch for the repo you're in
