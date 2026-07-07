@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -44,6 +45,103 @@ func detectPrimaryRepo() (repoRef, error) {
 		Name:  filepath.Base(repoPath),
 		Path:  repoPath,
 	}, nil
+}
+
+// resolveRepo picks the primary repo for a new rig. When cwd is inside a
+// checkout that wins — the zero-friction "I'm already standing in it" path that
+// predates the picker. Otherwise it fzf-picks over the repos ghq manages,
+// ranked by zoxide frecency so a repo you touched recently floats to the top,
+// which is what lets `rig up` run from anywhere instead of demanding a cd
+// first. A zero repoRef (empty Path) with a nil error means the picker was
+// cancelled; callers abort quietly, mirroring resolveIssueID's "" convention.
+func resolveRepo() (repoRef, error) {
+	if repo, err := detectPrimaryRepo(); err == nil {
+		return repo, nil
+	}
+
+	repos, err := ghqRepos()
+	if err != nil {
+		return repoRef{}, err
+	}
+	if len(repos) == 0 {
+		return repoRef{}, fmt.Errorf("no repos found via ghq — cd into a checkout or `ghq get` one first")
+	}
+
+	rows := make([]string, len(repos))
+	for i, r := range repos {
+		// col1 owner/repo is shown; the absolute path rides in the hidden last
+		// column as the lookup key (paths are unique; short names may not be).
+		rows[i] = r.nameWithOwner() + "\t\t\t" + r.Path
+	}
+	sel, err := fzfSelect(rows, "Pick repo: ")
+	if err != nil {
+		return repoRef{}, err
+	}
+	if sel == "" {
+		return repoRef{}, nil // cancelled
+	}
+	cols := strings.Split(sel, "\t")
+	path := cols[len(cols)-1]
+	for _, r := range repos {
+		if r.Path == path {
+			return r, nil
+		}
+	}
+	return repoRef{}, fmt.Errorf("unexpected repo selection: %q", sel)
+}
+
+// ghqRepos lists the repos ghq manages as repoRefs, ranked by zoxide frecency
+// (most-recently-visited first), with repos zoxide hasn't seen keeping ghq's
+// own order behind them. `ghq list -p` gives absolute paths, so we match
+// zoxide's dirs and build the ref without re-deriving the path.
+func ghqRepos() ([]repoRef, error) {
+	out, err := exec.Command("ghq", "list", "-p").Output()
+	if err != nil {
+		return nil, fmt.Errorf("ghq list: %w", err)
+	}
+	var repos []repoRef
+	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
+		p := strings.TrimSpace(line)
+		if p == "" {
+			continue
+		}
+		if resolved, err := filepath.EvalSymlinks(p); err == nil {
+			p = resolved
+		}
+		repos = append(repos, repoRef{
+			Owner: ownerFromPath(p),
+			Name:  filepath.Base(p),
+			Path:  p,
+		})
+	}
+	rankReposByFrecency(repos, zoxideDirs())
+	return repos, nil
+}
+
+// rankReposByFrecency stable-sorts repos so those appearing earlier in dirs
+// (zoxide's most-frecent-first list) come first; repos absent from dirs keep
+// their relative order at the tail. Split out from ghqRepos so it's testable
+// without shelling out. dirs are symlink-resolved to match ghqRepos' paths.
+func rankReposByFrecency(repos []repoRef, dirs []string) {
+	rank := make(map[string]int, len(dirs))
+	for i, d := range dirs {
+		if resolved, err := filepath.EvalSymlinks(d); err == nil {
+			d = resolved
+		}
+		if _, seen := rank[d]; !seen {
+			rank[d] = i
+		}
+	}
+	const unranked = 1 << 30
+	rankOf := func(r repoRef) int {
+		if i, ok := rank[r.Path]; ok {
+			return i
+		}
+		return unranked
+	}
+	sort.SliceStable(repos, func(i, j int) bool {
+		return rankOf(repos[i]) < rankOf(repos[j])
+	})
 }
 
 // ownerFromPath pulls the owner segment out of a ghq-style checkout path

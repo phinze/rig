@@ -19,9 +19,12 @@ func runUp(args []string) error {
 		return err
 	}
 
-	repo, err := detectPrimaryRepo()
+	repo, err := resolveRepo()
 	if err != nil {
 		return err
+	}
+	if repo.Path == "" {
+		return nil // repo picker cancelled
 	}
 
 	basedir, err := basedirPath(tk.basedirName())
