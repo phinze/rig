@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -17,30 +18,26 @@ type task struct {
 var linearIDRe = regexp.MustCompile(`^[A-Z][A-Z0-9]*-[0-9]+$`)
 
 // resolveIssueID turns `rig up` args into a Linear identifier. An exact
-// identifier is used directly; no args opens an fzf picker over assigned/open
-// issues; anything else is treated as a search query feeding the same picker.
-// Returns "" (no error) when the user cancels the picker.
+// identifier is used directly; anything else (including no args) opens a live
+// fzf picker whose list is a fresh Linear search re-run on each keystroke,
+// seeded with whatever query the args spelled out. Returns "" (no error) when
+// the user cancels the picker.
 func resolveIssueID(args []string) (string, error) {
 	if len(args) == 1 && linearIDRe.MatchString(args[0]) {
 		return args[0], nil
 	}
 
-	var listArgs []string
-	if len(args) == 0 {
-		listArgs = []string{"issues", "list", "--limit", "25"}
-	} else {
-		listArgs = []string{"issues", "search", strings.Join(args, " ")}
-	}
-
-	cands, err := fetchIssues(listArgs...)
+	// fzf shells out to `rig __issues {q}` on every (debounced) keystroke, so the
+	// candidate list is whatever Linear returns for the current query rather than
+	// a fuzzy filter over one frozen fetch. Point it at our own binary so row
+	// formatting stays in one place (runIssueRows).
+	exe, err := os.Executable()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("locating rig binary: %w", err)
 	}
-	rows := make([]string, len(cands))
-	for i, c := range cands {
-		rows[i] = fmt.Sprintf("%s\t%s\t%s", c.Identifier, c.State, c.Title)
-	}
-	sel, err := fzfSelect(rows, "Pick issue: ")
+	reloadCmd := shellQuote(exe) + " __issues {q}"
+
+	sel, err := fzfLiveSelect(reloadCmd, "Pick issue: ", strings.Join(args, " "))
 	if err != nil {
 		return "", err
 	}
@@ -49,6 +46,32 @@ func resolveIssueID(args []string) (string, error) {
 	}
 	id, _, _ := strings.Cut(sel, "\t")
 	return strings.TrimSpace(id), nil
+}
+
+// runIssueRows backs the live issue picker (the hidden `rig __issues` command
+// fzf shells out to). It prints tab-delimited Identifier\tState\tTitle rows for
+// the given query — empty query lists the default assigned/open set, anything
+// else feeds Linear search. Because fzf runs it on every keystroke, it stays
+// quiet on failure: a lookup error yields no rows rather than a stderr splat in
+// the middle of the picker UI.
+func runIssueRows(args []string) error {
+	query := strings.TrimSpace(strings.Join(args, " "))
+	var listArgs []string
+	if query == "" {
+		listArgs = []string{"issues", "list", "--limit", "25"}
+	} else {
+		listArgs = []string{"issues", "search", query, "--limit", "25"}
+	}
+	cands, err := fetchIssues(listArgs...)
+	if err != nil {
+		return nil // stay quiet; the picker just shows no rows for this query
+	}
+	var b strings.Builder
+	for _, c := range cands {
+		fmt.Fprintf(&b, "%s\t%s\t%s\n", c.Identifier, c.State, c.Title)
+	}
+	_, _ = os.Stdout.WriteString(b.String())
+	return nil
 }
 
 type issueCandidate struct {

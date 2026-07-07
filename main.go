@@ -43,6 +43,10 @@ func main() {
 		err = runReap(args)
 	case "env":
 		err = runEnv(args)
+	case "__issues":
+		// Hidden: fzf's live issue picker shells out to this on each keystroke to
+		// get fresh Linear-search rows. Not in usage; not meant to be typed.
+		err = runIssueRows(args)
 	case "-h", "--help", "help":
 		usage()
 	default:
