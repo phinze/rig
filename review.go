@@ -120,14 +120,34 @@ func reviewPickupPR(pr *prRef, meta prMeta) error {
 	return attachOrReport(session)
 }
 
+// prRigIdentity derives an authoring pickup's rig id and basedir slug from the
+// PR's branch, so a PR that was born from an issue rebuilds under the SAME id
+// and path its `rig up <issue>` used. Linear stamps its id into the branch
+// (phinze/mir-75-add-zig-stack), which the issue flow turned into id "mir-75"
+// and basedir "mir-75-add-zig-stack"; recovering both here means a resumed rig
+// lands at the exact cwd where you built it, so claude --resume finds those
+// sessions (claude keys history by cwd, and cwd is <basedir>/<repo>). A branch
+// with no issue id (a PR not born from a tracker) has no prior rig to match, so
+// it falls back to pr-<n> + the PR title.
+func prRigIdentity(pr *prRef, meta prMeta) (rigID, basedirName string) {
+	slug := stripBranchUserPrefix(meta.Branch)
+	if id := leadingIssueID(slug); id != "" {
+		return id, slug
+	}
+	rigID = fmt.Sprintf("pr-%d", pr.Number)
+	return rigID, taskSlug(rigID, meta.Title)
+}
+
 // authorPickupPR builds an authoring rig around your own PR: you're coming back
 // to keep working, not to review. It starts the workspace at branch@origin (via
 // resolveStartRev) so your pushed commits come back and you stay on a pushable
 // branch — the crucial difference from review's read-only pull/N/head — and
-// leaves kind unset (authoring: done when the work merges). Idempotent like
-// issue-up, so re-upping a PR whose rig exists (or was down'd) resurfaces it.
+// leaves kind unset (authoring: done when the work merges). Identity comes from
+// the branch (see prRigIdentity), so it's idempotent against the rig its
+// originating issue-up created: a live one is switched to, a down'd one rebuilds
+// at the same path for claude --resume.
 func authorPickupPR(pr *prRef, meta prMeta) error {
-	rigID := fmt.Sprintf("pr-%d", pr.Number)
+	rigID, basedirName := prRigIdentity(pr, meta)
 	if done, err := attachExistingRig(rigID); err != nil {
 		return err
 	} else if done {
@@ -147,7 +167,7 @@ func authorPickupPR(pr *prRef, meta prMeta) error {
 	// rig was long gone. The durable state was always the PR plus origin.
 	startRev := resolveStartRev(repoPath, meta.Branch)
 
-	basedir, err := basedirPath(taskSlug(rigID, meta.Title))
+	basedir, err := basedirPath(basedirName)
 	if err != nil {
 		return err
 	}

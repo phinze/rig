@@ -329,10 +329,11 @@ exit 1
 }
 
 // TestUpFromOwnPR exercises `rig up <pr-url>` where the PR is the current
-// user's: the authorship split routes it to authoring, not review. Same fake
-// repo + PR branch as TestReview, but gh reports the author as the current user,
-// so the rig comes out authoring (no kind=review) and lands on the branch you'd
-// keep pushing to.
+// user's: the authorship split routes it to authoring, not review. The PR rides
+// a Linear-style branch, so the rig rebuilds under that issue's id and path
+// (mir-75, not pr-42) — the property that lets claude --resume find the sessions
+// you built under `rig up MIR-75`. gh reports the author as the current user, so
+// the rig comes out authoring (no kind=review) on the branch you'd keep pushing.
 func TestUpFromOwnPR(t *testing.T) {
 	realTmux, err := exec.LookPath("tmux")
 	if err != nil {
@@ -360,12 +361,13 @@ func TestUpFromOwnPR(t *testing.T) {
 		"JJ_USER=Test", "JJ_EMAIL=test@example.com",
 	)
 
-	// Source repo with a main commit and a separate branch commit standing in
-	// for the PR head. resolveStartRev prefers branch@origin but falls back to
-	// the local branch, which is what it finds here (no origin remote).
+	// Source repo with a main commit and a Linear-style PR branch. The branch
+	// carries the issue id (mir-75), which is what the pickup keys identity off.
+	// resolveStartRev prefers branch@origin but falls back to the local branch,
+	// which is what it finds here (no origin remote).
 	mustRun(t, repoDir, env, "git", "init", "-q", "-b", "main")
 	mustRun(t, repoDir, env, "git", "commit", "-q", "--allow-empty", "-m", "init")
-	mustRun(t, repoDir, env, "git", "checkout", "-q", "-b", "pr-branch")
+	mustRun(t, repoDir, env, "git", "checkout", "-q", "-b", "phinze/mir-75-fix-the-thing")
 	mustRun(t, repoDir, env, "git", "commit", "-q", "--allow-empty", "-m", "pr work")
 	mustRun(t, repoDir, env, "git", "checkout", "-q", "main")
 
@@ -374,7 +376,7 @@ func TestUpFromOwnPR(t *testing.T) {
 	ghScript := `#!/bin/sh
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
   cat <<JSON
-{"headRefName":"pr-branch","title":"fix the thing","author":{"login":"testuser"}}
+{"headRefName":"phinze/mir-75-fix-the-thing","title":"fix the thing","author":{"login":"testuser"}}
 JSON
   exit 0
 fi
@@ -409,17 +411,20 @@ exit 1
 		t.Fatalf("rig up <own-pr>: %v\n%s", err, out)
 	}
 
-	basedir := filepath.Join(home, "workspaces", "pr-42-fix-the-thing")
+	// Identity comes from the branch, not the PR number: the rig rebuilds at the
+	// issue's path (mir-75-fix-the-thing), where `rig up MIR-75` would have built
+	// it, so claude --resume can find the earlier sessions.
+	basedir := filepath.Join(home, "workspaces", "mir-75-fix-the-thing")
 	manifest := string(mustReadFile(t, filepath.Join(basedir, ".rig.toml")))
-	if !strings.Contains(manifest, `id    = "pr-42"`) {
-		t.Errorf("manifest missing id:\n%s", manifest)
+	if !strings.Contains(manifest, `id    = "mir-75"`) {
+		t.Errorf("manifest id should be the issue id, not pr-42:\n%s", manifest)
 	}
 	// The whole point: this is authoring, not review, so kind must be unset.
 	if strings.Contains(manifest, `kind  = "review"`) {
 		t.Errorf("own-PR pickup should be authoring, but manifest is kind=review:\n%s", manifest)
 	}
 	// The branch is recorded so pr/ls/reap resolve this rig's own PR.
-	if !strings.Contains(manifest, `fakerepo = ["pr-branch"]`) {
+	if !strings.Contains(manifest, `fakerepo = ["phinze/mir-75-fix-the-thing"]`) {
 		t.Errorf("manifest missing branch record:\n%s", manifest)
 	}
 

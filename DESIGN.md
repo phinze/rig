@@ -107,6 +107,18 @@ and `kind = "up"` so teardown guards it as unmerged work. Same
 clone-colocate-fetch-workspace path, one bit of divergence hanging off
 authorship.
 
+An authoring PR pickup also has to land at the *same path* its originating `rig
+up <issue>` used, because that's where the claude sessions you built live —
+claude keys its history by cwd, and a rig's cwd is `<basedir>/<repo>`. The
+bridge is the branch: a PR born from a Linear issue rides
+`phinze/mir-75-add-zig-stack`, the very slug `rig up MIR-75` turned into id
+`mir-75` and basedir `mir-75-add-zig-stack`. So the pickup derives its identity
+from the branch rather than the PR number, reconstructing that id and path
+exactly. A live issue-rig is then found by id and switched to; a `down`'d one
+rebuilds at the same basedir, so `claude --resume` still lists what you did
+there. Only a PR with no issue id in its branch (not born from a tracker) falls
+back to `pr-<n>`, since there was never a sibling rig to line up with.
+
 Because `up` owns your work end to end, it's idempotent by design. `rig up X`
 doesn't mean "create a rig," it means "put me in my rig for X, making it if it
 isn't there." If the rig's in flight, switch to it. If it's parked, wake it.

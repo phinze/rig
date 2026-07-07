@@ -118,8 +118,34 @@ func (t task) rigID() string {
 // resulting slug is short and matches the issue: "phinze/mir-75-add-zig-stack"
 // → "mir-75-add-zig-stack".
 func (t task) basedirName() string {
-	if i := strings.Index(t.BranchName, "/"); i >= 0 {
-		return t.BranchName[i+1:]
+	return stripBranchUserPrefix(t.BranchName)
+}
+
+// stripBranchUserPrefix drops a leading "<user>/" from a branch name, the shape
+// Linear and most PR branches carry ("phinze/mir-75-add-zig-stack" →
+// "mir-75-add-zig-stack"). Shared by the issue flow (basedirName) and the PR
+// pickup, which needs the same slug to land a resumed rig at the issue's path.
+func stripBranchUserPrefix(branch string) string {
+	if _, after, ok := strings.Cut(branch, "/"); ok {
+		return after
 	}
-	return t.BranchName
+	return branch
+}
+
+// branchIssueIDRe matches the Linear-issue token a branch slug leads with —
+// "mir-75" out of "mir-75-add-zig-stack" — mirroring linearIDRe's shape,
+// lowercased (branch names are). It must be followed by a dash or the end so a
+// bare "mir-75" also matches but "mir-750" (a different issue) doesn't bleed in.
+var branchIssueIDRe = regexp.MustCompile(`^([a-z][a-z0-9]*-[0-9]+)(?:-|$)`)
+
+// leadingIssueID pulls the Linear issue id off the front of a branch slug, or
+// "" when the branch didn't come from an issue. It's what lets a PR pickup
+// recover the id its originating `rig up <issue>` used, so the rig rebuilds
+// under the same id and basedir.
+func leadingIssueID(slug string) string {
+	m := branchIssueIDRe.FindStringSubmatch(slug)
+	if m == nil {
+		return ""
+	}
+	return m[1]
 }
