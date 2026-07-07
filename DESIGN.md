@@ -127,11 +127,16 @@ only thing that wouldn't survive, and `down` refuses to drop those without
 `--force`. The property holds by construction.
 
 Since `up` now materializes a rig for a repo you may not be standing in, it
-stops deriving the primary repo from cwd alone. `detectPrimaryRepo` becomes the
-fast path when you happen to be inside a checkout; otherwise `up` resolves the
-repo the way `review` already does, via `ghq` (cloning on demand), with a
-picker ranked by zoxide frecency. The repo picker only runs on the create path,
-so it never slows a re-up.
+stops deriving the primary repo from cwd alone — and stops *assuming* cwd even
+when you are in a checkout, since the task is often for a different repo and a
+silent wrong guess rigs the wrong tree. The picker always opens (ranked by
+zoxide frecency, cloning nothing that ghq already has), with the cwd repo pinned
+to the top as the default row: you confirm it with one Enter rather than have it
+chosen for you. `--repo owner/repo` is the way to skip the picker outright, and
+it clones on demand the way `review` does. The one place cwd is still taken
+automatically is a non-interactive caller with no tty to draw a picker, where
+it's the only answer we can give without the flag. The picker only runs on the
+create path, so it never slows a re-up.
 
 ## Naming
 

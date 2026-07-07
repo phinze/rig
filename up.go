@@ -8,6 +8,8 @@ import (
 )
 
 func runUp(args []string) error {
+	repoFlag, args := extractRepoFlag(args)
+
 	// A PR URL means "pick up my own work on this PR" — authoring, not the issue
 	// flow. pickupPR sorts authoring vs review by who owns the PR (and reroutes
 	// to review if it's not yours). Check for an existing rig first, by pr-<n>
@@ -48,7 +50,7 @@ func runUp(args []string) error {
 		return err
 	}
 
-	repo, err := resolveRepo()
+	repo, err := resolveRepo(repoFlag)
 	if err != nil {
 		return err
 	}
@@ -96,6 +98,29 @@ func runUp(args []string) error {
 
 	fmt.Fprintf(os.Stderr, "rig: up %s — %s\n", tk.Identifier, basedir)
 	return attachOrReport(session)
+}
+
+// extractRepoFlag pulls a --repo owner/repo (or --repo=owner/repo) out of args,
+// returning its value and the remaining args. `rig up` mixes the flag in with
+// its issue-id / query / PR-url positional, so we strip it before dispatching on
+// what's left. A repeated flag keeps the last; a trailing bare --repo with no
+// value is left in rest, where resolveRepo's empty-override path treats it as
+// "no override" and falls through to the picker.
+func extractRepoFlag(args []string) (repo string, rest []string) {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--repo" && i+1 < len(args) {
+			repo = args[i+1]
+			i++
+			continue
+		}
+		if v, ok := strings.CutPrefix(a, "--repo="); ok {
+			repo = v
+			continue
+		}
+		rest = append(rest, a)
+	}
+	return repo, rest
 }
 
 // attachExistingRig makes `rig up` idempotent. If a rig whose id matches rigID

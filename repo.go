@@ -47,24 +47,51 @@ func detectPrimaryRepo() (repoRef, error) {
 	}, nil
 }
 
-// resolveRepo picks the primary repo for a new rig. When cwd is inside a
-// checkout that wins — the zero-friction "I'm already standing in it" path that
-// predates the picker. Otherwise it fzf-picks over the repos ghq manages,
-// ranked by zoxide frecency so a repo you touched recently floats to the top,
-// which is what lets `rig up` run from anywhere instead of demanding a cd
-// first. A zero repoRef (empty Path) with a nil error means the picker was
-// cancelled; callers abort quietly, mirroring resolveIssueID's "" convention.
-func resolveRepo() (repoRef, error) {
-	if repo, err := detectPrimaryRepo(); err == nil {
-		return repo, nil
+// resolveRepo picks the primary repo for a new rig. An explicit --repo
+// owner/repo (override) wins outright and is cloned on demand. Otherwise it
+// fzf-picks over the repos ghq manages, ranked by zoxide frecency — with the
+// cwd repo, if you're standing in one, pinned to the top as the default row.
+// Being in a checkout no longer *assumes* that repo (you'd silently rig the
+// wrong one when the task is for elsewhere); it just pre-selects it, one Enter
+// away. The one exception is a non-interactive caller (no tty to draw a picker):
+// there cwd is the only answer we can give without a flag. A zero repoRef (empty
+// Path) with a nil error means the picker was cancelled; callers abort quietly,
+// mirroring resolveIssueID's "" convention.
+func resolveRepo(override string) (repoRef, error) {
+	if override != "" {
+		owner, name, ok := strings.Cut(override, "/")
+		if !ok || owner == "" || name == "" {
+			return repoRef{}, fmt.Errorf("--repo wants owner/repo, got %q", override)
+		}
+		path, err := ensureGhqClone(owner, name)
+		if err != nil {
+			return repoRef{}, err
+		}
+		return repoRef{Owner: owner, Name: name, Path: path}, nil
 	}
 
-	repos, err := ghqRepos()
-	if err != nil {
+	cwd, cwdErr := detectPrimaryRepo()
+	var cwdRepo *repoRef
+	if cwdErr == nil {
+		cwdRepo = &cwd
+	}
+
+	// No tty means no picker to choose from, so cwd is the only thing we can
+	// resolve without a flag; absent even that, point at the escape hatches.
+	if !stdinIsTTY() {
+		if cwdRepo != nil {
+			return *cwdRepo, nil
+		}
+		return repoRef{}, noTTYError("Pick repo: ")
+	}
+
+	ghq, err := ghqRepos()
+	if err != nil && cwdRepo == nil {
 		return repoRef{}, err
 	}
+	repos := repoCandidates(cwdRepo, ghq)
 	if len(repos) == 0 {
-		return repoRef{}, fmt.Errorf("no repos found via ghq — cd into a checkout or `ghq get` one first")
+		return repoRef{}, fmt.Errorf("no repos found via ghq — cd into a checkout, pass --repo owner/repo, or `ghq get` one first")
 	}
 
 	rows := make([]string, len(repos))
@@ -88,6 +115,24 @@ func resolveRepo() (repoRef, error) {
 		}
 	}
 	return repoRef{}, fmt.Errorf("unexpected repo selection: %q", sel)
+}
+
+// repoCandidates orders the repo picker: the cwd repo (when there is one) goes
+// first so it's the default-highlighted row you confirm rather than silently
+// accept, then the ghq repos with the cwd one de-duplicated out. Split out from
+// resolveRepo so the ordering is testable without a tty or shell-outs.
+func repoCandidates(cwd *repoRef, ghq []repoRef) []repoRef {
+	if cwd == nil {
+		return ghq
+	}
+	out := make([]repoRef, 0, len(ghq)+1)
+	out = append(out, *cwd)
+	for _, r := range ghq {
+		if r.Path != cwd.Path {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // ghqRepos lists the repos ghq manages as repoRefs, ranked by zoxide frecency

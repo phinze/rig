@@ -24,6 +24,41 @@ func TestRankReposByFrecency(t *testing.T) {
 	}
 }
 
+func TestRepoCandidates(t *testing.T) {
+	ghq := []repoRef{
+		{Name: "alpha", Path: "/p/alpha"},
+		{Name: "bravo", Path: "/p/bravo"},
+	}
+
+	// No cwd repo: candidates are just the ghq list, untouched.
+	if got := repoCandidates(nil, ghq); len(got) != 2 || got[0].Name != "alpha" {
+		t.Fatalf("nil cwd = %v, want the ghq list unchanged", got)
+	}
+
+	// cwd repo already in the ghq list: it moves to the front, no duplicate.
+	cwd := repoRef{Name: "bravo", Path: "/p/bravo"}
+	got := repoCandidates(&cwd, ghq)
+	if len(got) != 2 {
+		t.Fatalf("deduped candidates = %d entries, want 2: %v", len(got), got)
+	}
+	if got[0].Path != "/p/bravo" {
+		t.Errorf("cwd repo not first: %v", got)
+	}
+
+	// cwd repo outside the ghq list: prepended, list otherwise intact.
+	outside := repoRef{Name: "charlie", Path: "/elsewhere/charlie"}
+	got = repoCandidates(&outside, ghq)
+	want := []string{"charlie", "alpha", "bravo"}
+	if len(got) != 3 {
+		t.Fatalf("candidates = %d entries, want 3: %v", len(got), got)
+	}
+	for i, w := range want {
+		if got[i].Name != w {
+			t.Fatalf("candidate order = %v, want %v", got, want)
+		}
+	}
+}
+
 // Repos zoxide has never seen keep their original relative order behind the
 // ranked ones, rather than being shuffled among themselves.
 func TestRankReposByFrecencyStableTail(t *testing.T) {
