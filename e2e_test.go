@@ -150,6 +150,26 @@ exit 1
 		t.Errorf("workspace fake-1-fakerepo not registered:\n%s", wsList)
 	}
 
+	// --- rig up again (idempotent) --- naming a task whose rig already exists
+	// switches to it instead of erroring on the basedir. Run from $HOME, not the
+	// repo: it must short-circuit before any repo/tracker resolution (there's no
+	// ghq stub here, so a fall-through to the create path would error on `ghq
+	// list`), proving the existence check is both local and repo-independent.
+	reUp := exec.Command(rigBin, "up", "FAKE-1")
+	reUp.Dir = home
+	reUp.Env = env
+	if out, err := reUp.CombinedOutput(); err != nil {
+		t.Fatalf("second rig up (idempotent): %v\n%s", err, out)
+	} else if !strings.Contains(string(out), "already up") {
+		t.Errorf("expected second up to switch to the existing rig, got:\n%s", out)
+	}
+	// Still exactly one rig on disk — no duplicate basedir was minted.
+	if entries, err := os.ReadDir(filepath.Join(home, "workspaces")); err != nil {
+		t.Fatalf("reading workspaces: %v", err)
+	} else if len(entries) != 1 {
+		t.Errorf("expected 1 rig after re-up, got %d", len(entries))
+	}
+
 	// --- rig down --- run from inside basedir, the friendly path
 	downCmd := exec.Command(rigBin, "down")
 	downCmd.Dir = basedir

@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
+	"time"
 )
 
 func runUp(args []string) error {
@@ -12,6 +14,18 @@ func runUp(args []string) error {
 	}
 	if id == "" {
 		return nil // picker cancelled
+	}
+
+	// Idempotency: `rig up X` means "put me in my rig for X, making it if it
+	// isn't there." If a rig for this task already exists, go to it rather than
+	// try to build a second one and error on the existing basedir. The check is
+	// local (listRigs, no tracker call), so re-upping into work you already have
+	// stays as instant as `rig switch`; the network only gets touched below, on
+	// a genuine create.
+	if done, err := attachExistingRig(strings.ToLower(id)); err != nil {
+		return err
+	} else if done {
+		return nil
 	}
 
 	tk, err := resolveTask(id)
@@ -67,4 +81,51 @@ func runUp(args []string) error {
 
 	fmt.Fprintf(os.Stderr, "rig: up %s — %s\n", tk.Identifier, basedir)
 	return attachOrReport(session)
+}
+
+// attachExistingRig makes `rig up` idempotent. If a rig whose id matches rigID
+// already exists, it goes there instead of creating a duplicate: a live rig is
+// switched to, a parked one is woken first (park stamp cleared, session restood
+// at the same basedir so earlier claude sessions are a `--resume` away). It
+// reports whether it handled the id, so runUp only falls through to the create
+// path when nothing matched. Session-stand-up-and-attach mirrors wake/switch.
+func attachExistingRig(rigID string) (bool, error) {
+	rigs, err := listRigs()
+	if err != nil {
+		return false, err
+	}
+	var found *rigInfo
+	for i := range rigs {
+		if rigs[i].ID == rigID {
+			found = &rigs[i]
+			break
+		}
+	}
+	if found == nil {
+		return false, nil
+	}
+
+	if !found.Parked.IsZero() {
+		m, err := readManifest(found.Path)
+		if err != nil {
+			return false, fmt.Errorf("reading manifest: %w", err)
+		}
+		m.Parked = time.Time{}
+		if err := writeManifest(found.Path, m); err != nil {
+			return false, err
+		}
+		fmt.Fprintf(os.Stderr, "rig: woke %s — %s\n", found.ID, found.Path)
+	} else {
+		fmt.Fprintf(os.Stderr, "rig: %s already up — switching\n", found.ID)
+	}
+
+	session := tmuxSessionName(found.Path)
+	if !tmuxHasSession(session) {
+		// No live session (parked, or a switch-killed one): stand a bare one back
+		// up at the basedir so claude --resume picks up where you left off.
+		if err := tmuxNewSession(session, found.Path); err != nil {
+			return false, fmt.Errorf("tmux new-session: %w", err)
+		}
+	}
+	return true, attachOrReport(session)
 }
