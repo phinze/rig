@@ -64,11 +64,14 @@ audio crews, sailing all rig up before a job and rig down after), and
 a "rig" reads naturally as purpose-built apparatus assembled for one
 job (climbing rig, fishing rig, sound rig):
 
-- `rig up PROJ-123` — pitch a new rig: resolve the issue, create the
-  basedir, add the first repo workspace, spawn a tmux session with claude.
-  A gh-issue URL dispatches the same shape.
-- `rig review <pr>` — the jreview sibling: pitch a rig around an existing
-  PR, checked out at its head.
+- `rig up PROJ-123` — the one door to your own work. Resolve the issue (or
+  a PR of yours), and either drop into the rig that already exists or build
+  the one that doesn't. A gh-issue or your-own-PR URL dispatches the same
+  shape.
+- `rig review <pr>` — the jreview sibling, pointed at *other people's* work:
+  pitch a rig around a PR awaiting your review, checked out read-only at its
+  head. Hand it a URL that turns out to be yours and it just routes you to
+  `up`.
 - `rig add owner/repo` — add a repo to the rig you're in (cwd-derived).
 - `rig track <pr>` — record a second PR's branch on a repo already in the
   rig, so down/reap gate on it too.
@@ -85,6 +88,50 @@ job (climbing rig, fishing rig, sound rig):
 - `rig reap` — bulk-collect merged, WIP-free, idle rigs through the same
   teardown path as down.
 - `rig env` — print the identity exports for the direnv stdlib to eval.
+
+## Up my work, review other work
+
+The two pickup verbs split on a single axis: whose work is it. `rig up` is
+where your own work lives — a Linear issue you're starting, or a PR of yours
+you're coming back to. `rig review` is where other people's does — a PR you've
+been asked to look at. That split is what the manifest's `kind` already
+encodes, and it's what sets the terminal condition: an authoring rig is done
+when it merges, a review rig when you've posted your review (see §"rig down
+destructiveness").
+
+Picking up your own PR is authoring, not reviewing, and the plumbing has to
+know the difference. A review fetches `pull/N/head` read-only, fork-safe,
+detached from any pushable branch, which is exactly right for someone else's
+code. Your own PR wants `branch@origin` so you can push more commits onto it,
+and `kind = "up"` so teardown guards it as unmerged work. Same
+clone-colocate-fetch-workspace path, one bit of divergence hanging off
+authorship.
+
+Because `up` owns your work end to end, it's idempotent by design. `rig up X`
+doesn't mean "create a rig," it means "put me in my rig for X, making it if it
+isn't there." If the rig's in flight, switch to it. If it's parked, wake it.
+If it got `down`'d entirely, rebuild it from `branch@origin` and your pushed
+work comes back with the branch. The existence check comes before any network:
+`up` matches `listRigs()` the way `switch` does (id/slug/title, no gh or
+linearis round-trip), so re-upping into work you already have is as instant as
+switching. The tracker call only happens on genuine creation.
+
+The invariant that makes this safe rather than scary: **`down` can't destroy
+anything `up` can't rebuild.** `down`'s safety gate is "no unmerged, no
+unpushed work," which is precisely the precondition that makes `up`'s
+reconstruction lossless. Branch still open? `branch@origin` restores it.
+Already merged? The branch may be gone but the work is in `trunk()`, so
+`resolveStartRev` starts you there, which is correct. The durable state was
+always the PR plus origin, never the basedir. Unpushed local commits are the
+only thing that wouldn't survive, and `down` refuses to drop those without
+`--force`. The property holds by construction.
+
+Since `up` now materializes a rig for a repo you may not be standing in, it
+stops deriving the primary repo from cwd alone. `detectPrimaryRepo` becomes the
+fast path when you happen to be inside a checkout; otherwise `up` resolves the
+repo the way `review` already does, via `ghq` (cloning on demand), with a
+picker ranked by zoxide frecency. The repo picker only runs on the create path,
+so it never slows a re-up.
 
 ## Naming
 
