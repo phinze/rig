@@ -170,11 +170,13 @@ type radarTickMsg time.Time
 // radarTickEvery is how often local state (sessions, agent recency) re-scans.
 const radarTickEvery = 2 * time.Second
 
-// radarTailReserve is how many columns long titles must leave for the PR
-// tail, so the detail isn't starved off the right edge of the popup. Sized
-// for a two-repo tail ("rfd #143   runtime #880 ") or a parked
-// disposition plus PR ("changes requested  #877 ").
-const radarTailReserve = 30
+// radarMinTitle is the width the title cell must clear before the layout will
+// spend columns on the lower-value id and tail cells. Once the popup is too
+// narrow to give the title this much *and* carry a detail column, that column
+// collapses — the PR tail first, then the ticket id — so the title, the one
+// cell you actually read, keeps the room. Titles still shrink below this on a
+// genuinely tiny popup; it's the drop threshold, not a hard floor.
+const radarMinTitle = 30
 
 func radarScanNow(home string) radarScanMsg {
 	rigs, err := listRigs()
@@ -1319,6 +1321,93 @@ func radarTailSegs(s rigStatus, fetched bool) []tailSeg {
 	return segs
 }
 
+// radarColumns is the resolved column layout for one render: each cell's width
+// (zero means the cell is dropped) and the screen column the title starts at,
+// which is also where dangled children indent their branch. Widths come only
+// from parent rows so children never widen a column, and a fetch landing swaps a
+// glyph in place without shifting anything.
+type radarColumns struct {
+	wID, wAge, wTitle, wTail int
+	titleAt                  int
+}
+
+// radarTailWidth is the display width of a row's rendered PR tail (plain), the
+// segments joined the way the row draws them. Zero for a row with no tail.
+func (m radarModel) radarTailWidth(s rigStatus) int {
+	segs := radarTailSegs(s, prsFetched(m.prs, s.Slug))
+	w := 0
+	for i, seg := range segs {
+		if i > 0 {
+			w += 2
+		}
+		w += lipgloss.Width(seg.plain)
+	}
+	return w
+}
+
+// columns resolves the board's column widths against the popup width. Age, title,
+// and the ticket id come from the widest parent cell; the tail is the widest tail
+// actually present (so absent PRs reserve nothing). The left frame — gutter, age,
+// glyph — always stays and the title starts right after it, so an id-less session
+// row leaves no gap down the left. The ticket id and PR tail are right-hand
+// detail: low value, and the first to collapse (tail before id) once the popup
+// can't seat them and still leave the title a readable width.
+func (m radarModel) columns(items []radarLine) radarColumns {
+	var wID, wAge, wTitle, wTail int
+	for _, it := range items {
+		if it.header != "" || it.child {
+			continue
+		}
+		wID = max(wID, lipgloss.Width(it.row.ID))
+		wAge = max(wAge, lipgloss.Width(age(it.row.Created)))
+		wTitle = max(wTitle, lipgloss.Width(it.row.Title))
+		wTail = max(wTail, m.radarTailWidth(it.row))
+	}
+	const gutter, gap, glyph = 2, 2, 1
+	// Left frame, always present; the title starts here and fills rightward.
+	titleAt := gutter + wAge + gap + glyph + gap
+
+	// Unknown width (not yet sized): everything at its desired width, no drops.
+	if m.width <= 0 {
+		return radarColumns{wID, wAge, wTitle, wTail, titleAt}
+	}
+
+	// Collapse the right-hand detail — tail before id — until the title clears
+	// its floor or nothing droppable remains. The floor is the smaller of the
+	// readable minimum and what the titles actually want, so short titles never
+	// trigger a drop for room they wouldn't use.
+	keepID, keepTail := wID > 0, wTail > 0
+	floor := min(wTitle, radarMinTitle)
+	need := func() int {
+		n := 0
+		if keepTail {
+			n += gap + wTail
+		}
+		if keepID {
+			n += gap + wID
+		}
+		return n
+	}
+	for keepTail || keepID {
+		if m.width-titleAt-need() >= floor {
+			break
+		}
+		if keepTail {
+			keepTail = false
+			continue
+		}
+		keepID = false
+	}
+	if !keepID {
+		wID = 0
+	}
+	if !keepTail {
+		wTail = 0
+	}
+	wTitle = max(8, min(wTitle, m.width-titleAt-need()))
+	return radarColumns{wID, wAge, wTitle, wTail, titleAt}
+}
+
 func (m radarModel) View() string {
 	// A prompt rides at the top whenever there's a query to show (or the NEW
 	// picker, which is a search from the moment it opens), so the text lands
@@ -1362,75 +1451,81 @@ func (m radarModel) View() string {
 		return "\n" + prompt + msg + "\n\n" + footer + "\n"
 	}
 
-	// Column widths come from parent rows' local cells (id, age, title) only, so
-	// dangled children never widen the columns and the PR fan-out landing swaps a
-	// glyph in place without moving anything.
-	var wID, wAge, wTitle int
-	for _, it := range items {
-		if it.header != "" || it.child {
-			continue
-		}
-		wID = max(wID, lipgloss.Width(it.row.ID))
-		wAge = max(wAge, lipgloss.Width(age(it.row.Created)))
-		wTitle = max(wTitle, lipgloss.Width(it.row.Title))
-	}
-	fixed := 2 + wID + 2 + wAge + 2 + 1 + 2 // gutter, id, age, glyph, gaps
-	if m.width > 0 {
-		wTitle = min(wTitle, max(20, m.width-fixed-radarTailReserve))
-	}
+	// Resolve the column layout for this frame: cell widths, and where the title
+	// (and each child's branch) start. A zero width means that cell collapsed
+	// because the popup was too narrow to seat it and still leave the title room.
+	cols := m.columns(items)
 
 	renderRow := func(selected bool, s rigStatus) string {
 		fetched := prsFetched(m.prs, s.Slug)
 		glyph, gstyle := radarGlyph(s, fetched)
-		title := radarTruncate(s.Title, wTitle)
 
-		// The tail takes whatever the line has left; segments append whole
-		// or not at all, so a squeezed row drops detail instead of tearing.
-		avail := int(^uint(0) >> 1)
+		// Right-margin detail for this row: the ticket id then the PR tail, each
+		// shown only when the layout kept its column. They trail immediately after
+		// the title (not in a reserved column), so a row without a ticket or a PR
+		// hands that width straight to its title instead of leaving a hole. The id
+		// is faint — low-value detail — and bolds its matched runes when filtering.
+		var rightPlain, rightStyled []string
+		if cols.wID > 0 && s.ID != "" {
+			cell := radarFaintStyle.Render(s.ID)
+			if m.filter != "" {
+				idHits, _ := radarMatchFields(m.filter, s)
+				cell = highlightRunesBase(s.ID, idHits, &radarFaintStyle)
+			}
+			rightPlain, rightStyled = append(rightPlain, s.ID), append(rightStyled, cell)
+		}
+		if cols.wTail > 0 {
+			for _, seg := range radarTailSegs(s, fetched) {
+				rightPlain, rightStyled = append(rightPlain, seg.plain), append(rightStyled, seg.styled)
+			}
+		}
+		rw := 0
+		for i, p := range rightPlain {
+			if i > 0 {
+				rw += 2
+			}
+			rw += lipgloss.Width(p)
+		}
+
+		// The title fills whatever this row leaves left of its own detail, so an
+		// id-less or PR-less row's title runs wider than a laden one's.
+		budget := cols.wTitle
 		if m.width > 0 {
-			avail = m.width - fixed - wTitle - 2
-		}
-		var plainTail, styledTail []string
-		used := 0
-		for _, seg := range radarTailSegs(s, fetched) {
-			w := lipgloss.Width(seg.plain)
-			gap := 0
-			if len(plainTail) > 0 {
-				gap = 2
+			budget = m.width - cols.titleAt
+			if rw > 0 {
+				budget -= rw + 2
 			}
-			if used+gap+w > avail {
-				break
-			}
-			used += gap + w
-			plainTail = append(plainTail, seg.plain)
-			styledTail = append(styledTail, seg.styled)
+			budget = max(8, budget)
 		}
+		title := radarTruncateTitle(s.Title, budget)
 
 		if selected {
 			// One style over the whole line: inner color resets would chew
 			// through a wrapping reverse, so the selected row goes plain — the
 			// reverse-video already marks it, no match bolding needed.
-			plain := fmt.Sprintf("▸ %-*s  %-*s  %s  %-*s  %s",
-				wID, s.ID, wAge, age(s.Created), glyph, wTitle, title, strings.Join(plainTail, "  "))
-			return radarCursorStyle.Render(strings.TrimRight(plain, " "))
+			var b strings.Builder
+			fmt.Fprintf(&b, "▸ %-*s  %s  %s", cols.wAge, age(s.Created), glyph, title)
+			if rw > 0 {
+				b.WriteString("  " + strings.Join(rightPlain, "  "))
+			}
+			return radarCursorStyle.Render(strings.TrimRight(b.String(), " "))
 		}
-		// Bold the runes the query matched, in the id and title cells. Because a
-		// highlighted cell carries ANSI, pad by display width (padRight) rather
-		// than fmt's %-*s, which would count the escape bytes.
-		idCell, titleCell := s.ID, title
+
+		// Bold the title runes the query matched; the title may be front- or
+		// middle-collapsed, so match against the string as displayed.
+		titleCell := title
 		if m.filter != "" {
-			idHits, titleHits := radarMatchFields(m.filter, s)
-			idCell = highlightRunes(s.ID, idHits)
-			titleCell = highlightRunes(title, titleHits)
+			titleCell = highlightRunes(title, fuzzyPositions(m.filter, title))
 		}
-		line := "  " + padRight(idCell, wID) + "  " +
-			padRight(age(s.Created), wAge) + "  " +
-			gstyle.Render(glyph) + "  " +
-			padRight(titleCell, wTitle)
-		if tail := strings.Join(styledTail, "  "); tail != "" {
-			line += "  " + tail
+		var b strings.Builder
+		b.WriteString("  ")
+		b.WriteString(padRight(age(s.Created), cols.wAge) + "  ")
+		b.WriteString(gstyle.Render(glyph) + "  ")
+		b.WriteString(titleCell)
+		if rw > 0 {
+			b.WriteString("  " + strings.Join(rightStyled, "  "))
 		}
-		return line
+		return strings.TrimRight(b.String(), " ")
 	}
 
 	// renderChild draws a dangled agent line: an indented tree branch, a working
@@ -1452,10 +1547,10 @@ func (m radarModel) View() string {
 		if working {
 			dot = "● "
 		}
-		// Put the branch glyph directly under the title's first char (fixed is
-		// where titles start), so the child text steps in one notch and reads as
+		// Put the branch glyph directly under the title's first char (cols.titleAt
+		// is where titles start), so the child text steps in one notch and reads as
 		// nested. A session's empty id column would otherwise strand it far left.
-		prefix := strings.Repeat(" ", fixed) + branch + " " + dot
+		prefix := strings.Repeat(" ", cols.titleAt) + branch + " " + dot
 		if s.childKey != "" {
 			prefix += s.childKey + "  "
 		}
@@ -1473,7 +1568,7 @@ func (m radarModel) View() string {
 		}
 		// The branch and any label stay faint; the dot is green and, when working,
 		// the task text renders at full strength to stand out from idle siblings.
-		out := strings.Repeat(" ", fixed) + radarFaintStyle.Render(branch+" ")
+		out := strings.Repeat(" ", cols.titleAt) + radarFaintStyle.Render(branch+" ")
 		if working {
 			out += radarGoodStyle.Render("● ")
 		} else {
@@ -1673,6 +1768,38 @@ func padRight(s string, w int) string {
 		return s + strings.Repeat(" ", gap)
 	}
 	return s
+}
+
+// radarTruncateTitle clips a title to w cells. A path-shaped title (a bare
+// session or a repo rig, whose title is its working dir) collapses its leading
+// segments so the tail — the last segments, where the repo name lives — survives
+// rather than being clipped off the right edge; any other title clips from the
+// right the plain way so it still reads left-to-right.
+func radarTruncateTitle(s string, w int) string {
+	if strings.HasPrefix(s, "/") || strings.HasPrefix(s, "~/") {
+		return collapsePath(s, w)
+	}
+	return radarTruncate(s, w)
+}
+
+// collapsePath shortens a path to w display cells by dropping leading segments,
+// marking the elision with a leading "…/" and keeping as many trailing segments
+// as fit (never fewer than the last one). "~/src/github.com/phinze/rig" at width
+// 14 becomes "…/phinze/rig". A path that already fits comes back untouched.
+func collapsePath(p string, w int) string {
+	if lipgloss.Width(p) <= w {
+		return p
+	}
+	segs := strings.Split(p, "/")
+	// Drop leading segments one at a time; the first candidate that fits keeps
+	// the most trailing context. Start at 1 since the whole path already overflows.
+	for start := 1; start < len(segs); start++ {
+		if cand := "…/" + strings.Join(segs[start:], "/"); lipgloss.Width(cand) <= w {
+			return cand
+		}
+	}
+	// Even the last segment with its marker overflows; clip it from the right.
+	return radarTruncate("…/"+segs[len(segs)-1], w)
 }
 
 // radarTruncate clips s to width cells (rune-counted — close enough for issue
