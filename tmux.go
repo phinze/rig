@@ -97,7 +97,7 @@ func tmuxSessions() []tmuxSession {
 	return sessions
 }
 
-// agentChild is one claude-bearing tmux window: what the radar dangles under a
+// agentChild is one agent-bearing tmux window: what the radar dangles under a
 // rig or session so the board reads as a HUD of every agent in flight. Window
 // is the window's name (a repo, for a rig), Target is the session:index a jump
 // lands on, and Context is the task the agent named for itself (empty when it's
@@ -110,13 +110,13 @@ type agentChild struct {
 	Working bool // window produced output within agentActiveWindow
 }
 
-// tmuxAgentChildren maps each session to its claude panes, in pane order. One
+// tmuxAgentChildren maps each session to its agent panes, in pane order. One
 // list-panes -a sweeps the whole tree. Each agent pane becomes a child, except
 // that panes sharing a window and the exact same context collapse to one — that
-// kills the artifact of the same claude mirrored across a split without hiding
+// kills the artifact of the same agent mirrored across a split without hiding
 // two genuinely different agents side by side. A pane is an agent when its
-// command is claude or its title still wears Claude Code's state glyph (so a
-// claude under a wrapper process is still caught). Returns nil when tmux isn't
+// command is recognized or its title still wears Claude Code's state glyph (so
+// a wrapped agent is still caught). Returns nil when tmux isn't
 // running.
 func tmuxAgentChildren() map[string][]agentChild {
 	out, err := exec.Command("tmux", "list-panes", "-a", "-F",
@@ -147,12 +147,12 @@ func parseAgentPanes(out string, now int64) map[string][]agentChild {
 			continue
 		}
 		session, windex, pindex, wname, cmd, activity, title := f[0], f[1], f[2], f[3], f[4], f[5], f[6]
-		if cmd != "claude" && stripAgentGlyph(title) == title {
-			continue // not an agent pane: no claude command, no state glyph
+		if !isAgentCommand(cmd) && stripAgentGlyph(title) == title {
+			continue // not an agent pane: no known command or state glyph
 		}
 		ctx := stripAgentGlyph(title)
-		if ctx == agentPlaceholder {
-			ctx = "" // "Claude Code" default: agent open, no task named
+		if isAgentPlaceholder(ctx) {
+			ctx = ""
 		}
 		key := session + "\t" + windex + "\t" + ctx
 		if seen[key] {
@@ -169,6 +169,10 @@ func parseAgentPanes(out string, now int64) map[string][]agentChild {
 		})
 	}
 	return children
+}
+
+func isAgentCommand(cmd string) bool {
+	return cmd == "claude" || strings.HasPrefix(cmd, "codex") || cmd == "agy" || strings.HasPrefix(cmd, "antigravity")
 }
 
 // currentTmuxSession returns the name of the session the current process is

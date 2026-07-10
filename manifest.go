@@ -17,6 +17,9 @@ type manifest struct {
 	ID      string
 	Title   string
 	Created time.Time
+	// Agent is the terminal agent this rig was created for. Empty means Claude,
+	// preserving the behavior of manifests written before agent selection.
+	Agent string
 	// Kind records how the rig came to be, which sets its terminal condition.
 	// "" and "up" are authoring rigs — done when the work merges, so teardown
 	// guards their local commits. "review" is a `rig review` pickup of someone
@@ -27,7 +30,7 @@ type manifest struct {
 	Kind string
 	// Parked, when non-zero, marks a rig as dormant: its work is done and up
 	// for human review, so it drops out of `rig switch` and its tmux session is
-	// killed, but the basedir (and its claude session history) stay on disk.
+	// killed, but the basedir (and its agent session history) stay on disk.
 	// `rig wake` clears it and stands the session back up at the same path. Zero
 	// means an ordinary in-flight rig.
 	Parked time.Time
@@ -60,6 +63,9 @@ func writeManifest(basedir string, m manifest) error {
 	fmt.Fprintf(&b, "title = %q\n", m.Title)
 	if m.Kind != "" {
 		fmt.Fprintf(&b, "kind  = %q\n", m.Kind)
+	}
+	if m.Agent != "" && m.Agent != string(agentClaude) {
+		fmt.Fprintf(&b, "agent = %q\n", m.Agent)
 	}
 	if !m.Created.IsZero() {
 		fmt.Fprintf(&b, "created = %q\n", m.Created.Format(time.RFC3339))
@@ -137,9 +143,9 @@ func parseTOMLStringArray(s string) []string {
 	return out
 }
 
-// readManifest is intentionally a minimal hand-rolled parser. We only emit
-// `key = "value"` pairs and a single `[repos]` table, so we only need to read
-// those back. Swap for a real TOML library if the schema grows further.
+// readManifest is intentionally a minimal hand-rolled parser for the scalar
+// fields and two simple tables rig itself emits. Swap for a real TOML library
+// if the schema grows further.
 func readManifest(basedir string) (manifest, error) {
 	f, err := os.Open(filepath.Join(basedir, manifestName))
 	if err != nil {
@@ -174,6 +180,8 @@ func readManifest(basedir string) (manifest, error) {
 				m.Title = val
 			case "kind":
 				m.Kind = val
+			case "agent":
+				m.Agent = val
 			case "created":
 				if t, err := time.Parse(time.RFC3339, val); err == nil {
 					m.Created = t
@@ -199,6 +207,17 @@ func readManifest(basedir string) (manifest, error) {
 		return manifest{}, err
 	}
 	return m, nil
+}
+
+func (m manifest) agentKind() agentKind {
+	if m.Agent == "" {
+		return agentClaude
+	}
+	a, err := parseAgent(m.Agent)
+	if err != nil {
+		return agentClaude
+	}
+	return a
 }
 
 // addRepoToManifest records a repo's subdir → owner/repo mapping (and its

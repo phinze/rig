@@ -8,6 +8,10 @@ import (
 )
 
 func runUp(args []string) error {
+	agent, args, err := extractAgentFlag(args)
+	if err != nil {
+		return err
+	}
 	repoFlag, args := extractRepoFlag(args)
 
 	// A PR URL means "pick up my own work on this PR" — authoring, not the issue
@@ -18,7 +22,7 @@ func runUp(args []string) error {
 	// only per repo, and wouldn't match an issue-keyed rig anyway.
 	if len(args) >= 1 {
 		if pr := parsePRURL(args[0]); pr != nil {
-			return pickupPR(pr, "up")
+			return pickupPR(pr, "up", agent)
 		}
 	}
 
@@ -64,7 +68,7 @@ func runUp(args []string) error {
 		return fmt.Errorf("colocating jj on %s: %w", repo.Path, err)
 	}
 
-	m := manifest{ID: tk.rigID(), Title: tk.Title}
+	m := manifest{ID: tk.rigID(), Title: tk.Title, Agent: string(agent)}
 	if err := createBasedir(basedir, m); err != nil {
 		return err
 	}
@@ -78,11 +82,12 @@ func runUp(args []string) error {
 		return err
 	}
 
-	// Layout: recto on the right, claude on the left with an issue-pickup
+	// Layout: recto on the right, the selected agent on the left with an issue-pickup
 	// prompt. Linear-specific phrasing for now; when a second tracker
 	// arrives we'll dispatch on it.
 	sess := sessionSpec{
 		rectoCmd: "recto",
+		agent:    agent,
 		prompt: fmt.Sprintf(
 			"Picking up %s (%s). Use the Linear MCP (it may take a few seconds to connect) to read the issue, mark it In Progress and assigned to me, then help me plan.",
 			tk.Identifier, tk.Title,
@@ -123,7 +128,7 @@ func extractRepoFlag(args []string) (repo string, rest []string) {
 // attachExistingRig makes `rig up` idempotent. If a rig whose id matches rigID
 // already exists, it goes there instead of creating a duplicate: a live rig is
 // switched to, a parked one is woken first (park stamp cleared, session restood
-// at the same basedir so earlier claude sessions are a `--resume` away). It
+// at the same basedir so earlier agent sessions are a resume away). It
 // reports whether it handled the id, so runUp only falls through to the create
 // path when nothing matched. Session-stand-up-and-attach mirrors wake/switch.
 func attachExistingRig(rigID string) (bool, error) {
@@ -159,7 +164,7 @@ func attachExistingRig(rigID string) (bool, error) {
 	session := tmuxSessionName(found.Path)
 	if !tmuxHasSession(session) {
 		// No live session (parked, or a switch-killed one): stand a bare one back
-		// up at the basedir so claude --resume picks up where you left off.
+		// up at the basedir so the selected agent can resume where you left off.
 		if err := tmuxNewSession(session, found.Path); err != nil {
 			return false, fmt.Errorf("tmux new-session: %w", err)
 		}

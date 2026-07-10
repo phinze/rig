@@ -106,23 +106,24 @@ func addRepoWorkspace(basedir, rigID string, repo repoRef, startRev, branch stri
 		return "", err
 	}
 
-	// Refresh the agent-facing breadcrumb so its repo list reflects the repo we
-	// just added. Best-effort: a missing CLAUDE.md shouldn't fail the add.
+	// Refresh each agent-facing breadcrumb so its repo list reflects the repo we
+	// just added. Best-effort: missing guidance shouldn't fail the add.
 	if m, err := readManifest(basedir); err == nil {
-		_ = writeRigClaudeMD(basedir, m)
+		_ = writeRigAgentInstructions(basedir, m)
 	}
 
 	return repoDest, nil
 }
 
 // sessionSpec captures the per-verb session layout: what runs in the right
-// (recto) pane and the prompt sent to claude in the left pane.
+// (recto) pane, the agent in the left pane, and its opening prompt.
 type sessionSpec struct {
 	rectoCmd string
 	prompt   string
+	agent    agentKind
 }
 
-// spawnSession creates the rig's tmux session (recto right, claude left) if it
+// spawnSession creates the rig's tmux session (recto right, agent left) if it
 // doesn't already exist, and returns the session name. The session is named
 // after the basedir (session-wizard convention) even though the panes start in
 // the primary repo dir: the basedir is the rig's unit, and multi-repo rigs
@@ -142,8 +143,8 @@ func spawnSession(basedir, paneCwd string, sess sessionSpec) (string, error) {
 	if err := tmuxSelectPane(left); err != nil {
 		return "", fmt.Errorf("tmux select-pane: %w", err)
 	}
-	claudeLine := "claude --dangerously-skip-permissions " + shellQuote(sess.prompt)
-	if err := tmuxSendKeys(left, claudeLine); err != nil {
+	agentLine := sess.agent.launchCommand(sess.prompt)
+	if err := tmuxSendKeys(left, agentLine); err != nil {
 		return "", fmt.Errorf("tmux send-keys: %w", err)
 	}
 	return session, nil

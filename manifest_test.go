@@ -127,6 +127,33 @@ func TestManifestKindRoundTrip(t *testing.T) {
 	}
 }
 
+func TestManifestAgentRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	if err := writeManifest(dir, manifest{ID: "mir-7", Agent: "codex"}); err != nil {
+		t.Fatal(err)
+	}
+	m, err := readManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.agentKind() != agentCodex {
+		t.Errorf("agent = %q, want codex", m.agentKind())
+	}
+
+	legacy := t.TempDir()
+	if err := writeManifest(legacy, manifest{ID: "mir-8"}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("RIG_AGENT", "codex") // new-rig default must not relabel old rigs
+	m, err = readManifest(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.agentKind() != agentClaude {
+		t.Errorf("legacy agent = %q, want claude", m.agentKind())
+	}
+}
+
 func TestManifestNoBranchesTable(t *testing.T) {
 	dir := t.TempDir()
 	m := manifest{ID: "pr-9", Repos: map[string]string{"rig": "phinze/rig"}}

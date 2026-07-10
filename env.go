@@ -49,6 +49,7 @@ func rigExports(basedir, cwd string) []string {
 		return nil
 	}
 	out := []string{"export RIG_BASEDIR=" + shellQuote(basedir)}
+	out = append(out, "export RIG_AGENT="+shellQuote(string(m.agentKind())))
 	if m.ID != "" {
 		out = append(out, "export RIG_ID="+shellQuote(m.ID))
 	}

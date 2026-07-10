@@ -54,9 +54,14 @@ func runReap(args []string) error {
 	}
 	now := time.Now()
 	fetched := map[string]bool{} // source repo path → already fetched this run
+	paths := make([]string, len(rigs))
+	for i := range rigs {
+		paths[i] = rigs[i].Path
+	}
+	activity := agentSessionActivities(home, paths)
 	reaped := 0
 	for _, r := range rigs {
-		if reason := reapBlocker(r, home, now, maxIdle, fetched); reason != "" {
+		if reason := reapBlocker(r, activity[r.Path], now, maxIdle, fetched); reason != "" {
 			fmt.Fprintf(os.Stderr, "rig: keep %s — %s\n", r.ID, reason)
 			continue
 		}
@@ -90,10 +95,10 @@ func runReap(args []string) error {
 
 // reapBlocker decides whether a rig is safe to reap, returning the first
 // reason it isn't ("" means reapable).
-func reapBlocker(r rigInfo, home string, now time.Time, maxIdle time.Duration, fetched map[string]bool) string {
+func reapBlocker(r rigInfo, activity int64, now time.Time, maxIdle time.Duration, fetched map[string]bool) string {
 	// Attention gate first: recent attention means the rig is mid-thought
 	// regardless of merge state. Two signals, both persistent and neither
-	// resettable by accident: claude session-file mtimes (a turn appends
+	// resettable by accident: agent session activity (a turn appends
 	// whether human-driven or autonomous; repaint doesn't) and the rig's
 	// own age (a rig younger than the idle window can't be idle). File
 	// changes are deliberately the VCS gates' job below — jj sees any
@@ -103,8 +108,8 @@ func reapBlocker(r rigInfo, home string, now time.Time, maxIdle time.Duration, f
 	// at-rest TUI repaint, and attach-based ones reset on a mere peek, so
 	// checking whether a rig was dead would keep it alive another day.
 	last := r.Created.Unix()
-	if t := claudeSessionActivity(home, r.Path); t > last {
-		last = t
+	if activity > last {
+		last = activity
 	}
 	if idle := now.Sub(time.Unix(last, 0)); idle < maxIdle {
 		return fmt.Sprintf("recently active (idle %s)", idle.Round(time.Second))

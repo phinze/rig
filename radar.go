@@ -878,6 +878,10 @@ func (m radarModel) openSessions() map[string]bool {
 // tell that an agent is open but idle-blank rather than mid-task.
 const agentPlaceholder = "Claude Code"
 
+func isAgentPlaceholder(title string) bool {
+	return title == agentPlaceholder || title == "Codex" || title == "Antigravity"
+}
+
 // stripAgentGlyph peels Claude Code's leading state glyph off a pane title,
 // leaving just the task text. The glyph is either ✳ (the resting star) or a
 // braille spinner frame (U+2800–U+28FF) captured mid-animation; either way it's

@@ -61,3 +61,21 @@ func TestWriteRigClaudeMD_NoTitle(t *testing.T) {
 		t.Errorf("expected bare id heading, got:\n%s", got)
 	}
 }
+
+func TestWriteRigAgentInstructions(t *testing.T) {
+	dir := t.TempDir()
+	m := manifest{ID: "MIR-10", Repos: map[string]string{"rig": "phinze/rig"}}
+	if err := writeRigAgentInstructions(dir, m); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"CLAUDE.md", "AGENTS.md", filepath.Join(".agents", "rules", "rig.md")} {
+		raw, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Errorf("reading %s: %v", name, err)
+			continue
+		}
+		if !strings.Contains(string(raw), "# Rig MIR-10") {
+			t.Errorf("%s lacks rig context", name)
+		}
+	}
+}

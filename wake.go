@@ -9,7 +9,7 @@ import (
 
 // runWake reverses rig park: it picks a parked rig (fzf when the arg is ambiguous
 // or absent), clears the parked mark, stands the tmux session back up at the same
-// basedir — so earlier claude sessions resume from the same cwd — and attaches.
+// basedir — so earlier agent sessions resume from the same cwd — and attaches.
 // This is the "a review came back, back to work" path; a rig that was merged
 // instead never needs waking, reap collects it.
 func runWake(args []string) error {
@@ -59,7 +59,7 @@ func runWake(args []string) error {
 	session := tmuxSessionName(chosen.Path)
 	if !tmuxHasSession(session) {
 		// Park killed it; stand a bare one back up at the same path so the
-		// earlier claude sessions are a `claude --resume` away.
+		// earlier agent sessions are a resume away.
 		if err := tmuxNewSession(session, chosen.Path); err != nil {
 			return fmt.Errorf("tmux new-session: %w", err)
 		}

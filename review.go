@@ -17,12 +17,16 @@ import (
 // only ever offers review-requested PRs, which are others' by construction, so
 // it skips straight to the review pickup.
 func runReview(args []string) error {
+	agent, args, err := extractAgentFlag(args)
+	if err != nil {
+		return err
+	}
 	if len(args) >= 1 {
 		pr := parsePRURL(args[0])
 		if pr == nil {
 			return fmt.Errorf("usage: rig review [https://github.com/OWNER/REPO/pull/NUMBER]")
 		}
-		return pickupPR(pr, "review")
+		return pickupPR(pr, "review", agent)
 	}
 
 	pr, err := pickReviewPR()
@@ -36,14 +40,14 @@ func runReview(args []string) error {
 	if err != nil {
 		return err
 	}
-	return reviewPickupPR(pr, meta)
+	return reviewPickupPR(pr, meta, agent)
 }
 
 // pickupPR materializes a rig around an existing PR, choosing authoring vs
 // review by who owns it. verb is the command the user reached for; when
 // authorship disagrees with it we say so and do the right thing anyway, because
 // "my work" has exactly one home (up) and "other work" exactly one (review).
-func pickupPR(pr *prRef, verb string) error {
+func pickupPR(pr *prRef, verb string, agent agentKind) error {
 	meta, err := prDetails(pr.Owner, pr.Repo, pr.Number)
 	if err != nil {
 		return err
@@ -58,19 +62,19 @@ func pickupPR(pr *prRef, verb string) error {
 		if verb == "review" {
 			fmt.Fprintf(os.Stderr, "rig: PR #%d is yours — picking it up to author, not review\n", pr.Number)
 		}
-		return authorPickupPR(pr, meta)
+		return authorPickupPR(pr, meta, agent)
 	}
 	if verb == "up" {
 		fmt.Fprintf(os.Stderr, "rig: PR #%d isn't yours — setting up a review, not authoring\n", pr.Number)
 	}
-	return reviewPickupPR(pr, meta)
+	return reviewPickupPR(pr, meta, agent)
 }
 
 // reviewPickupPR builds a read-only review rig: the PR head fetched fork-safe
 // via pull/N/head, kind=review (done when you've posted a review, never gated
-// on merge), recto --pr showing just the branch's diff, and claude dropped
+// on merge), recto --pr showing just the branch's diff, and the agent dropped
 // straight into /review-pr.
-func reviewPickupPR(pr *prRef, meta prMeta) error {
+func reviewPickupPR(pr *prRef, meta prMeta, agent agentKind) error {
 	repoPath, err := ensureGhqClone(pr.Owner, pr.Repo)
 	if err != nil {
 		return err
@@ -93,7 +97,7 @@ func reviewPickupPR(pr *prRef, meta prMeta) error {
 		return err
 	}
 
-	m := manifest{ID: rigID, Title: meta.Title, Kind: "review"}
+	m := manifest{ID: rigID, Title: meta.Title, Kind: "review", Agent: string(agent)}
 	if err := createBasedir(basedir, m); err != nil {
 		return err
 	}
@@ -106,6 +110,7 @@ func reviewPickupPR(pr *prRef, meta prMeta) error {
 
 	sess := sessionSpec{
 		rectoCmd: "recto --pr",
+		agent:    agent,
 		prompt: fmt.Sprintf(
 			"/review-pr %d — you are already on the PR branch in a dedicated jj workspace; skip branch verification",
 			pr.Number,
@@ -125,8 +130,8 @@ func reviewPickupPR(pr *prRef, meta prMeta) error {
 // and path its `rig up <issue>` used. Linear stamps its id into the branch
 // (phinze/mir-75-add-zig-stack), which the issue flow turned into id "mir-75"
 // and basedir "mir-75-add-zig-stack"; recovering both here means a resumed rig
-// lands at the exact cwd where you built it, so claude --resume finds those
-// sessions (claude keys history by cwd, and cwd is <basedir>/<repo>). A branch
+// lands at the exact cwd where you built it, so the agent can find those
+// sessions (each supported agent keys history by cwd). A branch
 // with no issue id (a PR not born from a tracker) has no prior rig to match, so
 // it falls back to pr-<n> + the PR title.
 func prRigIdentity(pr *prRef, meta prMeta) (rigID, basedirName string) {
@@ -145,8 +150,8 @@ func prRigIdentity(pr *prRef, meta prMeta) (rigID, basedirName string) {
 // leaves kind unset (authoring: done when the work merges). Identity comes from
 // the branch (see prRigIdentity), so it's idempotent against the rig its
 // originating issue-up created: a live one is switched to, a down'd one rebuilds
-// at the same path for claude --resume.
-func authorPickupPR(pr *prRef, meta prMeta) error {
+// at the same path for agent resume.
+func authorPickupPR(pr *prRef, meta prMeta, agent agentKind) error {
 	rigID, basedirName := prRigIdentity(pr, meta)
 	if done, err := attachExistingRig(rigID); err != nil {
 		return err
@@ -172,7 +177,7 @@ func authorPickupPR(pr *prRef, meta prMeta) error {
 		return err
 	}
 
-	m := manifest{ID: rigID, Title: meta.Title} // kind "" = authoring
+	m := manifest{ID: rigID, Title: meta.Title, Agent: string(agent)} // kind "" = authoring
 	if err := createBasedir(basedir, m); err != nil {
 		return err
 	}
@@ -185,6 +190,7 @@ func authorPickupPR(pr *prRef, meta prMeta) error {
 
 	sess := sessionSpec{
 		rectoCmd: "recto",
+		agent:    agent,
 		prompt: fmt.Sprintf(
 			"Resuming your PR #%d (%s) on its branch in a dedicated jj workspace. Read the PR and any review feedback, then help me address it.",
 			pr.Number, meta.Title,

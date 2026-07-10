@@ -17,11 +17,11 @@ and `jreview` fish functions, reshaped for where the work actually is:
 - **Multi-forge.** Decoupled from tracker concerns. Where the PR lands
   at push time is a separate axis from where the work came from.
 - **Sandbox-aware basedir.** The basedir doubles as the boundary for
-  yolo-claude (bwrap / `--allowed-paths` / whatever), so containment is
+  terminal agents (bwrap / `--allowed-paths` / whatever), so containment is
   structural, not bolted on.
 - **Metadata + .envrc at the basedir.** A `.rig.toml` is the source of
   truth; the basedir `.envrc` and `rig env` project `RIG_ID`,
-  `RIG_BASEDIR`, and per-workspace keys so downstream tools (claude
+  `RIG_BASEDIR`, `RIG_AGENT`, and per-workspace keys so downstream tools (agent
   context, jj templates, `rig down`) read from one place.
 
 ## Where it stands
@@ -45,14 +45,14 @@ sessions that predate the move, and those age out.
 
 ```
 ~/workspaces/proj-123-fix-auth/
-  .rig.toml          # id, title, created, [parked], [repos], [branches]
+  .rig.toml          # id, title, created, agent, [parked], [repos], [branches]
   .envrc             # exports RIG_BASEDIR, RIG_ID; rig env adds the rest
   api/               # jj workspace of phinze/api
   web/               # jj workspace of phinze/web
 ```
 
-The manifest is flat TOML: scalar `id` / `title` / `created` (and `parked`
-once dormant), a `[repos]` table mapping each subdir to its `owner/repo`,
+The manifest is flat TOML: scalar `id` / `title` / `created` (plus `agent` for
+non-Claude rigs, and `parked` once dormant), a `[repos]` table mapping each subdir to its `owner/repo`,
 and a `[branches]` table mapping each subdir to the branches its work rides
 (primary first, `rig track` secondaries after). `GH_REPO`, `RIG_WORKSPACE`,
 and a stable per-workspace `RIG_PORT` are projected by `rig env` rather than
@@ -83,11 +83,27 @@ job (climbing rig, fishing rig, sound rig):
 - `rig park` / `rig wake` / `rig waiting` — the dormant-review lifecycle:
   park sends a finished rig quiet (kills its session, keeps the basedir),
   waiting reports which parked rig's review came back, wake stands it back
-  up for `claude --resume`.
+  up for the selected agent to resume.
 - `rig down` — break the rig down; refuses to drop unmerged work.
 - `rig reap` — bulk-collect merged, WIP-free, idle rigs through the same
   teardown path as down.
 - `rig env` — print the identity exports for the direnv stdlib to eval.
+
+## Agent choice
+
+`rig up` and `rig review` accept `--agent claude|codex|antigravity`.
+`RIG_AGENT` supplies the default when the flag is absent, with Claude retained
+as the compatibility default. Rig launches the selected terminal agent in the
+left pane and saves the choice in the manifest. It renders the same generated
+context as `CLAUDE.md`, `AGENTS.md`, and `.agents/rules/rig.md`, leaving those
+files at the basedir so they do not become jj changes inside a repo workspace.
+Codex and Antigravity are explicitly pointed to `../AGENTS.md` in their opening
+prompt in case their instruction discovery stops at the repo cwd.
+
+Agent choice also reaches the lifecycle machinery. `rig ls`, radar, and reap
+take the newest matching turn from Claude's project JSONL files, Codex's rollout
+JSONL files, or Antigravity's timestamped prompt history. Radar recognizes all
+three commands in tmux, including wrapped Codex command names.
 
 ## Up my work, review other work
 

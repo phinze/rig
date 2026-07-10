@@ -9,7 +9,7 @@ import (
 // runPark marks the current rig dormant: it stamps the park time into the
 // manifest (so switch hides it and ls shows it as parked) and kills the tmux
 // session, so a review-waiting rig also drops out of any tmux-native switcher.
-// The basedir and its claude session history stay on disk untouched; `rig wake`
+// The basedir and its agent session history stay on disk untouched; `rig wake`
 // stands the session back up at the same path. This is the "work's done, up for
 // human review" state — no reason to keep the rig in your face until a review
 // comes back, at which point you wake it (changes requested) or just merge and

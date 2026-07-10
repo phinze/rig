@@ -11,6 +11,13 @@ in. `rig review <pr-url>` does the same shape for reviewing a pull request.
 `rig add owner/repo` brings more repos under the same rig, `rig ls` / `rig cd`
 move between rigs in flight, and `rig down` breaks it all back down.
 
+Claude Code is the default agent, but it is not baked into the rig. Pass
+`--agent codex` or `--agent antigravity` to `rig up` / `rig review`, or set
+`RIG_AGENT`, to launch that agent in the left pane instead. The choice is saved
+in `.rig.toml`; generated `CLAUDE.md`, `AGENTS.md`, and Antigravity workspace
+rules carry the same live task context, and `ls`, `radar`, and `reap` read all
+three agents' session activity.
+
 It exists to fold a pair of fish functions (`jpickup` / `jreview`) into one tool
 that composes things I already lean on (jj, gh, tmux, recto, linearis) instead
 of reinventing them. See [DESIGN.md](./DESIGN.md) for the full shape and the

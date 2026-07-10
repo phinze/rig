@@ -7,7 +7,66 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestSpawnSessionAgents(t *testing.T) {
+	realTmux, err := exec.LookPath("tmux")
+	if err != nil {
+		t.Skip("tmux not installed")
+	}
+	home := t.TempDir()
+	bin := filepath.Join(home, "bin")
+	mustMkdir(t, bin)
+	tmuxWrap := fmt.Sprintf("#!/bin/sh\nexec %s -L rig-agent-e2e -f /dev/null \"$@\"\n", realTmux)
+	mustWriteExec(t, filepath.Join(bin, "tmux"), tmuxWrap)
+	mustWriteExec(t, filepath.Join(bin, "recto"), "#!/bin/sh\nwhile :; do sleep 60; done\n")
+	for _, name := range []string{"claude", "codex", "agy"} {
+		marker := filepath.Join(home, name+".args")
+		script := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$*\" > %s\nwhile :; do sleep 60; done\n", shellQuote(marker))
+		mustWriteExec(t, filepath.Join(bin, name), script)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	t.Setenv("SHELL", "/bin/sh")
+	t.Cleanup(func() { _ = exec.Command(realTmux, "-L", "rig-agent-e2e", "kill-server").Run() })
+
+	cases := []struct {
+		agent  agentKind
+		binary string
+		flag   string
+	}{
+		{agentClaude, "claude", "--dangerously-skip-permissions"},
+		{agentCodex, "codex", "--dangerously-bypass-approvals-and-sandbox"},
+		{agentAntigravity, "agy", "--prompt-interactive"},
+	}
+	for _, c := range cases {
+		cwd := filepath.Join(home, string(c.agent), "repo")
+		mustMkdir(t, cwd)
+		session, err := spawnSession(filepath.Dir(cwd), cwd, sessionSpec{
+			rectoCmd: "recto", agent: c.agent, prompt: "test prompt",
+		})
+		if err != nil {
+			t.Fatalf("spawn %s: %v", c.agent, err)
+		}
+		marker := filepath.Join(home, c.binary+".args")
+		deadline := time.Now().Add(3 * time.Second)
+		for {
+			if _, err := os.Stat(marker); err == nil || !time.Now().Before(deadline) {
+				break
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		raw, err := os.ReadFile(marker)
+		if err != nil {
+			t.Fatalf("%s did not launch in %s: %v", c.agent, session, err)
+		}
+		args := string(raw)
+		if !strings.Contains(args, c.flag) || !strings.Contains(args, "test prompt") {
+			t.Errorf("%s args = %q, want %s and prompt", c.agent, args, c.flag)
+		}
+	}
+}
 
 // TestUpDown exercises the full rig up → rig down cycle against a fake repo
 // and a dedicated tmux server, so it doesn't touch the user's real tmux
@@ -101,8 +160,10 @@ exit 1
 		basedir,
 		filepath.Join(basedir, ".rig.toml"),
 		filepath.Join(basedir, ".envrc"),
-		// agent-facing breadcrumb, rendered from the manifest.
+		// Agent-facing breadcrumbs, rendered from the manifest.
 		filepath.Join(basedir, "CLAUDE.md"),
+		filepath.Join(basedir, "AGENTS.md"),
+		filepath.Join(basedir, ".agents", "rules", "rig.md"),
 		filepath.Join(basedir, "fakerepo", ".jj"),
 		// direnv anchor written because the fake repo ships no .envrc of its own.
 		filepath.Join(basedir, "fakerepo", ".envrc"),

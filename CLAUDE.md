@@ -17,6 +17,10 @@ a `.rig.toml` and `.envrc`, and spawns a tmux session ready for an agent to
 work in. `rig add owner/repo` brings additional repos under the same rig.
 `rig down` breaks it back down.
 
+The agent is selectable with `--agent claude|codex|antigravity` (or
+`RIG_AGENT`) and defaults to Claude for compatibility. Rig writes equivalent
+generated instructions and tracks session activity for all three.
+
 ## Architecture
 
 TODO: fill in as the shape solidifies. For now, see DESIGN.md §"Shape

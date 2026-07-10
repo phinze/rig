@@ -140,7 +140,7 @@ type rigStatus struct {
 	SessionLive bool       `json:"session_live"`
 	Agent       string     `json:"agent"`                 // working | idle | "" (no session)
 	Parked      bool       `json:"parked"`                // dormant, awaiting review
-	LastActive  *time.Time `json:"last_active,omitempty"` // newest claude turn, if any
+	LastActive  *time.Time `json:"last_active,omitempty"` // newest agent turn, if any
 	PRs         []rigPR    `json:"prs,omitempty"`         // populated only under --full
 
 	// radar-only, never serialized: a row that's a bare tmux session (not a
@@ -148,7 +148,7 @@ type rigStatus struct {
 	// NEW picker that stands up a fresh session at a zoxide dir carries
 	// create=true (Path is the dir). A child row dangled under a parent carries
 	// child=true, session set to the window's session:index switch target, and
-	// childKey holding the window label. agents are the parent's claude windows,
+	// childKey holding the window label. agents are the parent's agent windows,
 	// expanded into child rows at render. Everything PR- and agent-shaped is
 	// skipped for these; they exist so the radar can be a universal HUD, not just
 	// a board over rigs.
@@ -169,14 +169,19 @@ type rigPR struct {
 	prInfo
 }
 
-// agentActiveWindow is how recently a claude turn must have landed for the
+// agentActiveWindow is how recently an agent turn must have landed for the
 // agent to read as "working" rather than "idle".
 const agentActiveWindow = 3 * time.Minute
 
 // rigStatuses enriches each rig with its live signals. Kept out of listRigs
-// so cd and reap don't pay for tmux/claude probes they don't use.
+// so cd and reap don't pay for tmux/agent probes they don't use.
 func rigStatuses(rigs []rigInfo, home string, now time.Time) []rigStatus {
 	out := make([]rigStatus, 0, len(rigs))
+	paths := make([]string, len(rigs))
+	for i := range rigs {
+		paths[i] = rigs[i].Path
+	}
+	activity := agentSessionActivities(home, paths)
 	for _, r := range rigs {
 		s := rigStatus{
 			ID:          r.ID,
@@ -187,7 +192,7 @@ func rigStatuses(rigs []rigInfo, home string, now time.Time) []rigStatus {
 			Parked:      !r.Parked.IsZero(),
 			SessionLive: tmuxHasSession(tmuxSessionName(r.Path)),
 		}
-		if ts := claudeSessionActivity(home, r.Path); ts > 0 {
+		if ts := activity[r.Path]; ts > 0 {
 			t := time.Unix(ts, 0)
 			s.LastActive = &t
 		}
@@ -197,11 +202,11 @@ func rigStatuses(rigs []rigInfo, home string, now time.Time) []rigStatus {
 	return out
 }
 
-// agentState buckets agent attention from the newest claude turn. We can only
+// agentState buckets agent attention from the newest agent turn. We can only
 // honestly read recency from session-file mtimes (a turn appends, repaint
 // doesn't), so this is working-vs-idle, not the working/waiting/idle split the
 // issue sketched — telling "waiting on input" from "quiet" needs a richer
-// signal than a timestamp. Returns "" when no claude session exists at all.
+// signal than a timestamp. Returns "" when no agent session exists at all.
 func agentState(lastActive *time.Time, now time.Time) string {
 	if lastActive == nil {
 		return ""

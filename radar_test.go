@@ -754,11 +754,13 @@ func TestParseAgentPanes(t *testing.T) {
 		"s\t0\t2\twin\tclaude\t" + recent + "\t⠂ Task B",    // distinct task, same window → keep
 		"s\t1\t0\twin\tfish\t" + recent + "\t~/x - fish",    // shell → skip
 		"s\t2\t0\tcw\tclaude\t" + stale + "\t✳ Claude Code", // placeholder, idle
+		"s\t3\t0\tcodex\tcodex-raw\t" + recent + "\t⠴ rig",
+		"s\t4\t0\tagy\tagy\t" + recent + "\tAntigravity",
 	}, "\n")
 
 	kids := parseAgentPanes(out, now)["s"]
-	if len(kids) != 3 {
-		t.Fatalf("children = %d (%+v), want 3", len(kids), kids)
+	if len(kids) != 5 {
+		t.Fatalf("children = %d (%+v), want 5", len(kids), kids)
 	}
 	if kids[0].Context != "Task A" || kids[0].Target != "s:0.0" || !kids[0].Working {
 		t.Errorf("child 0 = %+v, want working Task A at s:0.0", kids[0])
@@ -768,6 +770,12 @@ func TestParseAgentPanes(t *testing.T) {
 	}
 	if kids[2].Context != "" || kids[2].Target != "s:2.0" || kids[2].Working {
 		t.Errorf("child 2 = %+v, want idle empty context at s:2.0", kids[2])
+	}
+	if kids[3].Context != "rig" || kids[3].Target != "s:3.0" {
+		t.Errorf("child 3 = %+v, want codex at s:3.0", kids[3])
+	}
+	if kids[4].Context != "" || kids[4].Target != "s:4.0" {
+		t.Errorf("child 4 = %+v, want blank antigravity at s:4.0", kids[4])
 	}
 }
 

@@ -19,7 +19,7 @@ func TestEnvExports(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(basedir, "cloud", ".iso"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	m := manifest{ID: "mir-75", Title: "add zig stack", Repos: map[string]string{
+	m := manifest{ID: "mir-75", Title: "add zig stack", Agent: "codex", Repos: map[string]string{
 		"runtime": "mirendev/runtime",
 		"cloud":   "mirendev/cloud",
 	}}
@@ -41,6 +41,7 @@ func TestEnvExports(t *testing.T) {
 			"basedir itself", basedir,
 			[]string{
 				"export RIG_BASEDIR='" + basedir + "'",
+				"export RIG_AGENT='codex'",
 				"export RIG_ID='mir-75'",
 			},
 		},
@@ -48,6 +49,7 @@ func TestEnvExports(t *testing.T) {
 			"repo workspace dir", filepath.Join(basedir, "runtime"),
 			[]string{
 				"export RIG_BASEDIR='" + basedir + "'",
+				"export RIG_AGENT='codex'",
 				"export RIG_ID='mir-75'",
 				"export RIG_WORKSPACE='mir-75-runtime'",
 				"export RIG_PORT=17527",
@@ -58,6 +60,7 @@ func TestEnvExports(t *testing.T) {
 			"nested under repo workspace", filepath.Join(basedir, "runtime", "pkg"),
 			[]string{
 				"export RIG_BASEDIR='" + basedir + "'",
+				"export RIG_AGENT='codex'",
 				"export RIG_ID='mir-75'",
 				"export RIG_WORKSPACE='mir-75-runtime'",
 				"export RIG_PORT=17527",
@@ -68,6 +71,7 @@ func TestEnvExports(t *testing.T) {
 			"non-repo subdir gets rig identity only", filepath.Join(basedir, "tmp"),
 			[]string{
 				"export RIG_BASEDIR='" + basedir + "'",
+				"export RIG_AGENT='codex'",
 				"export RIG_ID='mir-75'",
 			},
 		},
@@ -75,6 +79,7 @@ func TestEnvExports(t *testing.T) {
 			"iso-using repo also gets ISO_SESSION", filepath.Join(basedir, "cloud"),
 			[]string{
 				"export RIG_BASEDIR='" + basedir + "'",
+				"export RIG_AGENT='codex'",
 				"export RIG_ID='mir-75'",
 				"export RIG_WORKSPACE='mir-75-cloud'",
 				"export RIG_PORT=17314",
