@@ -73,7 +73,34 @@ func runDown(args []string) error {
 	// the session this is just a normal kill; if we're inside, our
 	// terminal exits cleanly with the work already done.
 	session := tmuxSessionName(basedir)
-	if cwdInside && !insideTmuxSession(session) {
+	inDoomed := insideTmuxSession(session)
+
+	// Interactive rescue: when down runs from inside the very session it's about
+	// to kill, pop the radar so you can pick where to land next instead of the
+	// kill dropping you to the outer shell. The teardown above already happened —
+	// the pick only chooses a destination, and escaping falls through to the
+	// plain detach. We only do this when we're actually in the doomed session:
+	// run from elsewhere, the kill never touches your client, so a TUI would just
+	// hijack a terminal that was going to stay put anyway.
+	if inDoomed && stdinIsTTY() {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return err
+		}
+		dest, err := radarPick(home)
+		if err != nil {
+			return err
+		}
+		if dest != nil {
+			// switch-client onto the destination before the kill, so by the time
+			// this session dies our client is already looking elsewhere.
+			if err := radarAct(*dest); err != nil {
+				return err
+			}
+		}
+	}
+
+	if cwdInside && !inDoomed {
 		fmt.Fprintf(os.Stderr, "rig: note: your shell's cwd was inside the basedir; run `cd` to recover.\n")
 	}
 	if err := tmuxKillSession(session); err != nil {

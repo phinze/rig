@@ -39,14 +39,28 @@ func runRadar(args []string) error {
 	if len(args) != 0 {
 		return fmt.Errorf("usage: rig radar")
 	}
-	if !stdinIsTTY() {
-		return fmt.Errorf("radar is a TUI — run it from a terminal (or tmux popup)")
-	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
 	}
+	chosen, err := radarPick(home)
+	if err != nil {
+		return err
+	}
+	if chosen == nil {
+		return nil
+	}
+	return radarAct(*chosen)
+}
 
+// radarPick runs the radar as a pure chooser: it renders the live board, lets
+// you land on a row, and returns that row without acting on it — so a caller
+// can sequence its own work (rig down's teardown, say) between the pick and the
+// switch radarAct would perform. nil means you escaped without choosing.
+func radarPick(home string) (*rigStatus, error) {
+	if !stdinIsTTY() {
+		return nil, fmt.Errorf("radar is a TUI — run it from a terminal (or tmux popup)")
+	}
 	m := radarModel{
 		home:      home,
 		current:   currentTmuxSession(),
@@ -65,19 +79,15 @@ func runRadar(args []string) error {
 	// state; the PR fan-out and the tick start from Init.
 	scan := radarScanNow(home)
 	if scan.err != nil {
-		return scan.err
+		return nil, scan.err
 	}
 	m.apply(scan)
 
 	final, err := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	chosen := final.(radarModel).chosen
-	if chosen == nil {
-		return nil
-	}
-	return radarAct(*chosen)
+	return final.(radarModel).chosen, nil
 }
 
 // radarAct is what Enter meant: wake the rig if it was parked, stand a session
