@@ -563,6 +563,11 @@ echo "fake linearis: unsupported invocation $*" >&2
 exit 1
 `
 	mustWriteExec(t, filepath.Join(bin, "linearis"), linearis)
+	ghNoPR := "#!/bin/sh\n" +
+		"if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"view\" ]; then\n" +
+		"  echo 'no pull requests found for branch' >&2\n  exit 1\nfi\n" +
+		"echo \"fake gh: unsupported invocation $*\" >&2\nexit 1\n"
+	mustWriteExec(t, filepath.Join(bin, "gh"), ghNoPR)
 
 	tmuxWrap := fmt.Sprintf("#!/bin/sh\nexec %s -L rig-e2e-reap \"$@\"\n", realTmux)
 	mustWriteExec(t, filepath.Join(bin, "tmux"), tmuxWrap)
@@ -609,7 +614,7 @@ exit 1
 		t.Fatal(err)
 	}
 	out = mustOutput(t, home, env, rigBin, "reap", "--max-idle", "0")
-	if !strings.Contains(out, "keep fake-1") || !strings.Contains(out, "uncommitted changes") {
+	if !strings.Contains(out, "keep fake-1") || !strings.Contains(out, "working-copy changes") {
 		t.Errorf("expected WIP gate to keep the rig:\n%s", out)
 	}
 	if _, err := os.Stat(basedir); err != nil {

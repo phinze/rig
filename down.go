@@ -36,7 +36,7 @@ func runDown(args []string) error {
 
 	// Safety gate, unless forced. Two checks that together mean "this rig's
 	// work is truly done": the shared, lazy local-work judgment (reap's too —
-	// uncommitted changes or off-trunk commits not under a merged branch), and
+	// working-copy changes or off-trunk commits not covered by a merged PR), and
 	// an eager pass that asks GitHub about every recorded PR, so an OPEN PR
 	// blocks even when the workspace holds no local commits. --force skips both.
 	if !force {

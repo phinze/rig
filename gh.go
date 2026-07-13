@@ -15,7 +15,11 @@ type prInfo struct {
 	Number int    `json:"number"`
 	State  string `json:"state"` // OPEN | CLOSED | MERGED
 	URL    string `json:"url"`
-	Checks string `json:"checks,omitempty"` // passing | failing | pending | ""
+	// HeadOID is the immutable Git commit GitHub saw at the tip of the PR.
+	// Keep it out of rig ls's public JSON: teardown uses it internally to
+	// account for squash-merged work after GitHub deletes the head branch.
+	HeadOID string `json:"-"`
+	Checks  string `json:"checks,omitempty"` // passing | failing | pending | ""
 	// Review is GitHub's rollup review decision on the PR:
 	// APPROVED | CHANGES_REQUESTED | REVIEW_REQUIRED, or "" when the repo has
 	// no required-review policy and nobody's weighed in. It's the signal park
@@ -140,7 +144,7 @@ func reviewSubmittedByMe(nameWithOwner, branch, login string) (bool, error) {
 // concurrently.
 func prForBranch(nameWithOwner, branch string) (*prInfo, error) {
 	cmd := exec.Command("gh", "pr", "view", branch,
-		"-R", nameWithOwner, "--json", "number,state,url,statusCheckRollup,reviewDecision")
+		"-R", nameWithOwner, "--json", "number,state,url,headRefOid,statusCheckRollup,reviewDecision")
 	out, err := cmd.Output()
 	if err != nil {
 		var ee *exec.ExitError
@@ -159,6 +163,7 @@ func prForBranch(nameWithOwner, branch string) (*prInfo, error) {
 		Number            int         `json:"number"`
 		State             string      `json:"state"`
 		URL               string      `json:"url"`
+		HeadOID           string      `json:"headRefOid"`
 		StatusCheckRollup []checkItem `json:"statusCheckRollup"`
 		ReviewDecision    string      `json:"reviewDecision"`
 	}
@@ -166,7 +171,7 @@ func prForBranch(nameWithOwner, branch string) (*prInfo, error) {
 		return nil, fmt.Errorf("parsing gh pr view %s (%s): %w", branch, nameWithOwner, err)
 	}
 	return &prInfo{
-		Number: v.Number, State: v.State, URL: v.URL,
+		Number: v.Number, State: v.State, URL: v.URL, HeadOID: v.HeadOID,
 		Checks: rollupChecks(v.StatusCheckRollup), Review: v.ReviewDecision,
 	}, nil
 }

@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -183,68 +184,118 @@ func rigTeardownBlocker(basedir string, fetched map[string]bool) string {
 // fully-merged workspace reaps without a round-trip. `rig down` layers an eager
 // all-PRs-merged gate on top (unmergedPRsBlocker); reap leans on this alone.
 //
-// Two gates, all fail-closed. The first differs by rig kind, because "done"
-// does: an authoring rig guards its own committed work (authoringTeardownBlocker,
-// gate 1a), while a review rig guards nothing of yours and instead requires that
-// you've posted a review (reviewTeardownBlocker, gate 1b) — its off-trunk commits
-// are the PR author's, fetched read-only, so their merge state is beside the
-// point. Then a shared gate 2:
-//
-//  2. @ itself gets one allowance: the direnv anchor rig wrote at setup. jj
-//     auto-tracks it, leaving @ permanently non-empty in repos that ship no
-//     .envrc of their own; without the carve-out no such rig would ever reap.
-//     Anything else dirty blocks — including scratch you edited in a review
-//     workspace, since the author's commits are @'s parents, not @ itself.
+// The judgment differs by rig kind, because "done" does. An authoring rig
+// accounts for all work reachable from @ against merged PR heads. A review rig
+// guards none of the author's commits and instead requires that you've posted a
+// review, then checks @ alone for scratch edits of your own. Both paths allow
+// the direnv anchor rig wrote at setup: jj auto-tracks it in repos that ship no
+// .envrc, but it isn't authored work.
 func workspaceTeardownBlocker(ws, nameWithOwner, label string, branches []string, review bool, login string) string {
 	if review {
 		if reason := reviewTeardownBlocker(nameWithOwner, label, branches, login); reason != "" {
 			return reason
 		}
-	} else if reason := authoringTeardownBlocker(ws, nameWithOwner, label, branches); reason != "" {
-		return reason
+		atEmpty, err := jjRevsetEmpty(ws, "@ & ~empty() & ~::trunk()")
+		if err != nil {
+			return fmt.Sprintf("%s: jj check failed: %v", label, err)
+		}
+		if !atEmpty && !anchorOnlyWIP(ws) {
+			return fmt.Sprintf("%s has working-copy changes", label)
+		}
+		return ""
 	}
+	return authoringTeardownBlocker(ws, nameWithOwner, label, branches)
+}
 
+// authoringTeardownBlocker accounts for an authoring rig's off-trunk work by
+// immutable PR head commits, not bookmark names. GitHub commonly deletes a
+// merged branch, but its PR head OID remains available and jj can still resolve
+// the commit. This also lets a pushed, merged PR remain at @ without being
+// mislabeled as "uncommitted": if the PR head covers it, the work is safe.
+// Anything no merged PR head covers stays put, with a more specific diagnosis
+// when the workspace has evolved onto an untracked or still-open branch.
+func authoringTeardownBlocker(ws, nameWithOwner, label string, branches []string) string {
 	atEmpty, err := jjRevsetEmpty(ws, "@ & ~empty() & ~::trunk()")
 	if err != nil {
 		return fmt.Sprintf("%s: jj check failed: %v", label, err)
 	}
-	if !atEmpty && !anchorOnlyWIP(ws) {
-		return fmt.Sprintf("%s has uncommitted changes", label)
+	anchorOnly := !atEmpty && anchorOnlyWIP(ws)
+	work := "::@ & ~empty() & ~::trunk()"
+	if anchorOnly {
+		// The generated direnv anchor is setup metadata, not authored work.
+		work = "::@ & ~@ & ~empty() & ~::trunk()"
 	}
-	return ""
-}
 
-// authoringTeardownBlocker is gate 1a: an authoring rig's off-trunk commits must
-// all sit under a merged branch, or it's genuine unmerged work. Returns "" when
-// the workspace's committed history is safe to drop.
-func authoringTeardownBlocker(ws, nameWithOwner, label string, branches []string) string {
-	// Cheap first: any non-empty off-trunk commit reachable from @? If not,
+	// Cheap first: any authored off-trunk commit reachable from @? If not,
 	// there's no local work to lose and nothing to verify against GitHub.
-	empty, err := jjRevsetEmpty(ws, "::@ & ~@ & ~empty() & ~::trunk()")
+	empty, err := jjRevsetEmpty(ws, work)
 	if err != nil {
 		return fmt.Sprintf("%s: jj check failed: %v", label, err)
 	}
 	if empty {
 		return ""
 	}
-	clauses := []string{"::@ & ~@ & ~empty() & ~::trunk()"}
+
+	clauses := []string{work}
+	prs := make(map[string]*prInfo, len(branches))
 	for _, b := range branches {
 		pr, err := prForBranch(nameWithOwner, b)
 		if err != nil {
 			return fmt.Sprintf("%s: checking PR for %s: %v", label, b, err)
 		}
+		prs[b] = pr
 		if pr != nil && pr.State == "MERGED" {
-			clauses = append(clauses, fmt.Sprintf("~::%q", b))
+			if pr.HeadOID == "" {
+				return fmt.Sprintf("%s: checking PR #%d (%s): GitHub returned no head commit", label, pr.Number, b)
+			}
+			// If the head isn't in this repo, it cannot cover any commit in work.
+			// Leaving it out fails closed: the remaining work blocks below.
+			if revExists(ws, pr.HeadOID) {
+				clauses = append(clauses, fmt.Sprintf("~::%q", pr.HeadOID))
+			}
 		}
 	}
-	beyond, err := jjRevsetEmpty(ws, strings.Join(clauses, " & "))
+	remaining := strings.Join(clauses, " & ")
+	beyond, err := jjRevsetEmpty(ws, remaining)
 	if err != nil {
 		return fmt.Sprintf("%s: jj check failed: %v", label, err)
 	}
-	if !beyond {
-		return fmt.Sprintf("%s has unmerged work", label)
+	if beyond {
+		return ""
 	}
-	return ""
+
+	current, err := jjPRBranch(ws)
+	if err != nil {
+		return fmt.Sprintf("%s: resolving current branch: %v", label, err)
+	}
+	if current != "" {
+		if !slices.Contains(branches, current) {
+			return fmt.Sprintf("%s has work on untracked branch %s\n      run `rig track %s` to include it", label, current, current)
+		}
+		pr := prs[current]
+		switch {
+		case pr == nil:
+			return fmt.Sprintf("%s branch %s has work but no PR", label, current)
+		case pr.State != "MERGED":
+			// Distinguish an exact pushed PR head from local work layered on top.
+			if pr.HeadOID != "" && revExists(ws, pr.HeadOID) {
+				extra, err := jjRevsetEmpty(ws, remaining+fmt.Sprintf(" & ~::%q", pr.HeadOID))
+				if err != nil {
+					return fmt.Sprintf("%s: jj check failed: %v", label, err)
+				}
+				if !extra {
+					return fmt.Sprintf("%s has changes beyond PR #%d (%s)", label, pr.Number, current)
+				}
+			}
+			return fmt.Sprintf("%s PR #%d (%s) is %s, not merged", label, pr.Number, current, strings.ToLower(pr.State))
+		default:
+			return fmt.Sprintf("%s has changes beyond merged PR #%d (%s)", label, pr.Number, current)
+		}
+	}
+	if !atEmpty && !anchorOnly {
+		return fmt.Sprintf("%s has working-copy changes", label)
+	}
+	return fmt.Sprintf("%s has unmerged work", label)
 }
 
 // reviewTeardownBlocker is gate 1b: a review rig is done once you've posted a

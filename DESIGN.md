@@ -219,11 +219,16 @@ The nightly's rig-shaped replacement is one line: `rig reap`.
 Shape: walk `rig ls`, and for each rig decide reapability with the same
 fail-closed posture the shell script earned the hard way:
 
-- **Merged**: every repo workspace's work is an ancestor of `trunk()`
-  in its source repo. A missing bookmark is not a green light (possible
-  unpushed WIP); jj errors mean skip, never guess.
-- **No WIP**: no non-empty commits reachable from `@` that aren't on
-  trunk (catches both dirty `@` and the jj-new-on-top-of-WIP shape).
+- **Accounted for**: every non-empty off-trunk commit reachable from `@`
+  is covered by a merged PR's immutable GitHub head OID. This survives
+  squash merges (where the original commits never become ancestors of
+  trunk) and GitHub deleting the head bookmark after merge. An evolving
+  rig records each secondary branch with `rig track`; finding work on a
+  current but unrecorded bookmark blocks with that command as the hint.
+- **No extra WIP**: work beyond the pushed PR head blocks, whether it is
+  still at `@` or parked under an empty `jj new` commit. A non-empty `@`
+  that exactly matches a merged PR head is already accounted for and does
+  not need a ceremonial `jj new` before teardown.
 - **Idle**: no recent attention. Two signals, both persistent and
   neither resettable by accident: the newest claude session JSONL mtime
   under `~/.claude/projects` for cwds inside the basedir (a turn
@@ -247,9 +252,10 @@ against a stale trunk, which fails closed too.
 
 Implementation surfaced one wrinkle: the direnv anchor rig writes into
 workspaces whose repo ships no .envrc gets auto-tracked by jj, leaving
-`@` permanently non-empty — no such rig would ever reap. So `@` gets
-exactly one allowance: a diff of precisely `.envrc` whose content is
-the bare anchor. Anything else dirty at `@` blocks.
+`@` permanently non-empty — no such rig would ever reap. So local-work
+accounting gets exactly one allowance: a diff of precisely `.envrc` whose
+content is the bare anchor. Anything else must be covered by a merged PR
+head or it blocks.
 
 Reapable rigs go through the same code path as `rig down`
 (`teardownRig`). Teardown also grew the tool cleanup `down` previously

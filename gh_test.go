@@ -8,7 +8,8 @@ import (
 
 // fakeGh installs a stub `gh` on PATH for the duration of the test. Its
 // behavior is steered by env vars the test sets: GH_FAKE_STATE picks the PR
-// state it reports, GH_FAKE_REVIEW sets its reviewDecision, GH_FAKE_NOPR makes
+// state it reports, GH_FAKE_HEAD_OID sets its immutable PR tip,
+// GH_FAKE_REVIEW sets its reviewDecision, GH_FAKE_NOPR makes
 // it answer "no pull requests found", and GH_FAKE_ERR makes it fail like an
 // offline/unauthorized gh. For the review-rig path, GH_FAKE_REVIEWS supplies the
 // `reviews` array a `--json reviews` query returns (default empty), and
@@ -40,8 +41,16 @@ if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
   esac
   rollup='[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"}]'
   if [ -n "${GH_FAKE_ROLLUP+set}" ]; then rollup="$GH_FAKE_ROLLUP"; fi
-  printf '{"number":7,"state":"%s","url":"https://github.com/o/r/pull/7","statusCheckRollup":%s,"reviewDecision":"%s"}\n' \
-    "${GH_FAKE_STATE:-OPEN}" "${rollup:-[]}" "${GH_FAKE_REVIEW:-}"
+  number=7
+  state="${GH_FAKE_STATE:-OPEN}"
+  head_oid="${GH_FAKE_HEAD_OID:-}"
+  if [ -n "$GH_FAKE_ALT_BRANCH" ] && [ "$3" = "$GH_FAKE_ALT_BRANCH" ]; then
+    number=8
+    state="${GH_FAKE_ALT_STATE:-$state}"
+    head_oid="${GH_FAKE_ALT_HEAD_OID:-$head_oid}"
+  fi
+  printf '{"number":%s,"state":"%s","url":"https://github.com/o/r/pull/%s","headRefOid":"%s","statusCheckRollup":%s,"reviewDecision":"%s"}\n' \
+	"$number" "$state" "$number" "$head_oid" "${rollup:-[]}" "${GH_FAKE_REVIEW:-}"
   exit 0
 fi
 echo "fake gh: unsupported invocation $*" >&2
@@ -58,11 +67,12 @@ func TestPrForBranch(t *testing.T) {
 
 	t.Run("merged with passing checks", func(t *testing.T) {
 		t.Setenv("GH_FAKE_STATE", "MERGED")
+		t.Setenv("GH_FAKE_HEAD_OID", "deadbeef")
 		pr, err := prForBranch("o/r", "feat")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if pr == nil || pr.State != "MERGED" || pr.Number != 7 || pr.Checks != "passing" {
+		if pr == nil || pr.State != "MERGED" || pr.Number != 7 || pr.HeadOID != "deadbeef" || pr.Checks != "passing" {
 			t.Fatalf("got %+v, want a MERGED PR #7 with passing checks", pr)
 		}
 	})
