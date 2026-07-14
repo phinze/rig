@@ -209,6 +209,21 @@ func teardownRig(basedir string, m manifest) error {
 		}
 	}
 
+	// Reap compose-based dev-envs (e.g. cloud's postgres/valkey). The iso loop
+	// above only touches .iso projects, so a repo whose dev-env is docker-compose
+	// would otherwise leak its containers, network, and volumes on every teardown.
+	// Compose stamps each container with the working_dir it was started from, so
+	// we find every project rooted inside this rig without needing to know its
+	// (dev-id-derived) project name. Best-effort, same as iso stop.
+	if _, err := exec.LookPath("docker"); err == nil {
+		for project, workdir := range composeProjectsUnder(basedir) {
+			fmt.Fprintf(os.Stderr, "rig: docker compose -p %s down -v\n", project)
+			if err := composeDown(workdir, project); err != nil {
+				fmt.Fprintf(os.Stderr, "rig: warning: compose down %s: %v\n", project, err)
+			}
+		}
+	}
+
 	for source, names := range forgetGroups {
 		fmt.Fprintf(os.Stderr, "rig: jj workspace forget %v (from %s)\n", names, source)
 		if err := jjWorkspaceForget(source, names); err != nil {
@@ -229,4 +244,59 @@ func isoStop(workspaceDir, session string) error {
 	cmd.Dir = workspaceDir
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	return cmd.Run()
+}
+
+// composeProjectsUnder returns docker-compose projects whose containers were
+// started from somewhere inside basedir, mapping project name to a working_dir
+// we can run `docker compose down` from. Matching on the working_dir label means
+// we don't need to know a project's (dev-id-derived) name, and resolving symlinks
+// on both sides keeps the prefix check honest.
+func composeProjectsUnder(basedir string) map[string]string {
+	out, err := exec.Command("docker", "ps", "-a",
+		"--filter", "label=com.docker.compose.project",
+		"--format", `{{.Label "com.docker.compose.project"}}`+"\t"+`{{.Label "com.docker.compose.project.working_dir"}}`,
+	).Output()
+	if err != nil {
+		return nil
+	}
+
+	base := resolvePath(basedir)
+	found := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		project, workdir, ok := strings.Cut(line, "\t")
+		if !ok || project == "" || workdir == "" {
+			continue
+		}
+		if isUnder(resolvePath(workdir), base) {
+			found[project] = workdir
+		}
+	}
+	return found
+}
+
+// composeDown tears a compose project down entirely (containers, network, and
+// volumes) from its working dir. rig down is a permanent teardown, so a lingering
+// dev database is just another orphan.
+func composeDown(workdir, project string) error {
+	cmd := exec.Command("docker", "compose", "-p", project, "down", "-v")
+	cmd.Dir = workdir
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	return cmd.Run()
+}
+
+// resolvePath returns dir with symlinks resolved, falling back to a cleaned
+// absolute path when the target can't be resolved (e.g. it no longer exists).
+func resolvePath(dir string) string {
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		return resolved
+	}
+	if abs, err := filepath.Abs(dir); err == nil {
+		return abs
+	}
+	return filepath.Clean(dir)
+}
+
+// isUnder reports whether child is parent or nested inside it.
+func isUnder(child, parent string) bool {
+	return child == parent || strings.HasPrefix(child, parent+string(os.PathSeparator))
 }

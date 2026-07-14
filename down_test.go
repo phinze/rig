@@ -57,3 +57,21 @@ func TestUnmergedPRsBlocker(t *testing.T) {
 		}
 	})
 }
+
+func TestIsUnder(t *testing.T) {
+	tests := []struct {
+		child, parent string
+		want          bool
+	}{
+		{"/rigs/task/cloud", "/rigs/task", true},
+		{"/rigs/task", "/rigs/task", true},
+		{"/rigs/task-other/cloud", "/rigs/task", false}, // prefix but not nested
+		{"/rigs/other", "/rigs/task", false},
+		{"/rigs/task/a/b/c", "/rigs/task", true},
+	}
+	for _, tt := range tests {
+		if got := isUnder(tt.child, tt.parent); got != tt.want {
+			t.Errorf("isUnder(%q, %q) = %v, want %v", tt.child, tt.parent, got, tt.want)
+		}
+	}
+}
