@@ -198,7 +198,10 @@ cascade), so a repo shipping its own — nix devshells — would shadow the
 basedir's exports. Tools should consume the env vars first
 (`RIG_WORKSPACE` is the per-working-tree key, same shape as the jj
 workspace name), falling back to enough-path-to-be-unique rather than
-basename.
+basename. Rig also prepends a rig-local shim directory to `PATH`. Its `gh`
+shim resolves `GH_REPO` from the invocation cwd, rather than the agent's
+startup environment, so one agent can safely ship several repos from the same
+rig.
 
 tmux sessions are named with the full basedir path in session-wizard's
 full-path convention (`~/workspaces/...`, lowercased, `. :` → `-`), so a

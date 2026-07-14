@@ -160,6 +160,7 @@ exit 1
 		basedir,
 		filepath.Join(basedir, ".rig.toml"),
 		filepath.Join(basedir, ".envrc"),
+		filepath.Join(basedir, ".rig", "bin", "gh"),
 		// Agent-facing breadcrumbs, rendered from the manifest.
 		filepath.Join(basedir, "CLAUDE.md"),
 		filepath.Join(basedir, "AGENTS.md"),

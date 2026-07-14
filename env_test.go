@@ -41,6 +41,8 @@ func TestEnvExports(t *testing.T) {
 			"basedir itself", basedir,
 			[]string{
 				"export RIG_BASEDIR='" + basedir + "'",
+				"PATH_rm '" + filepath.Join(basedir, ".rig", "bin") + "'",
+				"PATH_add '" + filepath.Join(basedir, ".rig", "bin") + "'",
 				"export RIG_AGENT='codex'",
 				"export RIG_ID='mir-75'",
 			},
@@ -49,6 +51,8 @@ func TestEnvExports(t *testing.T) {
 			"repo workspace dir", filepath.Join(basedir, "runtime"),
 			[]string{
 				"export RIG_BASEDIR='" + basedir + "'",
+				"PATH_rm '" + filepath.Join(basedir, ".rig", "bin") + "'",
+				"PATH_add '" + filepath.Join(basedir, ".rig", "bin") + "'",
 				"export RIG_AGENT='codex'",
 				"export RIG_ID='mir-75'",
 				"export RIG_WORKSPACE='mir-75-runtime'",
@@ -60,6 +64,8 @@ func TestEnvExports(t *testing.T) {
 			"nested under repo workspace", filepath.Join(basedir, "runtime", "pkg"),
 			[]string{
 				"export RIG_BASEDIR='" + basedir + "'",
+				"PATH_rm '" + filepath.Join(basedir, ".rig", "bin") + "'",
+				"PATH_add '" + filepath.Join(basedir, ".rig", "bin") + "'",
 				"export RIG_AGENT='codex'",
 				"export RIG_ID='mir-75'",
 				"export RIG_WORKSPACE='mir-75-runtime'",
@@ -71,6 +77,8 @@ func TestEnvExports(t *testing.T) {
 			"non-repo subdir gets rig identity only", filepath.Join(basedir, "tmp"),
 			[]string{
 				"export RIG_BASEDIR='" + basedir + "'",
+				"PATH_rm '" + filepath.Join(basedir, ".rig", "bin") + "'",
+				"PATH_add '" + filepath.Join(basedir, ".rig", "bin") + "'",
 				"export RIG_AGENT='codex'",
 				"export RIG_ID='mir-75'",
 			},
@@ -79,6 +87,8 @@ func TestEnvExports(t *testing.T) {
 			"iso-using repo also gets ISO_SESSION", filepath.Join(basedir, "cloud"),
 			[]string{
 				"export RIG_BASEDIR='" + basedir + "'",
+				"PATH_rm '" + filepath.Join(basedir, ".rig", "bin") + "'",
+				"PATH_add '" + filepath.Join(basedir, ".rig", "bin") + "'",
 				"export RIG_AGENT='codex'",
 				"export RIG_ID='mir-75'",
 				"export RIG_WORKSPACE='mir-75-cloud'",

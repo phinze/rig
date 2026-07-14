@@ -11,6 +11,8 @@ import (
 
 var nonSlugRe = regexp.MustCompile(`[^a-z0-9]+`)
 
+const ghShim = "#!/bin/sh\nexec rig __gh \"$@\"\n"
+
 // slugify lowercases s and collapses any run of non-alphanumeric characters to
 // a single dash, trimming dashes off the ends. Used for basedir / rig-id slugs.
 func slugify(s string) string {
@@ -56,6 +58,9 @@ func createBasedir(basedir string, m manifest) error {
 	if err := os.MkdirAll(basedir, 0o755); err != nil {
 		return err
 	}
+	if err := writeRigShims(basedir); err != nil {
+		return err
+	}
 	if err := writeManifest(basedir, m); err != nil {
 		return err
 	}
@@ -63,6 +68,21 @@ func createBasedir(basedir string, m manifest) error {
 		return err
 	}
 	return direnvAllow(basedir)
+}
+
+func writeRigShims(basedir string) error {
+	shimDir := filepath.Join(basedir, ".rig", "bin")
+	if err := os.MkdirAll(shimDir, 0o755); err != nil {
+		return err
+	}
+	path := filepath.Join(shimDir, "gh")
+	if body, err := os.ReadFile(path); err == nil && string(body) == ghShim {
+		return os.Chmod(path, 0o755)
+	}
+	if err := os.WriteFile(path, []byte(ghShim), 0o755); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o755)
 }
 
 // addRepoWorkspace creates a jj workspace for repo under basedir at startRev,

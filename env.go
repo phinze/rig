@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// runEnv implements `rig env`: print shell export lines describing the rig
+// runEnv implements `rig env`: print shell setup lines describing the rig
 // identity of the current directory, for the direnv stdlib to eval. All the
 // layout and manifest knowledge lives here in rig rather than in shell glue,
 // so the host's direnvrc reduces to `eval "$(rig env)"`. Prints nothing (and
@@ -21,6 +21,11 @@ func runEnv(args []string) error {
 	if err != nil {
 		return err
 	}
+	// Generated shims are disposable rig metadata. Recreate them here so rigs
+	// that predate a newly-added shim pick it up on their next direnv load.
+	if basedir, err := findBasedir(cwd); err == nil {
+		_ = writeRigShims(basedir)
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
@@ -31,7 +36,7 @@ func runEnv(args []string) error {
 	return nil
 }
 
-// envExports computes the export lines for cwd. Kept pure (no Getwd/Getenv)
+// envExports computes the shell setup lines for cwd. Kept pure (no Getwd/Getenv)
 // for testability.
 func envExports(cwd, home string) []string {
 	if basedir, err := findBasedir(cwd); err == nil {
@@ -48,7 +53,11 @@ func rigExports(basedir, cwd string) []string {
 	if err != nil {
 		return nil
 	}
-	out := []string{"export RIG_BASEDIR=" + shellQuote(basedir)}
+	out := []string{
+		"export RIG_BASEDIR=" + shellQuote(basedir),
+		"PATH_rm " + shellQuote(filepath.Join(basedir, ".rig", "bin")),
+		"PATH_add " + shellQuote(filepath.Join(basedir, ".rig", "bin")),
+	}
 	out = append(out, "export RIG_AGENT="+shellQuote(string(m.agentKind())))
 	if m.ID != "" {
 		out = append(out, "export RIG_ID="+shellQuote(m.ID))

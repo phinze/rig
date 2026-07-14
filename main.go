@@ -1,8 +1,10 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 )
 
 func main() {
@@ -43,6 +45,11 @@ func main() {
 		err = runReap(args)
 	case "env":
 		err = runEnv(args)
+	case "__gh":
+		// Hidden: each rig prepends a tiny `gh` shim that delegates here. Resolve
+		// repository context from cwd on every invocation, including agent tool
+		// calls that change cwd without running a shell/direnv hook.
+		err = runGHShim(args)
 	case "__issues":
 		// Hidden: fzf's live issue picker shells out to this on each keystroke to
 		// get fresh Linear-search rows. Not in usage; not meant to be typed.
@@ -56,6 +63,12 @@ func main() {
 	}
 
 	if err != nil {
+		if cmd == "__gh" {
+			var exitErr *exec.ExitError
+			if errors.As(err, &exitErr) {
+				os.Exit(exitErr.ExitCode())
+			}
+		}
 		fmt.Fprintf(os.Stderr, "rig: %v\n", err)
 		os.Exit(1)
 	}
@@ -101,7 +114,7 @@ usage:
   rig reap [-n] [--max-idle SECONDS]
                             break down every rig that is merged, WIP-free,
                             and idle (default 24h) — fails closed on doubt
-  rig env                   print shell exports describing the current dir
+  rig env                   print shell setup describing the current dir
                             (eval'd by the direnv stdlib; silent outside a rig)
 `)
 }
