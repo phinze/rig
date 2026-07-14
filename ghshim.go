@@ -8,6 +8,10 @@ import (
 	"strings"
 )
 
+// TODO: Revisit this shim if jj's first-class colocated workspaces land. They
+// may give gh correct per-workspace Git context and make this indirection moot:
+// https://github.com/jj-vcs/jj/issues/8052
+
 // runGHShim invokes the real gh with repository context derived from cwd.
 // Agents inherit their environment when the rig starts, then commonly execute
 // commands with a different cwd without passing through a shell hook. Resolving
