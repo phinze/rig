@@ -1,6 +1,9 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -74,4 +77,69 @@ func TestIsUnder(t *testing.T) {
 			t.Errorf("isUnder(%q, %q) = %v, want %v", tt.child, tt.parent, got, tt.want)
 		}
 	}
+}
+
+func TestTeardownQuarantinesBeforeRemoval(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory write permissions")
+	}
+	t.Setenv("PATH", t.TempDir()) // Skip optional iso and docker cleanup.
+
+	t.Run("permission failure leaves only quarantined debris", func(t *testing.T) {
+		root := t.TempDir()
+		basedir := filepath.Join(root, "rig")
+		bin := filepath.Join(basedir, "runtime", "bin")
+		if err := os.MkdirAll(bin, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(bin, "miren"), nil, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(bin, 0o555); err != nil {
+			t.Fatal(err)
+		}
+
+		err := teardownRig(basedir, manifest{})
+		if err != nil {
+			t.Fatalf("permission failure in quarantined cleanup should not fail teardown: %v", err)
+		}
+		if _, err := os.Stat(basedir); !os.IsNotExist(err) {
+			t.Errorf("canonical basedir still exists after quarantine: %v", err)
+		}
+
+		trashRoot := filepath.Join(root, ".rig-trash")
+		entries, err := os.ReadDir(trashRoot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 1 || !strings.HasPrefix(entries[0].Name(), "rig-") {
+			t.Fatalf("expected one clearly named quarantined rig, got %v", entries)
+		}
+		quarantinedBin := filepath.Join(trashRoot, entries[0].Name(), "runtime", "bin")
+		t.Cleanup(func() { _ = os.Chmod(quarantinedBin, 0o755) })
+		if _, err := os.Stat(filepath.Join(quarantinedBin, "miren")); err != nil {
+			t.Errorf("root-owned stand-in was not left in quarantine: %v", err)
+		}
+	})
+
+	t.Run("successful removal cleans up the quarantine", func(t *testing.T) {
+		root := t.TempDir()
+		basedir := filepath.Join(root, "rig")
+		if err := os.Mkdir(basedir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(basedir, "scratch"), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := teardownRig(basedir, manifest{}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(basedir); !os.IsNotExist(err) {
+			t.Errorf("canonical basedir still exists: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(root, ".rig-trash")); !os.IsNotExist(err) {
+			t.Errorf("empty quarantine directory still exists: %v", err)
+		}
+	})
 }

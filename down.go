@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 func runDown(args []string) error {
@@ -231,10 +232,41 @@ func teardownRig(basedir string, m manifest) error {
 		}
 	}
 
-	if err := os.RemoveAll(basedir); err != nil {
-		return fmt.Errorf("removing basedir: %w", err)
+	// Move the whole rig out of the active namespace before recursively deleting
+	// it. Rename only touches the two parent directories, so root-owned output
+	// nested anywhere inside cannot block this atomic step. If RemoveAll later
+	// fails, the rig is still fully down; only clearly named trash remains.
+	quarantined, err := quarantineBasedir(basedir)
+	if err != nil {
+		return fmt.Errorf("quarantining basedir: %w", err)
 	}
+	if err := os.RemoveAll(quarantined); err != nil {
+		fmt.Fprintf(os.Stderr, "rig: warning: could not fully remove quarantined basedir: %v\n", err)
+		fmt.Fprintf(os.Stderr, "rig: warning: clean it up with: sudo rm -rf %s\n", shellQuote(quarantined))
+		return nil
+	}
+	// Usually remove the now-empty trash directory too. A concurrent teardown or
+	// older cleanup failure can legitimately leave it non-empty.
+	_ = os.Remove(filepath.Dir(quarantined))
 	return nil
+}
+
+// quarantineBasedir atomically moves basedir into a hidden sibling directory.
+// Keeping the trash directory beside the rigs guarantees the rename stays on
+// one filesystem, where directory rename is atomic and independent of the
+// ownership of anything below basedir.
+func quarantineBasedir(basedir string) (string, error) {
+	trashRoot := filepath.Join(filepath.Dir(basedir), ".rig-trash")
+	if err := os.Mkdir(trashRoot, 0o700); err != nil && !os.IsExist(err) {
+		return "", fmt.Errorf("creating %s: %w", trashRoot, err)
+	}
+
+	dest := filepath.Join(trashRoot, fmt.Sprintf("%s-%d-%d",
+		filepath.Base(basedir), time.Now().UnixNano(), os.Getpid()))
+	if err := os.Rename(basedir, dest); err != nil {
+		return "", fmt.Errorf("moving %s to %s: %w", basedir, dest, err)
+	}
+	return dest, nil
 }
 
 // isoStop stops one iso session by exact name, run from the workspace dir
