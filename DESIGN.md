@@ -28,7 +28,7 @@ and `jreview` fish functions, reshaped for where the work actually is:
 
 Built, in Go, and in daily use as a single multi-command binary that
 ships under `pkgs/`. It outgrew the "prototype in Python first" plan below:
-the shape stuck fast enough that it went straight to Go. `rig up`,
+the shape stuck fast enough that it went straight to Go. `rig up`, `new`,
 `review`, `add`, `track`, `pr`, `ls`, `switch`, `park`, `wake`, `waiting`,
 `down`, `reap`, and `env` are all real. `jpickup` and `jreview` are
 subsumed; the single-repo Linear pickup and the PR-review sibling both
@@ -68,6 +68,11 @@ job (climbing rig, fishing rig, sound rig):
   a PR of yours), and either drop into the rig that already exists or build
   the one that doesn't. A gh-issue or your-own-PR URL dispatches the same
   shape.
+- `rig new [kickoff]`: start your own work before it has a tracker identity.
+  With no argument it asks for a one-line kickoff, then runs the same primary
+  repo picker as `up`. The kickoff becomes the title and a readable local id;
+  the workspace starts at `trunk()` with no branch recorded until the work
+  grows one.
 - `rig review <pr>` — the jreview sibling, pointed at *other people's* work:
   pitch a rig around a PR awaiting your review, checked out read-only at its
   head. Hand it a URL that turns out to be yours and it just routes you to

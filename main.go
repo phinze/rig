@@ -19,6 +19,8 @@ func main() {
 	switch cmd {
 	case "up":
 		err = runUp(args)
+	case "new":
+		err = runNew(args)
 	case "review":
 		err = runReview(args)
 	case "pr":
@@ -86,6 +88,11 @@ usage:
                             pre-selected on top, unless --repo names one)
                             Agent is claude (default), codex, or antigravity;
                             RIG_AGENT sets the default
+  rig new [kickoff] [--repo owner/repo] [--agent AGENT]
+                            start unticketed work in a normal authoring rig
+                            (prompts for the kickoff when omitted, then uses the
+                            same repo picker as up; starts at trunk with no
+                            branch recorded yet)
   rig review [pr-url] [--agent AGENT]
                             pitch a review rig for someone else's PR
                             (url, or fzf picker over review-requested PRs;

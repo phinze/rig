@@ -28,3 +28,38 @@ func TestTaskSlug(t *testing.T) {
 		})
 	}
 }
+
+func TestKickoffID(t *testing.T) {
+	cases := []struct {
+		name, kickoff, want string
+	}{
+		{"basic", "Investigate flaky radar refresh", "investigate-flaky-radar-refresh"},
+		{"symbols", "  What's up with auth?!  ", "what-s-up-with-auth"},
+		{"symbols only", "?!", ""},
+		{
+			"hard cap at 60 with trailing dash trimmed",
+			"Investigate why the background reconciliation worker occasionally drops queued updates",
+			"investigate-why-the-background-reconciliation-worker-occasio",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := kickoffID(c.kickoff); got != c.want {
+				t.Errorf("kickoffID(%q) = %q, want %q", c.kickoff, got, c.want)
+			}
+			if got := kickoffID(c.kickoff); len(got) > 60 {
+				t.Errorf("id exceeds cap: %d chars", len(got))
+			}
+		})
+	}
+}
+
+func TestResolveKickoffInline(t *testing.T) {
+	got, err := resolveKickoff([]string{" investigate", "the flake "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "investigate the flake" {
+		t.Errorf("resolveKickoff = %q, want %q", got, "investigate the flake")
+	}
+}

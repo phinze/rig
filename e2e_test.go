@@ -68,6 +68,110 @@ func TestSpawnSessionAgents(t *testing.T) {
 	}
 }
 
+// TestNew exercises ticketless creation without providing a linearis shim: the
+// kickoff mints the local identity, the explicit repo takes the same clone-
+// resolution path as up's picker result, and the workspace deliberately starts
+// branchless at trunk().
+func TestNew(t *testing.T) {
+	realTmux, err := exec.LookPath("tmux")
+	if err != nil {
+		t.Skip("tmux not installed")
+	}
+
+	home := t.TempDir()
+	bin := filepath.Join(home, "bin")
+	repoDir := filepath.Join(home, "src", "github.com", "fakeowner", "fakerepo")
+	rigBin := filepath.Join(home, "rig")
+	marker := filepath.Join(home, "codex.args")
+	mustMkdir(t, bin)
+	mustMkdir(t, repoDir)
+
+	build := exec.Command("go", "build", "-o", rigBin, ".")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+
+	env := append(os.Environ(),
+		"HOME="+home,
+		"PATH="+bin+":"+os.Getenv("PATH"),
+		"SHELL=/bin/sh",
+		"HISTFILE=/dev/null",
+		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.com",
+		"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@example.com",
+		"JJ_USER=Test", "JJ_EMAIL=test@example.com",
+	)
+	mustRun(t, repoDir, env, "git", "init", "-q", "-b", "main")
+	mustRun(t, repoDir, env, "git", "commit", "-q", "--allow-empty", "-m", "init")
+	mustRun(t, repoDir, env, "jj", "git", "init", "--colocate")
+	mustRun(t, repoDir, env, "jj", "config", "set", "--repo", `revset-aliases."trunk()"`, "main")
+
+	ghq := "#!/bin/sh\n" +
+		"if [ \"$1\" = \"root\" ]; then echo \"$HOME/src\"; exit 0; fi\n" +
+		"echo \"fake ghq: unsupported invocation $*\" >&2\nexit 1\n"
+	mustWriteExec(t, filepath.Join(bin, "ghq"), ghq)
+	tmuxWrap := fmt.Sprintf("#!/bin/sh\nexec %s -L rig-new-e2e -f /dev/null \"$@\"\n", realTmux)
+	mustWriteExec(t, filepath.Join(bin, "tmux"), tmuxWrap)
+	mustWriteExec(t, filepath.Join(bin, "recto"), "#!/bin/sh\nexec sleep infinity\n")
+	codex := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$*\" > %s\nexec sleep infinity\n", shellQuote(marker))
+	mustWriteExec(t, filepath.Join(bin, "codex"), codex)
+	t.Cleanup(func() { _ = exec.Command(realTmux, "-L", "rig-new-e2e", "kill-server").Run() })
+
+	kickoff := "Investigate flaky radar refresh"
+	cmd := exec.Command(rigBin, "new", kickoff, "--repo", "fakeowner/fakerepo", "--agent", "codex")
+	cmd.Dir = home
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("rig new: %v\n%s", err, out)
+	}
+
+	rigID := "investigate-flaky-radar-refresh"
+	basedir := filepath.Join(home, "workspaces", rigID)
+	raw := string(mustReadFile(t, filepath.Join(basedir, ".rig.toml")))
+	for _, want := range []string{
+		`id    = "investigate-flaky-radar-refresh"`,
+		`title = "Investigate flaky radar refresh"`,
+		`agent = "codex"`,
+		`fakerepo = "fakeowner/fakerepo"`,
+	} {
+		if !strings.Contains(raw, want) {
+			t.Errorf("manifest missing %q:\n%s", want, raw)
+		}
+	}
+	if strings.Contains(raw, "[branches]") {
+		t.Errorf("ticketless rig should start with no recorded branch:\n%s", raw)
+	}
+
+	desc := mustOutput(t, filepath.Join(basedir, "fakerepo"), env,
+		"jj", "log", "-r", "@-", "--no-graph", "-T", "description")
+	if strings.TrimSpace(desc) != "init" {
+		t.Errorf("workspace parent description = %q, want trunk commit %q", strings.TrimSpace(desc), "init")
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if _, err := os.Stat(marker); err == nil || !time.Now().Before(deadline) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	agentArgs := string(mustReadFile(t, marker))
+	if !strings.Contains(agentArgs, "Starting unticketed work with this kickoff: "+kickoff) ||
+		!strings.Contains(agentArgs, "There is no issue to read yet") {
+		t.Errorf("agent did not receive the ticketless kickoff prompt:\n%s", agentArgs)
+	}
+
+	// A repeated kickoff should point back to the existing rig instead of
+	// silently manufacturing another local identity.
+	again := exec.Command(rigBin, "new", kickoff, "--repo", "fakeowner/fakerepo")
+	again.Dir = home
+	again.Env = env
+	if out, err := again.CombinedOutput(); err == nil {
+		t.Fatalf("repeated rig new unexpectedly succeeded:\n%s", out)
+	} else if !strings.Contains(string(out), "rig switch "+rigID) {
+		t.Errorf("collision did not offer the existing rig:\n%s", out)
+	}
+}
+
 // TestUpDown exercises the full rig up → rig down cycle against a fake repo
 // and a dedicated tmux server, so it doesn't touch the user's real tmux
 // sessions or workspaces.

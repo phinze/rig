@@ -14,7 +14,8 @@ captures *how it currently works* as the code grows.
 `rig up PROJ-123` resolves a task from its tracker, creates a basedir under
 `~/workspaces/`, drops a jj workspace for the primary repo inside it, writes
 a `.rig.toml` and `.envrc`, and spawns a tmux session ready for an agent to
-work in. `rig add owner/repo` brings additional repos under the same rig.
+work in. `rig new` starts the same shape from a free-form kickoff when there is
+no ticket yet. `rig add owner/repo` brings additional repos under the same rig.
 `rig down` breaks it back down.
 
 The agent is selectable with `--agent claude|codex|antigravity` (or
