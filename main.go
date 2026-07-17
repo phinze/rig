@@ -117,7 +117,7 @@ usage:
                             ranked by review status; enter switches or wakes
   rig park                  park the current rig: mark it awaiting-review,
                             kill its session, drop it from switch (dir kept)
-  rig wake [query]          wake a parked rig back into a session at its old cwd
+  rig wake [query|PR-URL]   resume a rig, waking it first when parked
   rig waiting               review status of parked rigs, most-actionable first
                             (which came back with changes, which are mergeable)
   rig down [--force]        break the current rig down

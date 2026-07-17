@@ -147,28 +147,35 @@ func attachExistingRig(rigID string) (bool, error) {
 	if found == nil {
 		return false, nil
 	}
+	return true, activateRig(*found)
+}
 
-	if !found.Parked.IsZero() {
-		m, err := readManifest(found.Path)
+// activateRig is the shared "put me in this rig" path. It is deliberately
+// idempotent: parked rigs are woken, active rigs are switched to, and either
+// kind gets its session rebuilt if it disappeared. `up`, `review`, and an
+// explicit `wake` all mean this once they have resolved a concrete rig.
+func activateRig(r rigInfo) error {
+	if !r.Parked.IsZero() {
+		m, err := readManifest(r.Path)
 		if err != nil {
-			return false, fmt.Errorf("reading manifest: %w", err)
+			return fmt.Errorf("reading manifest: %w", err)
 		}
 		m.Parked = time.Time{}
-		if err := writeManifest(found.Path, m); err != nil {
-			return false, err
+		if err := writeManifest(r.Path, m); err != nil {
+			return err
 		}
-		fmt.Fprintf(os.Stderr, "rig: woke %s — %s\n", found.ID, found.Path)
+		fmt.Fprintf(os.Stderr, "rig: woke %s — %s\n", r.ID, r.Path)
 	} else {
-		fmt.Fprintf(os.Stderr, "rig: %s already up — switching\n", found.ID)
+		fmt.Fprintf(os.Stderr, "rig: %s already up — switching\n", r.ID)
 	}
 
-	session := tmuxSessionName(found.Path)
+	session := tmuxSessionName(r.Path)
 	if !tmuxHasSession(session) {
 		// No live session (parked, or a switch-killed one): stand a bare one back
 		// up at the basedir so the selected agent can resume where you left off.
-		if err := tmuxNewSession(session, found.Path); err != nil {
-			return false, fmt.Errorf("tmux new-session: %w", err)
+		if err := tmuxNewSession(session, r.Path); err != nil {
+			return fmt.Errorf("tmux new-session: %w", err)
 		}
 	}
-	return true, attachOrReport(session)
+	return attachOrReport(session)
 }

@@ -481,6 +481,37 @@ exit 1
 		t.Errorf("rig ls missing the review rig:\n%s", lsOut)
 	}
 
+	prURL := "https://github.com/fakeowner/fakerepo/pull/42"
+
+	// Repeating review is a local resume, not an attempt to recreate the
+	// basedir. An active rig switches; a parked one wakes at the same cwd.
+	reviewAgain := mustOutput(t, home, env, rigBin, "review", prURL)
+	if !strings.Contains(reviewAgain, "pr-42 already up") {
+		t.Errorf("repeated review should resume the active rig:\n%s", reviewAgain)
+	}
+
+	mustOutput(t, basedir, env, rigBin, "park")
+	wakeURL := mustOutput(t, home, env, rigBin, "wake", prURL)
+	if !strings.Contains(wakeURL, "woke pr-42") {
+		t.Errorf("wake by PR URL should wake the review rig:\n%s", wakeURL)
+	}
+	if m := string(mustReadFile(t, filepath.Join(basedir, ".rig.toml"))); strings.Contains(m, "parked = \"") {
+		t.Errorf("manifest still parked after wake by URL:\n%s", m)
+	}
+
+	// Explicit wake is idempotent too: an already-awake URL switches rather
+	// than failing just because the parked set is empty.
+	wakeAgain := mustOutput(t, home, env, rigBin, "wake", prURL)
+	if !strings.Contains(wakeAgain, "pr-42 already up") {
+		t.Errorf("repeated wake should resume the active rig:\n%s", wakeAgain)
+	}
+
+	mustOutput(t, basedir, env, rigBin, "park")
+	reviewParked := mustOutput(t, home, env, rigBin, "review", prURL)
+	if !strings.Contains(reviewParked, "woke pr-42") {
+		t.Errorf("repeated review should wake the parked rig:\n%s", reviewParked)
+	}
+
 	// --- rig down --force --- a review rig wraps someone else's still-open PR,
 	// which the merge guardrail would (correctly) refuse to tear down; --force
 	// is the reviewer's honest teardown, and exercises the override path.

@@ -36,6 +36,11 @@ func runReview(args []string) error {
 	if pr == nil {
 		return nil // picker cancelled
 	}
+	if done, err := attachExistingReviewRig(pr); err != nil {
+		return err
+	} else if done {
+		return nil
+	}
 	meta, err := prDetails(pr.Owner, pr.Repo, pr.Number)
 	if err != nil {
 		return err
@@ -48,6 +53,17 @@ func runReview(args []string) error {
 // authorship disagrees with it we say so and do the right thing anyway, because
 // "my work" has exactly one home (up) and "other work" exactly one (review).
 func pickupPR(pr *prRef, verb string, agent agentKind) error {
+	// A review rig is reconstructible from the URL alone: pr-<n> plus its
+	// owner/repo in the manifest distinguishes it from same-numbered PRs in
+	// other repos. Resolve that locally before touching GitHub so repeating
+	// `rig review <url>` is the fast resume operation users expect. This also
+	// catches `rig up <someone-else's-pr>` after it was routed to review once.
+	if done, err := attachExistingReviewRig(pr); err != nil {
+		return err
+	} else if done {
+		return nil
+	}
+
 	meta, err := prDetails(pr.Owner, pr.Repo, pr.Number)
 	if err != nil {
 		return err
@@ -68,6 +84,59 @@ func pickupPR(pr *prRef, verb string, agent agentKind) error {
 		fmt.Fprintf(os.Stderr, "rig: PR #%d isn't yours — setting up a review, not authoring\n", pr.Number)
 	}
 	return reviewPickupPR(pr, meta, agent)
+}
+
+// existingReviewRig finds the local review rig for a PR without relying on the
+// globally-ambiguous pr-<n> id. The manifest's repo and branch mappings supply
+// the other half of the identity: an untracked repo merely added for research
+// must not make same-numbered PRs look like this rig's review. kind=review also
+// avoids grabbing an unrelated authoring rig with the same id and repo.
+func existingReviewRig(rigs []rigInfo, pr *prRef) (*rigInfo, error) {
+	wantID := fmt.Sprintf("pr-%d", pr.Number)
+	wantRepo := pr.Owner + "/" + pr.Repo
+	var found *rigInfo
+	for i := range rigs {
+		if rigs[i].ID != wantID {
+			continue
+		}
+		m, err := readManifest(rigs[i].Path)
+		if err != nil {
+			return nil, fmt.Errorf("reading manifest: %w", err)
+		}
+		if !m.isReview() {
+			continue
+		}
+		matchesRepo := false
+		for subdir, repo := range m.Repos {
+			if strings.EqualFold(repo, wantRepo) && (len(m.Branches[subdir]) > 0 || len(m.Repos) == 1) {
+				matchesRepo = true
+				break
+			}
+		}
+		if !matchesRepo {
+			continue
+		}
+		if found != nil {
+			return nil, fmt.Errorf("multiple review rigs match %s/%s#%d", pr.Owner, pr.Repo, pr.Number)
+		}
+		found = &rigs[i]
+	}
+	return found, nil
+}
+
+func attachExistingReviewRig(pr *prRef) (bool, error) {
+	rigs, err := listRigs()
+	if err != nil {
+		return false, err
+	}
+	found, err := existingReviewRig(rigs, pr)
+	if err != nil {
+		return false, err
+	}
+	if found == nil {
+		return false, nil
+	}
+	return true, activateRig(*found)
 }
 
 // reviewPickupPR builds a read-only review rig: the PR head fetched fork-safe

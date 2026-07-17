@@ -17,52 +17,63 @@ func runWake(args []string) error {
 	if err != nil {
 		return err
 	}
+	if len(args) == 1 {
+		if pr := parsePRURL(args[0]); pr != nil {
+			// A PR URL is a natural handle for a review rig, and carries the repo
+			// identity that bare pr-<n> lacks. Resolve it against local manifests.
+			found, err := existingReviewRig(rigs, pr)
+			if err != nil {
+				return err
+			}
+			if found == nil {
+				return fmt.Errorf("no rig for %s/%s#%d", pr.Owner, pr.Repo, pr.Number)
+			}
+			return activateRig(*found)
+		}
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
 	}
 	statuses := rigStatuses(rigs, home, time.Now())
 
-	parked := statuses[:0]
-	for _, s := range statuses {
-		if s.Parked {
-			parked = append(parked, s)
+	var chosen *rigStatus
+	if len(args) > 0 {
+		// An explicit wake is idempotent: resolve across every rig so an
+		// already-awake target switches instead of reporting "no parked rigs."
+		chosen, err = pickRigStatus(statuses, args, "wake rig: ")
+		if err != nil {
+			return err
 		}
-	}
-	statuses = parked
-	if len(statuses) == 0 {
-		return fmt.Errorf("no parked rigs")
-	}
-	// Newest first, so the freshest parked rig tops the picker.
-	sort.SliceStable(statuses, func(i, j int) bool {
-		return statuses[i].Created.After(statuses[j].Created)
-	})
+	} else {
+		parked := statuses[:0]
+		for _, s := range statuses {
+			if s.Parked {
+				parked = append(parked, s)
+			}
+		}
+		statuses = parked
+		if len(statuses) == 0 {
+			return fmt.Errorf("no parked rigs")
+		}
+		// Newest first, so the freshest parked rig tops the picker.
+		sort.SliceStable(statuses, func(i, j int) bool {
+			return statuses[i].Created.After(statuses[j].Created)
+		})
 
-	chosen, err := pickRigStatus(statuses, args, "wake rig: ")
-	if err != nil {
-		return err
+		chosen, err = pickRigStatus(statuses, nil, "wake rig: ")
+		if err != nil {
+			return err
+		}
 	}
 	if chosen == nil {
 		return nil
 	}
 
-	m, err := readManifest(chosen.Path)
-	if err != nil {
-		return fmt.Errorf("reading manifest: %w", err)
-	}
-	m.Parked = time.Time{}
-	if err := writeManifest(chosen.Path, m); err != nil {
-		return err
-	}
-	fmt.Fprintf(os.Stderr, "rig: woke %s\n", m.ID)
-
-	session := tmuxSessionName(chosen.Path)
-	if !tmuxHasSession(session) {
-		// Park killed it; stand a bare one back up at the same path so the
-		// earlier agent sessions are a resume away.
-		if err := tmuxNewSession(session, chosen.Path); err != nil {
-			return fmt.Errorf("tmux new-session: %w", err)
+	for _, r := range rigs {
+		if r.Path == chosen.Path {
+			return activateRig(r)
 		}
 	}
-	return attachOrReport(session)
+	return fmt.Errorf("rig disappeared: %s", chosen.Path)
 }
