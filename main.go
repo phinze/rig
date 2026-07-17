@@ -29,6 +29,8 @@ func main() {
 		err = runTrack(args)
 	case "add":
 		err = runAdd(args)
+	case "recto":
+		err = runRecto(args)
 	case "ls":
 		err = runLs(args)
 	case "switch", "cd": // cd is a retained alias
@@ -65,7 +67,7 @@ func main() {
 	}
 
 	if err != nil {
-		if cmd == "__gh" {
+		if cmd == "__gh" || cmd == "recto" {
 			var exitErr *exec.ExitError
 			if errors.As(err, &exitErr) {
 				os.Exit(exitErr.ExitCode())
@@ -103,6 +105,9 @@ usage:
                             (defaults to the current work's branch) so down and
                             reap gate on it alongside the rig's primary PR
   rig add <owner/repo>      add another repo to the rig you're in
+  rig recto <repo> [args]   pull that repo's persistent Recto beside the main
+                            agent; optional args are forwarded to Recto there
+                            (for example: rig recto cloud focus src/app.go:42)
   rig ls [--full]           list rigs in flight
                             (--full adds PR/CI, one gh call per repo)
   rig switch [query]        jump to a rig's tmux session, most-recently-used

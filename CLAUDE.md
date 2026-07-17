@@ -18,6 +18,12 @@ work in. `rig new` starts the same shape from a free-form kickoff when there is
 no ticket yet. `rig add owner/repo` brings additional repos under the same rig.
 `rig down` breaks it back down.
 
+The tmux layout is a Recto carousel: `main/<repo>` holds the task-level agent
+and the active repo's persistent Recto, while the other repos wait as
+full-screen Recto windows. `rig recto <repo> [recto args...]` promotes one and
+optionally drives it. Ad hoc shells are ordinary splits from a repo's Recto,
+not permanent empty panes.
+
 The agent is selectable with `--agent claude|codex|antigravity` (or
 `RIG_AGENT`) and defaults to Claude for compatibility. Rig writes equivalent
 generated instructions and tracks session activity for all three.

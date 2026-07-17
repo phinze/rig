@@ -68,8 +68,12 @@ func renderRigInstructions(m manifest) string {
 		}
 	}
 
-	b.WriteString("- The recto pane (right of the session) live-previews uncommitted diffs as\n")
-	b.WriteString("  you work, so you can see the shape of a change without running `jj diff`.\n")
+	b.WriteString("- The main tmux window holds the task-level agent plus the currently relevant\n")
+	b.WriteString("  Recto diff. Every repo has one persistent Recto; inactive ones are full-window\n")
+	b.WriteString("  tabs. Use `rig recto <repo>` to pull one beside the agent, or combine the\n")
+	b.WriteString("  promotion with a Recto command, e.g. `rig recto cloud focus src/app.go:42`.\n")
+	b.WriteString("  Do not manipulate tmux panes directly. For an ad hoc shell, split from a\n")
+	b.WriteString("  repo's Recto so tmux inherits the correct working directory.\n")
 	b.WriteString("- Bring in another repo the task touches with `rig add owner/repo`; tear the\n")
 	b.WriteString("  whole rig back down with `rig down`.\n\n")
 

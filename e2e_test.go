@@ -29,6 +29,7 @@ func TestSpawnSessionAgents(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 	t.Setenv("SHELL", "/bin/sh")
+	t.Setenv("HISTFILE", "/dev/null")
 	t.Cleanup(func() { _ = exec.Command(realTmux, "-L", "rig-agent-e2e", "kill-server").Run() })
 
 	cases := []struct {

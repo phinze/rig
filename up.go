@@ -87,6 +87,7 @@ func runUp(args []string) error {
 	// arrives we'll dispatch on it.
 	sess := sessionSpec{
 		rectoCmd: "recto",
+		repo:     repo.Name,
 		agent:    agent,
 		prompt: fmt.Sprintf(
 			"Picking up %s (%s). Use the Linear MCP (it may take a few seconds to connect) to read the issue, mark it In Progress and assigned to me, then help me plan.",

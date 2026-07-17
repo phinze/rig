@@ -70,6 +70,7 @@ func runNew(args []string) error {
 
 	sess := sessionSpec{
 		rectoCmd: "recto",
+		repo:     repo.Name,
 		agent:    agent,
 		prompt: fmt.Sprintf(
 			"Starting unticketed work with this kickoff: %s. There is no issue to read yet. Help me investigate and decide what, if anything, should be ticketed.",

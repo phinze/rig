@@ -12,6 +12,13 @@ ticket yet. `rig review <pr-url>` does it for reviewing a pull request.
 `rig add owner/repo` brings more repos under the same rig, `rig ls` / `rig cd`
 move between rigs in flight, and `rig down` breaks it all back down.
 
+The tmux session is a Recto carousel. Its main window holds the task-level
+agent beside the currently relevant repo's diff; every other repo waits as a
+full-screen Recto tab with its viewer state intact. `rig recto cloud` pulls a
+repo into the main hot seat, and `rig recto cloud focus path:42` promotes and
+drives it in one step. Repo tabs do not carry permanent shells, but splitting
+from a Recto inherits that repo's working directory when one is useful.
+
 Claude Code is the default agent, but it is not baked into the rig. Pass
 `--agent codex` or `--agent antigravity` to `rig up`, `rig new`, or
 `rig review`; set `RIG_AGENT` to launch that agent in the left pane instead. The

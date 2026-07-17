@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"strconv"
@@ -195,25 +196,84 @@ func tmuxNewSession(name, cwd string) error {
 	return cmd.Run()
 }
 
-// tmuxSplitH splits the given target horizontally, running command in the
-// new (right) pane with cwd as its working directory.
-func tmuxSplitH(target, cwd, command string) error {
-	cmd := exec.Command("tmux", "split-window", "-h", "-t", target, "-c", cwd, command)
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+// tmuxNewRigSession creates the first, task-level window for a rig and returns
+// stable pane/window ids for the metadata and split operations that follow.
+// Unlike bare sessions stood up by switch/wake, a rig session has an explicit
+// window name so tmux never replaces its identity with "claude" or "recto".
+func tmuxNewRigSession(name, windowName, cwd string) (string, string, error) {
+	cmd := exec.Command("tmux", "new-session", "-d",
+		"-s", name, "-n", windowName, "-c", cwd,
+		"-P", "-F", "#{pane_id}\t#{window_id}",
+	)
+	cmd.Stderr = os.Stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return "", "", err
+	}
+	fields := strings.SplitN(strings.TrimSpace(string(out)), "\t", 2)
+	if len(fields) != 2 {
+		return "", "", fmt.Errorf("unexpected tmux new-session output %q", out)
+	}
+	return fields[0], fields[1], nil
+}
+
+func tmuxSplitHID(target, cwd, command string) (string, error) {
+	cmd := exec.Command("tmux", "split-window", "-d", "-h", "-l", "50%",
+		"-t", target, "-c", cwd, "-P", "-F", "#{pane_id}", command)
+	cmd.Stderr = os.Stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// tmuxNewCommandWindow creates a detached, explicitly named window whose only
+// pane runs command. Rig uses it to park one persistent Recto per repository.
+func tmuxNewCommandWindow(session, name, cwd, command string) (string, string, error) {
+	cmd := exec.Command("tmux", "new-window", "-d",
+		"-t", session, "-n", name, "-c", cwd,
+		"-P", "-F", "#{pane_id}\t#{window_id}", command,
+	)
+	cmd.Stderr = os.Stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return "", "", err
+	}
+	fields := strings.SplitN(strings.TrimSpace(string(out)), "\t", 2)
+	if len(fields) != 2 {
+		return "", "", fmt.Errorf("unexpected tmux new-window output %q", out)
+	}
+	return fields[0], fields[1], nil
+}
+
+func tmuxSetPaneOption(pane, name, value string) error {
+	cmd := exec.Command("tmux", "set-option", "-p", "-t", pane, name, value)
+	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }
 
-// tmuxNewWindow opens a new window named name in the session, with cwd as its
-// working directory, and returns the new window's id (e.g. "@5"). The window is
-// created detached (-d) so it doesn't steal focus: rig add is normally run from
-// a main session, and the new repo's window should wait in the background until
-// the caller chooses to visit it. The returned id is a stable target for a
-// follow-up split, even after other windows come and go.
-func tmuxNewWindow(session, name, cwd string) (string, error) {
-	cmd := exec.Command("tmux", "new-window", "-d",
-		"-t", session, "-n", name, "-c", cwd,
-		"-P", "-F", "#{window_id}",
-	)
+func tmuxSetWindowOption(window, name, value string) error {
+	cmd := exec.Command("tmux", "set-option", "-w", "-t", window, name, value)
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+func tmuxRenameWindow(window, name string) error {
+	cmd := exec.Command("tmux", "rename-window", "-t", window, name)
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+func tmuxJoinPane(src, dst string) error {
+	cmd := exec.Command("tmux", "join-pane", "-d", "-f", "-h", "-l", "50%", "-s", src, "-t", dst)
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+func tmuxBreakPane(src, name string) (string, error) {
+	cmd := exec.Command("tmux", "break-pane", "-d", "-s", src, "-n", name,
+		"-P", "-F", "#{window_id}")
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
 	if err != nil {

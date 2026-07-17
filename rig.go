@@ -139,6 +139,7 @@ func addRepoWorkspace(basedir, rigID string, repo repoRef, startRev, branch stri
 // (recto) pane, the agent in the left pane, and its opening prompt.
 type sessionSpec struct {
 	rectoCmd string
+	repo     string
 	prompt   string
 	agent    agentKind
 }
@@ -153,18 +154,32 @@ func spawnSession(basedir, paneCwd string, sess sessionSpec) (string, error) {
 	if tmuxHasSession(session) {
 		return session, nil
 	}
-	if err := tmuxNewSession(session, paneCwd); err != nil {
+	repo := sess.repo
+	if repo == "" {
+		repo = filepath.Base(paneCwd)
+	}
+	agentPane, mainWindow, err := tmuxNewRigSession(session, mainWindowName(repo), paneCwd)
+	if err != nil {
 		return "", fmt.Errorf("tmux new-session: %w", err)
 	}
-	if err := tmuxSplitH(session, paneCwd, sess.rectoCmd); err != nil {
+	if err := markRigMainWindow(mainWindow, repo); err != nil {
+		return "", fmt.Errorf("marking main window: %w", err)
+	}
+	if err := markRigPane(agentPane, rigPaneAgent, repo); err != nil {
+		return "", fmt.Errorf("marking agent pane: %w", err)
+	}
+	rectoPane, err := tmuxSplitHID(agentPane, paneCwd, sess.rectoCmd)
+	if err != nil {
 		return "", fmt.Errorf("tmux split-window: %w", err)
 	}
-	left := session + ":0.0"
-	if err := tmuxSelectPane(left); err != nil {
+	if err := markRigPane(rectoPane, rigPaneRecto, repo); err != nil {
+		return "", fmt.Errorf("marking recto pane: %w", err)
+	}
+	if err := tmuxSelectPane(agentPane); err != nil {
 		return "", fmt.Errorf("tmux select-pane: %w", err)
 	}
 	agentLine := sess.agent.launchCommand(sess.prompt)
-	if err := tmuxSendKeys(left, agentLine); err != nil {
+	if err := tmuxSendKeys(agentPane, agentLine); err != nil {
 		return "", fmt.Errorf("tmux send-keys: %w", err)
 	}
 	return session, nil

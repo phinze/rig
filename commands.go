@@ -14,7 +14,7 @@ import (
 
 // runAdd brings another repo into the rig you're currently in (cwd-derived).
 // It clones the repo if needed, colocates jj, drops a workspace at trunk(), and
-// opens a tmux window for it in the rig's session.
+// opens a persistent, full-window Recto for it in the rig's session.
 func runAdd(args []string) error {
 	if len(args) != 1 {
 		return fmt.Errorf("usage: rig add <owner/repo>")
@@ -54,14 +54,16 @@ func runAdd(args []string) error {
 		return err
 	}
 
-	// Best-effort: give the new repo its own background window in the rig
-	// session, laid out like rig up's primary window — repo shell on the left,
-	// recto previewing diffs on the right. Backgrounded so adding a repo from a
-	// main session doesn't yank focus into it.
+	// Best-effort: give the new repo a persistent Recto in its own background
+	// window. `rig recto <repo>` pulls that pane beside the main agent; until
+	// then the window is also a useful full-screen diff. A shell is deliberately
+	// absent: tmux's normal split bindings can grow one from the Recto's repo cwd
+	// for the occasional poke without making empty shells permanent furniture.
 	session := tmuxSessionName(basedir)
 	if tmuxHasSession(session) {
-		if winID, err := tmuxNewWindow(session, repo, repoDest); err == nil {
-			_ = tmuxSplitH(winID, repoDest, "recto")
+		if pane, window, err := tmuxNewCommandWindow(session, repo, repoDest, "recto"); err == nil {
+			_ = markRigPane(pane, rigPaneRecto, repo)
+			_ = markRigRepoWindow(window, repo)
 		}
 	}
 

@@ -78,6 +78,8 @@ job (climbing rig, fishing rig, sound rig):
   head. Hand it a URL that turns out to be yours and it just routes you to
   `up`.
 - `rig add owner/repo` — add a repo to the rig you're in (cwd-derived).
+- `rig recto <repo> [args]` — pull that repo's persistent Recto beside the
+  task-level agent; optional arguments drive the promoted viewer.
 - `rig track <pr>` — record a second PR's branch on a repo already in the
   rig, so down/reap gate on it too.
 - `rig pr` — open the rig's PR in the browser.
@@ -109,6 +111,16 @@ Agent choice also reaches the lifecycle machinery. `rig ls`, radar, and reap
 take the newest matching turn from Claude's project JSONL files, Codex's rollout
 JSONL files, or Antigravity's timestamped prompt history. Radar recognizes all
 three commands in tmux, including wrapped Codex command names.
+
+The session itself is a Recto carousel. The stable `main/<repo>` window holds
+the task-level agent and whichever repository is currently relevant. Every
+other repository has one persistent, full-window Recto. `rig recto <repo>`
+parks the outgoing viewer in its repo window and joins the requested one beside
+the agent, preserving each TUI's scroll, base, and focus state. Recto-only
+parking windows disappear while their pane is in main; a window with an ad hoc
+shell survives, and the outgoing Recto parks beside that shell when it returns.
+Shells are ordinary tmux splits from a Recto, so they inherit the right repo cwd
+without becoming permanent layout furniture.
 
 ## Up my work, review other work
 

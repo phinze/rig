@@ -110,6 +110,7 @@ func reviewPickupPR(pr *prRef, meta prMeta, agent agentKind) error {
 
 	sess := sessionSpec{
 		rectoCmd: "recto --pr",
+		repo:     repo.Name,
 		agent:    agent,
 		prompt: fmt.Sprintf(
 			"/review-pr %d — you are already on the PR branch in a dedicated jj workspace; skip branch verification",
@@ -190,6 +191,7 @@ func authorPickupPR(pr *prRef, meta prMeta, agent agentKind) error {
 
 	sess := sessionSpec{
 		rectoCmd: "recto",
+		repo:     repo.Name,
 		agent:    agent,
 		prompt: fmt.Sprintf(
 			"Resuming your PR #%d (%s) on its branch in a dedicated jj workspace. Read the PR and any review feedback, then help me address it.",
