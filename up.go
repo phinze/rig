@@ -155,6 +155,11 @@ func attachExistingRig(rigID string) (bool, error) {
 // kind gets its session rebuilt if it disappeared. `up`, `review`, and an
 // explicit `wake` all mean this once they have resolved a concrete rig.
 func activateRig(r rigInfo) error {
+	lock, err := acquireRigMutationLock(r.Path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = lock.Close() }()
 	if !r.Parked.IsZero() {
 		m, err := readManifest(r.Path)
 		if err != nil {

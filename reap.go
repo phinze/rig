@@ -20,11 +20,14 @@ import (
 // never guesses.
 func runReap(args []string) error {
 	dryRun := false
+	runtimeOnly := false
 	maxIdle := 24 * time.Hour
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--dry-run", "-n":
 			dryRun = true
+		case "--runtime-only":
+			runtimeOnly = true
 		case "--max-idle":
 			i++
 			if i >= len(args) {
@@ -36,8 +39,63 @@ func runReap(args []string) error {
 			}
 			maxIdle = time.Duration(secs) * time.Second
 		default:
-			return fmt.Errorf("usage: rig reap [--dry-run|-n] [--max-idle SECONDS]")
+			return fmt.Errorf("usage: rig reap [--dry-run|-n] [--max-idle SECONDS] [--runtime-only]")
 		}
+	}
+
+	pending := map[string]bool{}
+	jobs, err := pendingTeardownJobs()
+	if err != nil {
+		return err
+	}
+	for _, path := range jobs {
+		job, err := readTeardownJob(path)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "rig: warning: unreadable teardown job %s: %v\n", path, err)
+			continue
+		}
+		pending[job.Basedir] = true
+		if dryRun {
+			fmt.Fprintf(os.Stderr, "rig: would retry teardown %s — %s\n", job.ID, path)
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "rig: retry teardown %s — %s\n", job.ID, path)
+		if err := executeTeardownJobFile(path, true); err != nil {
+			fmt.Fprintf(os.Stderr, "rig: retry teardown %s failed: %v\n", job.ID, err)
+			continue
+		}
+		delete(pending, job.Basedir)
+		fmt.Fprintf(os.Stderr, "rig: completed pending teardown %s\n", job.ID)
+	}
+	if runtimeOnly {
+		rigs, err := listRigs()
+		if err != nil {
+			return err
+		}
+		active := make(map[string]bool, len(rigs))
+		for _, rig := range rigs {
+			active[rig.ID] = true
+		}
+		tearingDown := map[string]bool{}
+		remainingJobs, err := pendingTeardownJobs()
+		if err != nil {
+			return err
+		}
+		for _, path := range remainingJobs {
+			if job, err := readTeardownJob(path); err == nil {
+				tearingDown[job.ID] = true
+			}
+		}
+		cleaned, err := cleanupOrphanedRigRuntime(active, tearingDown, dryRun)
+		if err != nil {
+			return err
+		}
+		verb := "cleaned"
+		if dryRun {
+			verb = "would clean"
+		}
+		fmt.Fprintf(os.Stderr, "rig: runtime cleanup complete — %s %d orphan scopes\n", verb, cleaned)
+		return nil
 	}
 
 	rigs, err := listRigs()
@@ -48,41 +106,61 @@ func runReap(args []string) error {
 		fmt.Fprintln(os.Stderr, "rig: no rigs in flight")
 		return nil
 	}
-
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
 	}
-	now := time.Now()
 	fetched := map[string]bool{} // source repo path → already fetched this run
-	paths := make([]string, len(rigs))
-	for i := range rigs {
-		paths[i] = rigs[i].Path
-	}
-	activity := agentSessionActivities(home, paths)
 	reaped := 0
 	for _, r := range rigs {
-		if reason := reapBlocker(r, activity[r.Path], now, maxIdle, fetched); reason != "" {
-			fmt.Fprintf(os.Stderr, "rig: keep %s — %s\n", r.ID, reason)
+		if pending[r.Path] {
+			fmt.Fprintf(os.Stderr, "rig: keep %s — teardown pending retry\n", r.ID)
 			continue
 		}
-		if dryRun {
-			fmt.Fprintf(os.Stderr, "rig: would reap %s — %s\n", r.ID, r.Path)
-			reaped++
+		lock, err := acquireRigLock(r.Path, true)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "rig: keep %s — %v\n", r.ID, err)
 			continue
 		}
 		m, err := readManifest(r.Path)
 		if err != nil {
+			_ = lock.Close()
 			fmt.Fprintf(os.Stderr, "rig: keep %s — reading manifest: %v\n", r.ID, err)
 			continue
 		}
+		now := time.Now()
+		activity := agentSessionActivity(home, r.Path)
+		if reason := reapBlocker(r, activity, now, maxIdle, fetched); reason != "" {
+			_ = lock.Close()
+			fmt.Fprintf(os.Stderr, "rig: keep %s — %s\n", r.ID, reason)
+			continue
+		}
+		// The policy checks above may fetch and query GitHub. Snapshot attention
+		// and VCS state once more under the rig lock immediately before writing
+		// the teardown job, closing the old check-then-act window for rig
+		// commands and making direct agent activity fail closed too.
+		if latest := agentSessionActivity(home, r.Path); latest > activity {
+			_ = lock.Close()
+			fmt.Fprintf(os.Stderr, "rig: keep %s — activity changed during reap check\n", r.ID)
+			continue
+		}
+		if reason := rigTeardownBlocker(r.Path, fetched); reason != "" {
+			_ = lock.Close()
+			fmt.Fprintf(os.Stderr, "rig: keep %s — state changed during reap check: %s\n", r.ID, reason)
+			continue
+		}
+		if dryRun {
+			_ = lock.Close()
+			fmt.Fprintf(os.Stderr, "rig: would reap %s — %s\n", r.ID, r.Path)
+			reaped++
+			continue
+		}
 		if err := teardownRig(r.Path, m); err != nil {
+			_ = lock.Close()
 			fmt.Fprintf(os.Stderr, "rig: reap %s failed: %v\n", r.ID, err)
 			continue
 		}
-		if err := tmuxKillSession(tmuxSessionName(r.Path)); err != nil {
-			fmt.Fprintf(os.Stderr, "rig: warning: tmux kill-session: %v\n", err)
-		}
+		_ = lock.Close()
 		fmt.Fprintf(os.Stderr, "rig: reaped %s — %s gone\n", r.ID, r.Path)
 		reaped++
 	}
@@ -173,6 +251,13 @@ func rigTeardownBlocker(basedir string, fetched map[string]bool) string {
 		if reason := workspaceTeardownBlocker(ws, m.Repos[e.Name()], e.Name(), branches, m.isReview(), login); reason != "" {
 			return reason
 		}
+	}
+	// Authoring rigs are only done when every recorded PR is merged. The local
+	// commit accounting above is intentionally lazy, but it cannot see a
+	// disjoint secondary PR whose commits are no longer reachable from @. Reap
+	// and explicit down must share this eager final gate.
+	if !m.isReview() {
+		return unmergedPRsBlocker(basedir)
 	}
 	return ""
 }

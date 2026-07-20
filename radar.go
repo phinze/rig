@@ -105,6 +105,11 @@ func radarAct(s rigStatus) error {
 	if s.create {
 		zoxideAdd(s.Path)
 	}
+	lock, err := acquireRigMutationLock(s.Path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = lock.Close() }()
 	if s.Parked {
 		m, err := readManifest(s.Path)
 		if err != nil {

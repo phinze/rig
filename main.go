@@ -58,6 +58,15 @@ func main() {
 		// Hidden: fzf's live issue picker shells out to this on each keystroke to
 		// get fresh Linear-search rows. Not in usage; not meant to be typed.
 		err = runIssueRows(args)
+	case "__teardown":
+		// Hidden: durable teardown workers run outside tmux's pane cgroup so
+		// they can stop every process scope owned by the rig, including the
+		// caller's, without killing cleanup halfway through.
+		if len(args) != 1 {
+			err = fmt.Errorf("usage: rig __teardown JOB")
+		} else {
+			err = executeTeardownJobFile(args[0], false)
+		}
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -123,9 +132,10 @@ usage:
   rig down [--force]        break the current rig down
                             (refuses if it has WIP or an unmerged PR; --force
                             overrides)
-  rig reap [-n] [--max-idle SECONDS]
+  rig reap [-n] [--max-idle SECONDS] [--runtime-only]
                             break down every rig that is merged, WIP-free,
-                            and idle (default 24h) — fails closed on doubt
+                            and idle (default 24h); --runtime-only only retries
+                            pending jobs and kills escaped orphan scopes
   rig env                   print shell setup describing the current dir
                             (eval'd by the direnv stdlib; silent outside a rig)
 `)

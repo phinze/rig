@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -34,17 +35,22 @@ func runDown(args []string) error {
 	if err != nil {
 		return fmt.Errorf("reading manifest: %w", err)
 	}
+	lock, err := acquireRigLock(basedir, false)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = lock.Close() }()
+	// The manifest may have changed while we waited for another command.
+	m, err = readManifest(basedir)
+	if err != nil {
+		return fmt.Errorf("reading manifest: %w", err)
+	}
 
-	// Safety gate, unless forced. Two checks that together mean "this rig's
-	// work is truly done": the shared, lazy local-work judgment (reap's too —
-	// working-copy changes or off-trunk commits not covered by a merged PR), and
-	// an eager pass that asks GitHub about every recorded PR, so an OPEN PR
-	// blocks even when the workspace holds no local commits. --force skips both.
+	// Safety gate, unless forced. The shared judgment covers local work and asks
+	// eagerly about every recorded PR, including a disjoint secondary whose
+	// commits are no longer reachable from the working copy.
 	if !force {
 		if reason := rigTeardownBlocker(basedir, map[string]bool{}); reason != "" {
-			return downRefusal(reason)
-		}
-		if reason := unmergedPRsBlocker(basedir); reason != "" {
 			return downRefusal(reason)
 		}
 	}
@@ -63,16 +69,6 @@ func runDown(args []string) error {
 		return err
 	}
 
-	if err := teardownRig(basedir, m); err != nil {
-		return err
-	}
-
-	fmt.Fprintf(os.Stderr, "rig: down %s — %s gone\n", m.ID, basedir)
-
-	// Kill the session LAST so the SIGHUP it produces (when we're inside
-	// it) can't cut short the destructive steps above. If we're outside
-	// the session this is just a normal kill; if we're inside, our
-	// terminal exits cleanly with the work already done.
 	session := tmuxSessionName(basedir)
 	inDoomed := insideTmuxSession(session)
 
@@ -101,11 +97,29 @@ func runDown(args []string) error {
 		}
 	}
 
+	job, err := prepareTeardownJob(basedir, m)
+	if err != nil {
+		return err
+	}
+	if inDoomed && runtime.GOOS == "linux" {
+		// Tmux 3.6 launches panes in systemd scopes. The cleanup worker has to
+		// run outside the current pane or stopping every RIG_ID scope would kill
+		// the process halfway through its own teardown. The durable job is
+		// already on disk, and rig reap retries it if systemd or the host dies.
+		if err := startTeardownWorker(job); err != nil {
+			return fmt.Errorf("starting teardown worker: %w (job retained at %s)", err, job.path)
+		}
+		fmt.Fprintf(os.Stderr, "rig: teardown scheduled for %s — %s\n", m.ID, basedir)
+		return nil
+	}
+	if err := executeTeardownJob(job); err != nil {
+		return fmt.Errorf("teardown incomplete (will retry from %s): %w", job.path, err)
+	}
+
+	fmt.Fprintf(os.Stderr, "rig: down %s — %s gone\n", m.ID, basedir)
+
 	if cwdInside && !inDoomed {
 		fmt.Fprintf(os.Stderr, "rig: note: your shell's cwd was inside the basedir; run `cd` to recover.\n")
-	}
-	if err := tmuxKillSession(session); err != nil {
-		return fmt.Errorf("tmux kill-session %s: %w", session, err)
 	}
 	return nil
 }
@@ -159,96 +173,15 @@ func unmergedPRsBlocker(basedir string) string {
 	return ""
 }
 
-// teardownRig dismantles a rig's resources except its tmux session: iso
-// sessions are stopped by exact name, jj workspace registrations forgotten,
-// and the basedir removed. The session kill is left to callers so they can
-// sequence it last — down may be running *inside* the session, and the
-// SIGHUP from the kill must not cut short the steps here.
+// teardownRig is the synchronous teardown entry point used by reap and focused
+// tests. Interactive down prepares the same job but hands it to a systemd
+// worker when invoked from inside the session it needs to kill.
 func teardownRig(basedir string, m manifest) error {
-	// Walk subdirs for jj workspaces. Group forget calls by source repo so
-	// multi-repo rigs don't try to forget workspace-A's name against
-	// workspace-B's source.
-	entries, err := os.ReadDir(basedir)
+	job, err := prepareTeardownJob(basedir, m)
 	if err != nil {
 		return err
 	}
-	forgetGroups := map[string][]string{} // source repo path → workspace names
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		p := filepath.Join(basedir, e.Name())
-		if _, err := os.Stat(filepath.Join(p, ".jj")); err != nil {
-			continue
-		}
-		source, err := jjSourceRepo(p)
-		if err != nil {
-			return fmt.Errorf("resolving source repo for %s: %w", p, err)
-		}
-		name := jjWorkspaceName(m.ID, e.Name())
-		forgetGroups[source] = append(forgetGroups[source], name)
-	}
-
-	// Stop iso sessions before their workspace dirs vanish. Exact name only —
-	// iso's project scope is basename-derived, so an --all-sessions from a
-	// workspace dir would also stop the main checkout's container of a
-	// same-named repo. Best-effort: a failed stop shouldn't strand teardown.
-	if _, err := exec.LookPath("iso"); err == nil {
-		for _, e := range entries {
-			if !e.IsDir() {
-				continue
-			}
-			p := filepath.Join(basedir, e.Name())
-			if !dirExists(filepath.Join(p, ".iso")) {
-				continue
-			}
-			session := isoSessionName(m.ID, e.Name())
-			fmt.Fprintf(os.Stderr, "rig: iso stop --session %s\n", session)
-			if err := isoStop(p, session); err != nil {
-				fmt.Fprintf(os.Stderr, "rig: warning: iso stop %s: %v\n", session, err)
-			}
-		}
-	}
-
-	// Reap compose-based dev-envs (e.g. cloud's postgres/valkey). The iso loop
-	// above only touches .iso projects, so a repo whose dev-env is docker-compose
-	// would otherwise leak its containers, network, and volumes on every teardown.
-	// Compose stamps each container with the working_dir it was started from, so
-	// we find every project rooted inside this rig without needing to know its
-	// (dev-id-derived) project name. Best-effort, same as iso stop.
-	if _, err := exec.LookPath("docker"); err == nil {
-		for project, workdir := range composeProjectsUnder(basedir) {
-			fmt.Fprintf(os.Stderr, "rig: docker compose -p %s down -v\n", project)
-			if err := composeDown(workdir, project); err != nil {
-				fmt.Fprintf(os.Stderr, "rig: warning: compose down %s: %v\n", project, err)
-			}
-		}
-	}
-
-	for source, names := range forgetGroups {
-		fmt.Fprintf(os.Stderr, "rig: jj workspace forget %v (from %s)\n", names, source)
-		if err := jjWorkspaceForget(source, names); err != nil {
-			return fmt.Errorf("jj workspace forget: %w", err)
-		}
-	}
-
-	// Move the whole rig out of the active namespace before recursively deleting
-	// it. Rename only touches the two parent directories, so root-owned output
-	// nested anywhere inside cannot block this atomic step. If RemoveAll later
-	// fails, the rig is still fully down; only clearly named trash remains.
-	quarantined, err := quarantineBasedir(basedir)
-	if err != nil {
-		return fmt.Errorf("quarantining basedir: %w", err)
-	}
-	if err := os.RemoveAll(quarantined); err != nil {
-		fmt.Fprintf(os.Stderr, "rig: warning: could not fully remove quarantined basedir: %v\n", err)
-		fmt.Fprintf(os.Stderr, "rig: warning: clean it up with: sudo rm -rf %s\n", shellQuote(quarantined))
-		return nil
-	}
-	// Usually remove the now-empty trash directory too. A concurrent teardown or
-	// older cleanup failure can legitimately leave it non-empty.
-	_ = os.Remove(filepath.Dir(quarantined))
-	return nil
+	return executeTeardownJob(job)
 }
 
 // quarantineBasedir atomically moves basedir into a hidden sibling directory.
@@ -274,44 +207,6 @@ func quarantineBasedir(basedir string) (string, error) {
 func isoStop(workspaceDir, session string) error {
 	cmd := exec.Command("iso", "stop", "--session", session)
 	cmd.Dir = workspaceDir
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	return cmd.Run()
-}
-
-// composeProjectsUnder returns docker-compose projects whose containers were
-// started from somewhere inside basedir, mapping project name to a working_dir
-// we can run `docker compose down` from. Matching on the working_dir label means
-// we don't need to know a project's (dev-id-derived) name, and resolving symlinks
-// on both sides keeps the prefix check honest.
-func composeProjectsUnder(basedir string) map[string]string {
-	out, err := exec.Command("docker", "ps", "-a",
-		"--filter", "label=com.docker.compose.project",
-		"--format", `{{.Label "com.docker.compose.project"}}`+"\t"+`{{.Label "com.docker.compose.project.working_dir"}}`,
-	).Output()
-	if err != nil {
-		return nil
-	}
-
-	base := resolvePath(basedir)
-	found := map[string]string{}
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		project, workdir, ok := strings.Cut(line, "\t")
-		if !ok || project == "" || workdir == "" {
-			continue
-		}
-		if isUnder(resolvePath(workdir), base) {
-			found[project] = workdir
-		}
-	}
-	return found
-}
-
-// composeDown tears a compose project down entirely (containers, network, and
-// volumes) from its working dir. rig down is a permanent teardown, so a lingering
-// dev database is just another orphan.
-func composeDown(workdir, project string) error {
-	cmd := exec.Command("docker", "compose", "-p", project, "down", "-v")
-	cmd.Dir = workdir
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	return cmd.Run()
 }

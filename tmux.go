@@ -19,6 +19,11 @@ import (
 // duplicate, and rig sessions sort alongside everything else in the list.
 func tmuxSessionName(path string) string {
 	if home, err := os.UserHomeDir(); err == nil {
+		// macOS commonly exposes /var through the /private/var real path. Cwd
+		// and HOME can land on opposite spellings of the same directory, which
+		// would otherwise make a rig's create and teardown names disagree.
+		path = resolvePath(path)
+		home = resolvePath(home)
 		if rel, ok := strings.CutPrefix(path, home); ok {
 			path = "~" + rel
 		}

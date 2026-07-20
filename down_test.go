@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -61,6 +62,26 @@ func TestUnmergedPRsBlocker(t *testing.T) {
 	})
 }
 
+func TestRigTeardownBlockerIncludesDisjointPRs(t *testing.T) {
+	fakeGh(t)
+	dir := t.TempDir()
+	if err := writeManifest(dir, manifest{
+		ID:       "mir-2",
+		Repos:    map[string]string{"rig": "o/r"},
+		Branches: map[string][]string{"rig": {"merged-primary", "open-secondary"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GH_FAKE_STATE", "MERGED")
+	t.Setenv("GH_FAKE_ALT_BRANCH", "open-secondary")
+	t.Setenv("GH_FAKE_ALT_STATE", "OPEN")
+
+	reason := rigTeardownBlocker(dir, map[string]bool{})
+	if !strings.Contains(reason, "open-secondary") || !strings.Contains(reason, "not merged") {
+		t.Fatalf("reason = %q, want the disjoint open secondary PR to block reap", reason)
+	}
+}
+
 func TestIsUnder(t *testing.T) {
 	tests := []struct {
 		child, parent string
@@ -84,6 +105,7 @@ func TestTeardownQuarantinesBeforeRemoval(t *testing.T) {
 		t.Skip("root bypasses directory write permissions")
 	}
 	t.Setenv("PATH", t.TempDir()) // Skip optional iso and docker cleanup.
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 
 	t.Run("permission failure leaves only quarantined debris", func(t *testing.T) {
 		root := t.TempDir()
@@ -98,10 +120,11 @@ func TestTeardownQuarantinesBeforeRemoval(t *testing.T) {
 		if err := os.Chmod(bin, 0o555); err != nil {
 			t.Fatal(err)
 		}
+		t.Cleanup(func() { _ = os.Chmod(bin, 0o755) })
 
-		err := teardownRig(basedir, manifest{})
-		if err != nil {
-			t.Fatalf("permission failure in quarantined cleanup should not fail teardown: %v", err)
+		err := teardownRig(basedir, manifest{ID: "mir-locked"})
+		if err == nil {
+			t.Fatal("permission failure should retain the durable teardown job")
 		}
 		if _, err := os.Stat(basedir); !os.IsNotExist(err) {
 			t.Errorf("canonical basedir still exists after quarantine: %v", err)
@@ -116,9 +139,21 @@ func TestTeardownQuarantinesBeforeRemoval(t *testing.T) {
 			t.Fatalf("expected one clearly named quarantined rig, got %v", entries)
 		}
 		quarantinedBin := filepath.Join(trashRoot, entries[0].Name(), "runtime", "bin")
-		t.Cleanup(func() { _ = os.Chmod(quarantinedBin, 0o755) })
 		if _, err := os.Stat(filepath.Join(quarantinedBin, "miren")); err != nil {
 			t.Errorf("root-owned stand-in was not left in quarantine: %v", err)
+		}
+		jobs, err := pendingTeardownJobs()
+		if err != nil || len(jobs) != 1 {
+			t.Fatalf("pending jobs = %v, %v; want one retryable tombstone", jobs, err)
+		}
+		if err := os.Chmod(quarantinedBin, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := executeTeardownJobFile(jobs[0], false); err != nil {
+			t.Fatalf("retrying durable teardown: %v", err)
+		}
+		if _, err := os.Stat(jobs[0]); !os.IsNotExist(err) {
+			t.Errorf("completed teardown job still exists: %v", err)
 		}
 	})
 
@@ -140,6 +175,31 @@ func TestTeardownQuarantinesBeforeRemoval(t *testing.T) {
 		}
 		if _, err := os.Stat(filepath.Join(root, ".rig-trash")); !os.IsNotExist(err) {
 			t.Errorf("empty quarantine directory still exists: %v", err)
+		}
+	})
+
+	t.Run("agent scratch is removed with the rig", func(t *testing.T) {
+		root := t.TempDir()
+		tmp := filepath.Join(root, "tmp")
+		t.Setenv("TMPDIR", tmp)
+		basedir := filepath.Join(root, "workspaces", "mir-3-scratch")
+		if err := os.MkdirAll(basedir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		project := filepath.Join(tmp, "claude-"+strconv.Itoa(os.Getuid()), claudeProjectDirName(basedir))
+		scratch := filepath.Join(project, "session-id", "scratchpad")
+		if err := os.MkdirAll(scratch, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(scratch, "dev.log"), []byte("runaway"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := teardownRig(basedir, manifest{ID: "mir-3"}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(project); !os.IsNotExist(err) {
+			t.Errorf("Claude scratch project still exists: %v", err)
 		}
 	})
 }

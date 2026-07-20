@@ -26,6 +26,11 @@ func runPark(args []string) error {
 	if err != nil {
 		return err
 	}
+	lock, err := acquireRigMutationLock(basedir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = lock.Close() }()
 	m, err := readManifest(basedir)
 	if err != nil {
 		return fmt.Errorf("reading manifest: %w", err)
