@@ -108,8 +108,9 @@ usage:
                             pitch a review rig for someone else's PR
                             (url, or fzf picker over review-requested PRs;
                             a URL that turns out to be yours routes to up)
-  rig pr                    open the rig's PR in the browser
-                            (gh pr view -w, but it knows the jj branch)
+  rig pr                    open one of the rig's PRs in the browser
+                            (across added repos and tracked/current branches;
+                            when several match, pick one with fzf)
   rig track [branch]        record a secondary PR branch for the repo you're in
                             (defaults to the current work's branch) so down and
                             reap gate on it alongside the rig's primary PR

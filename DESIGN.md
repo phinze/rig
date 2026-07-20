@@ -82,7 +82,8 @@ job (climbing rig, fishing rig, sound rig):
   task-level agent; optional arguments drive the promoted viewer.
 - `rig track <pr>` — record a second PR's branch on a repo already in the
   rig, so down/reap gate on it too.
-- `rig pr` — open the rig's PR in the browser.
+- `rig pr` — open the rig's PR in the browser, resolving across added repos and
+  tracked/current branches; when several match, pick one with fzf.
 - `rig ls` — list rigs in flight (the call-sheet); `--full` adds PR/CI
   columns, `--format=json` is the stable API.
 - `rig switch` (alias `cd`) — jump to a rig; fzf if no arg, most-recently-

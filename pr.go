@@ -6,16 +6,26 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 )
 
-// runPR opens the PR for the rig you're in, the jj-land replacement for
-// `gh pr view -w`. In a jj workspace there's no git HEAD for gh to read a
-// branch off of, so gh's own current-branch detection comes up empty. rig
-// knows the layout: it finds which repo you're standing in, asks jj for the
-// branch backing the current work, and hands that to gh to crack open.
+// runPR opens a PR belonging to the rig you're in. A rig may span repos
+// through `rig add`, and each repo may carry several branches through `rig
+// track`, so cwd is only used to find the rig rather than select one repo.
+//
+// When several PRs match, the user chooses one with the usual fzf picker. The
+// manifest is the durable accounting record, but the current workspace
+// bookmark is included too. That catches an added repo once work grows there,
+// and a primary branch that evolved after the rig was created (for example a
+// publish-preview branch spun from the issue's original branch).
 func runPR(args []string) error {
+	return runPRWithPicker(args, fzfSelect)
+}
+
+func runPRWithPicker(args []string, picker func([]string, string) (string, error)) error {
 	if len(args) != 0 {
 		return fmt.Errorf("usage: rig pr")
 	}
@@ -33,29 +43,126 @@ func runPR(args []string) error {
 		return fmt.Errorf("reading manifest: %w", err)
 	}
 
-	subdir, err := repoSubdirForCwd(basedir, cwd, m)
+	candidates, err := rigPRCandidates(basedir, m)
 	if err != nil {
 		return err
 	}
-	repoDest := filepath.Join(basedir, subdir)
-
-	branch, err := repoBranch(m, subdir, repoDest)
-	if err != nil {
-		return err
-	}
-	if branch == "" {
+	if len(candidates) == 0 {
 		return fmt.Errorf(
-			"no PR branch for %s yet: the work here isn't on a bookmark.\n"+
-				"Create and push one (e.g. jj bookmark create <name> -r @, jj git push), then retry.",
-			m.Repos[subdir],
+			"no PR branches found for this rig yet: its repos are all on trunk.\n" +
+				"Create and push a bookmark (or use `rig track <branch>`), then retry.",
 		)
 	}
 
-	// -R from the manifest is authoritative; don't lean on direnv's GH_REPO,
-	// which is keyed to cwd and would be wrong when run from the basedir root.
-	cmd := exec.Command("gh", "pr", "view", branch, "-R", m.Repos[subdir], "--web")
+	var prs []rigPR
+	seen := map[string]bool{}
+	for _, candidate := range candidates {
+		pr, err := prForBranch(candidate.Repo, candidate.Branch)
+		if err != nil {
+			return err
+		}
+		if pr == nil {
+			continue
+		}
+		key := fmt.Sprintf("%s#%d", candidate.Repo, pr.Number)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		prs = append(prs, rigPR{Repo: candidate.Repo, Branch: candidate.Branch, prInfo: *pr})
+	}
+	if len(prs) == 0 {
+		checked := make([]string, len(candidates))
+		for i, candidate := range candidates {
+			checked[i] = candidate.Repo + ":" + candidate.Branch
+		}
+		return fmt.Errorf("no pull requests found for this rig (checked %s)", strings.Join(checked, ", "))
+	}
+
+	pr, err := selectRigPR(prs, picker)
+	if err != nil {
+		return err
+	}
+	if pr == nil {
+		return nil // picker cancelled
+	}
+
+	// Select by number after resolving by branch. This avoids asking gh to
+	// resolve the same branch a second time, and keeps the open pinned to the
+	// repo from the manifest instead of cwd's GH_REPO.
+	cmd := exec.Command("gh", "pr", "view", strconv.Itoa(pr.Number), "-R", pr.Repo, "--web")
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("opening %s PR #%d: %w", pr.Repo, pr.Number, err)
+	}
+	return nil
+}
+
+// selectRigPR follows rig's usual cardinality rule: one answer proceeds
+// directly, many answers go through fzf, and a cancelled picker does nothing.
+// The fourth, hidden column is the stable index back into prs.
+func selectRigPR(prs []rigPR, picker func([]string, string) (string, error)) (*rigPR, error) {
+	if len(prs) == 1 {
+		return &prs[0], nil
+	}
+	rows := make([]string, len(prs))
+	for i, pr := range prs {
+		title := pr.Title
+		if title == "" {
+			title = pr.Branch
+		}
+		rows[i] = fmt.Sprintf("%s\t#%d\t%s\t%d", pr.Repo, pr.Number, title, i)
+	}
+	sel, err := picker(rows, "Open PR: ")
+	if err != nil {
+		return nil, err
+	}
+	if sel == "" {
+		return nil, nil
+	}
+	cols := strings.SplitN(sel, "\t", 4)
+	if len(cols) != 4 {
+		return nil, fmt.Errorf("unexpected PR picker selection: %q", sel)
+	}
+	i, err := strconv.Atoi(cols[3])
+	if err != nil || i < 0 || i >= len(prs) {
+		return nil, fmt.Errorf("unexpected PR picker selection: %q", sel)
+	}
+	return &prs[i], nil
+}
+
+type rigPRCandidate struct {
+	Repo   string
+	Branch string
+}
+
+// rigPRCandidates returns the branches that could have PRs belonging to this
+// rig in stable repo order. Recorded branches preserve their manifest order;
+// the workspace's current branch follows when it is not already recorded.
+func rigPRCandidates(basedir string, m manifest) ([]rigPRCandidate, error) {
+	subdirs := make([]string, 0, len(m.Repos))
+	for subdir := range m.Repos {
+		subdirs = append(subdirs, subdir)
+	}
+	sort.Strings(subdirs)
+
+	var candidates []rigPRCandidate
+	for _, subdir := range subdirs {
+		branches := slices.Clone(m.Branches[subdir])
+		current, err := jjPRBranch(filepath.Join(basedir, subdir))
+		if err != nil {
+			return nil, fmt.Errorf("%s: resolving current branch: %w", subdir, err)
+		}
+		if current != "" && !slices.Contains(branches, current) {
+			branches = append(branches, current)
+		}
+		for _, branch := range branches {
+			if branch != "" {
+				candidates = append(candidates, rigPRCandidate{Repo: m.Repos[subdir], Branch: branch})
+			}
+		}
+	}
+	return candidates, nil
 }
 
 // repoSubdirForCwd works out which of the rig's repos the command is aimed at.

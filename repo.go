@@ -286,21 +286,6 @@ func repoBranches(m manifest, subdir, workspacePath string) ([]string, error) {
 	return []string{b}, nil
 }
 
-// repoBranch returns just the primary branch for a repo — the rig's own PR,
-// used where a single answer is wanted (rig pr, reap's merge check). It's
-// repoBranches' first element, so the same recorded-then-heuristic resolution
-// applies. Empty means no branch could be determined.
-func repoBranch(m manifest, subdir, workspacePath string) (string, error) {
-	bs, err := repoBranches(m, subdir, workspacePath)
-	if err != nil {
-		return "", err
-	}
-	if len(bs) == 0 {
-		return "", nil
-	}
-	return bs[0], nil
-}
-
 // jjWorkspaceName is the workspace identity registered with the source repo.
 // Scoping it by rig keeps multi-rig listings legible in `jj workspace list`.
 func jjWorkspaceName(rigID, repoName string) string {
