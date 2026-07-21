@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -272,9 +271,7 @@ func rigTeardownBlocker(basedir string, fetched map[string]bool) string {
 // The judgment differs by rig kind, because "done" does. An authoring rig
 // accounts for all work reachable from @ against merged PR heads. A review rig
 // guards none of the author's commits and instead requires that you've posted a
-// review, then checks @ alone for scratch edits of your own. Both paths allow
-// the direnv anchor rig wrote at setup: jj auto-tracks it in repos that ship no
-// .envrc, but it isn't authored work.
+// review, then checks @ alone for scratch edits of your own.
 func workspaceTeardownBlocker(ws, nameWithOwner, label string, branches []string, review bool, login string) string {
 	if review {
 		if reason := reviewTeardownBlocker(nameWithOwner, label, branches, login); reason != "" {
@@ -284,7 +281,7 @@ func workspaceTeardownBlocker(ws, nameWithOwner, label string, branches []string
 		if err != nil {
 			return fmt.Sprintf("%s: jj check failed: %v", label, err)
 		}
-		if !atEmpty && !anchorOnlyWIP(ws) {
+		if !atEmpty {
 			return fmt.Sprintf("%s has working-copy changes", label)
 		}
 		return ""
@@ -304,12 +301,7 @@ func authoringTeardownBlocker(ws, nameWithOwner, label string, branches []string
 	if err != nil {
 		return fmt.Sprintf("%s: jj check failed: %v", label, err)
 	}
-	anchorOnly := !atEmpty && anchorOnlyWIP(ws)
 	work := "::@ & ~empty() & ~::trunk()"
-	if anchorOnly {
-		// The generated direnv anchor is setup metadata, not authored work.
-		work = "::@ & ~@ & ~empty() & ~::trunk()"
-	}
 
 	// Cheap first: any authored off-trunk commit reachable from @? If not,
 	// there's no local work to lose and nothing to verify against GitHub.
@@ -377,7 +369,7 @@ func authoringTeardownBlocker(ws, nameWithOwner, label string, branches []string
 			return fmt.Sprintf("%s has changes beyond merged PR #%d (%s)", label, pr.Number, current)
 		}
 	}
-	if !atEmpty && !anchorOnly {
+	if !atEmpty {
 		return fmt.Sprintf("%s has working-copy changes", label)
 	}
 	return fmt.Sprintf("%s has unmerged work", label)
@@ -406,28 +398,4 @@ func reviewTeardownBlocker(nameWithOwner, label string, branches []string, login
 		}
 	}
 	return ""
-}
-
-// anchorOnlyWIP reports whether the workspace's @ carries nothing but the
-// direnv anchor rig itself wrote (addRepoWorkspace drops "source_up\n" when
-// the repo ships no .envrc). Fail-closed: any doubt — diff error, extra
-// files, content that isn't the bare anchor — reads as real WIP.
-func anchorOnlyWIP(ws string) bool {
-	cmd := exec.Command("jj", "-R", ws, "diff", "-r", "@", "--name-only")
-	cmd.Dir = ws // jj prints paths relative to cwd; anchor to the workspace
-	out, err := cmd.Output()
-	if err != nil {
-		return false
-	}
-	var files []string
-	for _, line := range strings.Split(string(out), "\n") {
-		if line = strings.TrimSpace(line); line != "" {
-			files = append(files, line)
-		}
-	}
-	if len(files) != 1 || files[0] != ".envrc" {
-		return false
-	}
-	body, err := os.ReadFile(filepath.Join(ws, ".envrc"))
-	return err == nil && string(body) == "source_up\n"
 }

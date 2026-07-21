@@ -271,13 +271,17 @@ exit 1
 		filepath.Join(basedir, "AGENTS.md"),
 		filepath.Join(basedir, ".agents", "rules", "rig.md"),
 		filepath.Join(basedir, "fakerepo", ".jj"),
-		// direnv anchor written because the fake repo ships no .envrc of its own.
-		filepath.Join(basedir, "fakerepo", ".envrc"),
 	}
 	for _, p := range wantFiles {
 		if _, err := os.Stat(p); err != nil {
 			t.Errorf("expected %s to exist after up: %v", p, err)
 		}
+	}
+	// Repos without their own .envrc inherit the basedir's. Rig shouldn't add
+	// generated files to the jj working copy just to trigger direnv.
+	repoEnvrc := filepath.Join(basedir, "fakerepo", ".envrc")
+	if _, err := os.Stat(repoEnvrc); !os.IsNotExist(err) {
+		t.Errorf("expected rig not to create %s, got %v", repoEnvrc, err)
 	}
 
 	manifest, err := os.ReadFile(filepath.Join(basedir, ".rig.toml"))
@@ -744,8 +748,7 @@ exit 1
 	}
 
 	// Gate 2: WIP in the workspace blocks even an idle rig. jj snapshots
-	// the file into @ when reap's revset check runs. (The rig-written
-	// .envrc anchor is also in @ but gets the carve-out; wip.txt doesn't.)
+	// the file into @ when reap's revset check runs.
 	wip := filepath.Join(basedir, "fakerepo", "wip.txt")
 	if err := os.WriteFile(wip, []byte("half-finished\n"), 0o644); err != nil {
 		t.Fatal(err)

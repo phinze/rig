@@ -85,12 +85,11 @@ func writeRigShims(basedir string) error {
 	return os.Chmod(path, 0o755)
 }
 
-// addRepoWorkspace creates a jj workspace for repo under basedir at startRev,
-// drops a direnv anchor so GH_REPO loads, and records the repo (and its branch,
-// when known) in the manifest. branch is the intended branch for this repo's
-// work — up passes the Linear branch, review the PR head, add passes "" since
-// an added repo starts on trunk with no branch yet. Returns the absolute path
-// to the created workspace directory.
+// addRepoWorkspace creates a jj workspace for repo under basedir at startRev
+// and records the repo (and its branch, when known) in the manifest. branch is
+// the intended branch for this repo's work — up passes the Linear branch,
+// review the PR head, add passes "" since an added repo starts on trunk with no
+// branch yet. Returns the absolute path to the created workspace directory.
 func addRepoWorkspace(basedir, rigID string, repo repoRef, startRev, branch string) (string, error) {
 	repoDest := filepath.Join(basedir, repo.Name)
 	wsName := jjWorkspaceName(rigID, repo.Name)
@@ -108,16 +107,9 @@ func addRepoWorkspace(basedir, rigID string, repo repoRef, startRev, branch stri
 		return "", fmt.Errorf("jj workspace add: %w", err)
 	}
 
-	// direnv anchor: the workspace needs *some* .envrc for direnv to fire, at
-	// which point the global direnvrc reads GH_REPO out of the manifest. Don't
-	// clobber a project's own .envrc (nix devshells etc.) — it triggers direnv
-	// on its own and picks up GH_REPO the same way.
-	envrcPath := filepath.Join(repoDest, ".envrc")
-	if _, err := os.Stat(envrcPath); err != nil {
-		if err := os.WriteFile(envrcPath, []byte("source_up\n"), 0o644); err != nil {
-			return "", err
-		}
-	}
+	// A repo-owned .envrc takes precedence; otherwise direnv finds the rig's
+	// basedir .envrc above it. Either entrypoint runs the global stdlib, which
+	// projects the cwd-specific environment with `rig env`.
 	if err := direnvAllow(repoDest); err != nil {
 		return "", err
 	}

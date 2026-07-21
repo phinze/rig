@@ -271,13 +271,6 @@ Each source repo gets one best-effort `jj git fetch` per run so trunk()
 reflects what actually merged; a failed fetch just means checking
 against a stale trunk, which fails closed too.
 
-Implementation surfaced one wrinkle: the direnv anchor rig writes into
-workspaces whose repo ships no .envrc gets auto-tracked by jj, leaving
-`@` permanently non-empty — no such rig would ever reap. So local-work
-accounting gets exactly one allowance: a diff of precisely `.envrc` whose
-content is the bare anchor. Anything else must be covered by a merged PR
-head or it blocks.
-
 Reapable rigs go through the same code path as `rig down`
 (`teardownRig`). Teardown also grew the tool cleanup `down` previously
 lacked: stop the rig's iso session *by exact name* (the same
@@ -371,9 +364,9 @@ switcher seat on rigs alone.
 - ~~**direnvrc stdlib migration.**~~ Answered: `rig env` owns all layout
   and manifest knowledge (including the legacy
   `~/workspaces/github.com/...` → `GH_REPO` path-parse, which ages out
-  with those sessions); the host stdlib is a one-line eval. The layered
-  `source_up` idea didn't survive contact with repos that ship their own
-  .envrc — see §Naming.
+  with those sessions); the host stdlib is a one-line eval. Repo-owned
+  `.envrc` files and the parent basedir `.envrc` provide the direnv
+  entrypoints; the stdlib projects the right environment from either one.
 - **Interactive picker source mixing.** No-arg `rig up` should fzf
   across pickable issues. Merge Linear + GH into one list with a
   source column, or pick the tracker first? Merged is nicer but means
