@@ -23,9 +23,8 @@ func runGHShim(args []string) error {
 	}
 
 	env := os.Environ()
-	path := withoutRigShim(os.Getenv("PATH"), os.Getenv("RIG_BASEDIR"))
+	path := withoutRigShims(os.Getenv("PATH"))
 	if basedir, err := findBasedir(cwd); err == nil {
-		path = withoutRigShim(path, basedir)
 		m, readErr := readManifest(basedir)
 		if readErr != nil {
 			return fmt.Errorf("reading manifest: %w", readErr)
@@ -52,19 +51,28 @@ func runGHShim(args []string) error {
 	return cmd.Run()
 }
 
-func withoutRigShim(path, basedir string) string {
-	if basedir == "" {
-		return path
-	}
-	shimDir := filepath.Clean(filepath.Join(basedir, ".rig", "bin"))
+// withoutRigShims removes every generated Rig gh shim from path. A shell can
+// carry an older rig's shim when tmux starts a new pane from that shell's
+// environment. Leaving that stale shim behind would make `rig __gh` select it
+// as the real gh, which recursively invokes `rig __gh` again.
+func withoutRigShims(path string) string {
 	parts := filepath.SplitList(path)
 	out := parts[:0]
 	for _, part := range parts {
-		if filepath.Clean(part) != shimDir {
+		if !isRigShimDir(part) {
 			out = append(out, part)
 		}
 	}
 	return strings.Join(out, string(os.PathListSeparator))
+}
+
+func isRigShimDir(dir string) bool {
+	dir = filepath.Clean(dir)
+	if filepath.Base(dir) != "bin" || filepath.Base(filepath.Dir(dir)) != ".rig" {
+		return false
+	}
+	body, err := os.ReadFile(filepath.Join(dir, "gh"))
+	return err == nil && string(body) == ghShim
 }
 
 func findExecutable(name, path string) (string, error) {

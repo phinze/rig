@@ -11,10 +11,17 @@ func TestGHShimResolvesRepoFromInvocationCwd(t *testing.T) {
 	root := t.TempDir()
 	basedir := filepath.Join(root, "rig")
 	shimDir := filepath.Join(basedir, ".rig", "bin")
+	staleBasedir := filepath.Join(root, "stale-rig")
+	staleShimDir := filepath.Join(staleBasedir, ".rig", "bin")
 	realBin := filepath.Join(root, "real-bin")
 	cloud := filepath.Join(basedir, "cloud")
-	for _, dir := range []string{shimDir, realBin, cloud} {
+	for _, dir := range []string{realBin, cloud} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, dir := range []string{basedir, staleBasedir} {
+		if err := writeRigShims(dir); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -33,7 +40,7 @@ func TestGHShimResolvesRepoFromInvocationCwd(t *testing.T) {
 	t.Chdir(cloud)
 	t.Setenv("RIG_BASEDIR", basedir)
 	t.Setenv("GH_REPO", "mirendev/runtime") // stale agent-start context
-	t.Setenv("PATH", shimDir+string(os.PathListSeparator)+realBin)
+	t.Setenv("PATH", strings.Join([]string{shimDir, staleShimDir, realBin}, string(os.PathListSeparator)))
 	if err := runGHShim([]string{"pr", "create", "--dry-run"}); err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +54,10 @@ func TestGHShimResolvesRepoFromInvocationCwd(t *testing.T) {
 		t.Errorf("GH_REPO = %q, want %q", got, want)
 	}
 	if strings.Contains(lines[1], shimDir) {
-		t.Errorf("real gh PATH still contains shim (would recurse): %q", lines[1])
+		t.Errorf("real gh PATH still contains current shim (would recurse): %q", lines[1])
+	}
+	if strings.Contains(lines[1], staleShimDir) {
+		t.Errorf("real gh PATH still contains stale shim (would recurse): %q", lines[1])
 	}
 	if got, want := lines[2], "pr create --dry-run"; got != want {
 		t.Errorf("args = %q, want %q", got, want)
