@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -127,7 +128,7 @@ func writeBranchTable(b *strings.Builder, name string, table map[string][]string
 
 // parseTOMLStringArray reads a `["a", "b"]` array literal into its elements.
 // Deliberately minimal, matching the hand-rolled reader: it splits on commas
-// and strips surrounding quotes, which is enough for branch names (git refs
+// and decodes each quoted string, which is enough for branch names (git refs
 // carry no commas or quotes). Empty elements are dropped.
 func parseTOMLStringArray(s string) []string {
 	s = strings.TrimSpace(s)
@@ -135,12 +136,25 @@ func parseTOMLStringArray(s string) []string {
 	s = strings.TrimSuffix(s, "]")
 	var out []string
 	for _, part := range strings.Split(s, ",") {
-		part = strings.Trim(strings.TrimSpace(part), `"`)
+		part = parseTOMLString(part)
 		if part != "" {
 			out = append(out, part)
 		}
 	}
 	return out
+}
+
+// parseTOMLString reverses the %q encoding used by writeManifest. Merely
+// trimming the surrounding quotes leaves escapes such as \" in the value;
+// every later read-modify-write then escapes those backslashes again.
+func parseTOMLString(s string) string {
+	s = strings.TrimSpace(s)
+	if value, err := strconv.Unquote(s); err == nil {
+		return value
+	}
+	// Keep accepting the deliberately small legacy format if a hand-edited
+	// manifest contains an unquoted value or an escape strconv rejects.
+	return strings.Trim(s, `"`)
 }
 
 // readManifest is intentionally a minimal hand-rolled parser for the scalar
@@ -170,9 +184,10 @@ func readManifest(basedir string) (manifest, error) {
 			continue
 		}
 		key = strings.TrimSpace(key)
-		val = strings.Trim(strings.TrimSpace(val), `"`)
+		val = strings.TrimSpace(val)
 		switch section {
 		case "":
+			val = parseTOMLString(val)
 			switch key {
 			case "id":
 				m.ID = val
@@ -192,14 +207,14 @@ func readManifest(basedir string) (manifest, error) {
 				}
 			}
 		case "repos":
-			m.Repos[key] = val
+			m.Repos[key] = parseTOMLString(val)
 		case "branches":
 			// Array form is the current shape; a bare scalar is a legacy
 			// single-branch manifest, read as a one-element list.
 			if strings.HasPrefix(val, "[") {
 				m.Branches[key] = parseTOMLStringArray(val)
 			} else {
-				m.Branches[key] = []string{val}
+				m.Branches[key] = []string{parseTOMLString(val)}
 			}
 		}
 	}

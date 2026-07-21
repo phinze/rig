@@ -41,6 +41,31 @@ func TestManifestBranchesRoundTrip(t *testing.T) {
 	}
 }
 
+// Free-form kickoff titles can contain quotes and backslashes. Adding repos
+// rewrites the whole manifest, so each rewrite must preserve the title exactly
+// rather than turning the writer's escapes into user-visible text.
+func TestManifestQuotedTitleSurvivesRewrites(t *testing.T) {
+	dir := t.TempDir()
+	title := `Fix "Miren Anywhere" routing under C:\clusters`
+	if err := writeManifest(dir, manifest{ID: "fix-routing", Title: title}); err != nil {
+		t.Fatalf("writeManifest: %v", err)
+	}
+	if err := addRepoToManifest(dir, "cloud", "mirendev/cloud", ""); err != nil {
+		t.Fatalf("adding cloud: %v", err)
+	}
+	if err := addRepoToManifest(dir, "runtime", "mirendev/runtime", ""); err != nil {
+		t.Fatalf("adding runtime: %v", err)
+	}
+
+	got, err := readManifest(dir)
+	if err != nil {
+		t.Fatalf("readManifest: %v", err)
+	}
+	if got.Title != title {
+		t.Errorf("title after rewrites = %q, want %q", got.Title, title)
+	}
+}
+
 // A legacy manifest that wrote branches as a bare scalar must still read back —
 // as a one-element list — so rigs created before N-per-repo keep resolving.
 func TestManifestLegacyScalarBranch(t *testing.T) {
