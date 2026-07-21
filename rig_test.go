@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
+)
 
 func TestTaskSlug(t *testing.T) {
 	cases := []struct {
@@ -37,9 +41,14 @@ func TestKickoffID(t *testing.T) {
 		{"symbols", "  What's up with auth?!  ", "what-s-up-with-auth"},
 		{"symbols only", "?!", ""},
 		{
-			"hard cap at 60 with trailing dash trimmed",
+			"long kickoff keeps the meaningful subject and outcome",
 			"Investigate why the background reconciliation worker occasionally drops queued updates",
-			"investigate-why-the-background-reconciliation-worker-occasio",
+			"background-reconciliation-worker-drops-queued-updates",
+		},
+		{
+			"very long kickoff keeps its tail",
+			"Rig new's text input is a little janky, can we enhance that to a better readline or bubbles based textinput so e.g. ctrl-u works",
+			"rig-new-text-input-janky-enhance-readline-ctrl-u-works",
 		},
 	}
 	for _, c := range cases {
@@ -51,6 +60,36 @@ func TestKickoffID(t *testing.T) {
 				t.Errorf("id exceeds cap: %d chars", len(got))
 			}
 		})
+	}
+}
+
+func TestKickoffPromptEditing(t *testing.T) {
+	m := newKickoffPromptModel()
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("discard this")})
+	m = updated.(kickoffPromptModel)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
+	m = updated.(kickoffPromptModel)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("keep this")})
+	m = updated.(kickoffPromptModel)
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(kickoffPromptModel)
+
+	if m.kickoff != "keep this" {
+		t.Errorf("kickoff = %q, want %q", m.kickoff, "keep this")
+	}
+	if cmd == nil || !m.done {
+		t.Error("enter did not finish the prompt")
+	}
+}
+
+func TestKickoffPromptEscapeCancels(t *testing.T) {
+	m := newKickoffPromptModel()
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(kickoffPromptModel)
+
+	if m.kickoff != "" || !m.done || cmd == nil {
+		t.Errorf("escape left prompt in state %#v", m)
 	}
 }
 
