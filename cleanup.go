@@ -257,11 +257,24 @@ func prepareTeardownJob(basedir string, m manifest) (*teardownJob, error) {
 // be replayed after a crash; the tombstone disappears only once processes,
 // external resources, workspace registrations, scratch, and files are gone.
 func executeTeardownJob(job *teardownJob) error {
-	if err := tmuxKillSession(job.Session); err != nil {
-		return fmt.Errorf("tmux kill-session %s: %w", job.Session, err)
-	}
-	if err := stopRigProcessScopes(job.ID); err != nil {
-		return err
+	return executeTeardownJobForPlatform(job, runtime.GOOS)
+}
+
+// executeTeardownJobForPlatform keeps the process-owning step native to each
+// host. Linux runs from an external systemd worker, so it can kill tmux and all
+// RIG_ID scopes first, preventing processes from recreating resources during
+// cleanup. Darwin has no external worker or cgroup ownership: killing the tmux
+// session would SIGHUP this very process, so it finishes cleanup and clears the
+// tombstone before killing the session last.
+func executeTeardownJobForPlatform(job *teardownJob, platform string) error {
+	killFirst := platform == "linux"
+	if killFirst {
+		if err := tmuxKillSession(job.Session); err != nil {
+			return fmt.Errorf("tmux kill-session %s: %w", job.Session, err)
+		}
+		if err := stopRigProcessScopes(job.ID); err != nil {
+			return err
+		}
 	}
 	for _, dir := range job.ScratchDirs {
 		if err := os.RemoveAll(dir); err != nil {
@@ -328,6 +341,16 @@ func executeTeardownJob(job *teardownJob) error {
 	}
 	if err := os.Remove(job.path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("removing teardown job: %w", err)
+	}
+	if !killFirst {
+		if err := tmuxKillSession(job.Session); err != nil {
+			// Everything else is already idempotently gone, but retain a retry
+			// record when tmux itself refused the final step.
+			if persistErr := writeTeardownJob(job); persistErr != nil {
+				return fmt.Errorf("tmux kill-session %s: %w (also restoring teardown job: %v)", job.Session, err, persistErr)
+			}
+			return fmt.Errorf("tmux kill-session %s: %w", job.Session, err)
+		}
 	}
 	return nil
 }

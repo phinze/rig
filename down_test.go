@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // unmergedPRsBlocker is `rig down`'s eager gate: every recorded branch's PR must
@@ -97,6 +98,63 @@ func TestIsUnder(t *testing.T) {
 		if got := isUnder(tt.child, tt.parent); got != tt.want {
 			t.Errorf("isUnder(%q, %q) = %v, want %v", tt.child, tt.parent, got, tt.want)
 		}
+	}
+}
+
+func TestTeardownTmuxOrderingByPlatform(t *testing.T) {
+	for _, tt := range []struct {
+		platform string
+		expect   string
+	}{
+		{platform: "linux", expect: "early"},
+		{platform: "darwin", expect: "late"},
+	} {
+		t.Run(tt.platform, func(t *testing.T) {
+			root := t.TempDir()
+			bin := filepath.Join(root, "bin")
+			if err := os.Mkdir(bin, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			tmux := `#!/bin/sh
+case "$1" in
+  has-session) exit 0 ;;
+  kill-session)
+    case "$TMUX_EXPECT" in
+      early) test -d "$TMUX_BASEDIR" && test -f "$TMUX_JOB" ;;
+      late) test ! -e "$TMUX_BASEDIR" && test ! -e "$TMUX_JOB" ;;
+    esac
+    ;;
+esac
+`
+			if err := os.WriteFile(filepath.Join(bin, "tmux"), []byte(tmux), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin)
+			t.Setenv("XDG_STATE_HOME", filepath.Join(root, "state"))
+
+			basedir := filepath.Join(root, "workspaces", "mir-order")
+			if err := os.MkdirAll(basedir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			job := &teardownJob{
+				Version: teardownJobVersion,
+				ID:      "mir-order",
+				Basedir: basedir,
+				Session: "rig-order",
+				Created: time.Now(),
+				path:    "",
+			}
+			if err := writeTeardownJob(job); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("TMUX_EXPECT", tt.expect)
+			t.Setenv("TMUX_BASEDIR", basedir)
+			t.Setenv("TMUX_JOB", job.path)
+
+			if err := executeTeardownJobForPlatform(job, tt.platform); err != nil {
+				t.Fatalf("teardown: %v", err)
+			}
+		})
 	}
 }
 
