@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -105,18 +106,32 @@ func radarAct(s rigStatus) error {
 	if s.create {
 		zoxideAdd(s.Path)
 	}
-	lock, err := acquireRigMutationLock(s.Path)
+	// Nonblocking: radarAct runs after the picker's TUI has torn down, so a
+	// blocking flock here would hang a bare terminal with no output while some
+	// other rig command holds the lock. The common case is mundane — you're
+	// already attached to this rig (which holds the lock across the whole
+	// attach) and you Enter it again from the radar. Report the contention and
+	// bail instead of freezing.
+	lock, err := acquireRigMutationLockMode(s.Path, true)
 	if err != nil {
+		if errors.Is(err, errRigBusy) {
+			label := s.Title
+			if label == "" {
+				label = s.ID
+			}
+			return fmt.Errorf("%q is busy — another rig command is holding it (try again shortly)", label)
+		}
 		return err
 	}
-	defer func() { _ = lock.Close() }()
 	if s.Parked {
 		m, err := readManifest(s.Path)
 		if err != nil {
+			_ = lock.Close()
 			return fmt.Errorf("reading manifest: %w", err)
 		}
 		m.Parked = time.Time{}
 		if err := writeManifest(s.Path, m); err != nil {
+			_ = lock.Close()
 			return err
 		}
 		fmt.Fprintf(os.Stderr, "rig: woke %s\n", m.ID)
@@ -124,9 +139,15 @@ func radarAct(s rigStatus) error {
 	session := tmuxSessionName(s.Path)
 	if !tmuxHasSession(session) {
 		if err := tmuxNewSession(session, s.Path); err != nil {
+			_ = lock.Close()
 			return fmt.Errorf("tmux new-session: %w", err)
 		}
 	}
+	// Release before attaching: the manifest write and session standup are done,
+	// and the attach blocks for the whole time you sit in the session. Holding
+	// the mutation lock across that would pin it against every other rig command
+	// (park, track, down, a second radar Enter) for the life of the attach.
+	_ = lock.Close()
 	return attachOrReport(session)
 }
 

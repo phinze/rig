@@ -88,23 +88,32 @@ func acquireRigLock(basedir string, nonblocking bool) (*rigLock, error) {
 }
 
 func acquireRigMutationLock(basedir string) (*rigLock, error) {
-	lock, err := acquireRigLock(basedir, false)
-	if err != nil {
-		return nil, err
-	}
+	return acquireRigMutationLockMode(basedir, false)
+}
+
+// acquireRigMutationLockMode is acquireRigMutationLock with a choice of blocking
+// discipline. The deliberate one-shot commands (down, up, park, track) block —
+// waiting their turn is the right call. The radar's Enter path passes
+// nonblocking=true: it runs after the picker's TUI has already torn down, so a
+// blocking flock would freeze a bare terminal with no way to tell you why. It
+// gets errRigBusy instead and can say so.
+//
+// The pending-teardown check runs before the acquire so its "run `rig reap`"
+// hint reaches callers even when a live teardown is holding the lock — that's
+// the exact case the hint is about, and under the old ordering you'd block on
+// the lock and never see it.
+func acquireRigMutationLockMode(basedir string, nonblocking bool) (*rigLock, error) {
 	jobs, err := pendingTeardownJobs()
 	if err != nil {
-		_ = lock.Close()
 		return nil, err
 	}
 	for _, path := range jobs {
 		job, err := readTeardownJob(path)
 		if err == nil && resolvePath(job.Basedir) == resolvePath(basedir) {
-			_ = lock.Close()
 			return nil, fmt.Errorf("teardown already pending for %s; run `rig reap` to retry it", job.ID)
 		}
 	}
-	return lock, nil
+	return acquireRigLock(basedir, nonblocking)
 }
 
 func rigStateDir() (string, error) {

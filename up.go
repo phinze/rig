@@ -159,14 +159,15 @@ func activateRig(r rigInfo) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = lock.Close() }()
 	if !r.Parked.IsZero() {
 		m, err := readManifest(r.Path)
 		if err != nil {
+			_ = lock.Close()
 			return fmt.Errorf("reading manifest: %w", err)
 		}
 		m.Parked = time.Time{}
 		if err := writeManifest(r.Path, m); err != nil {
+			_ = lock.Close()
 			return err
 		}
 		fmt.Fprintf(os.Stderr, "rig: woke %s — %s\n", r.ID, r.Path)
@@ -179,8 +180,15 @@ func activateRig(r rigInfo) error {
 		// No live session (parked, or a switch-killed one): stand a bare one back
 		// up at the basedir so the selected agent can resume where you left off.
 		if err := tmuxNewSession(session, r.Path); err != nil {
+			_ = lock.Close()
 			return fmt.Errorf("tmux new-session: %w", err)
 		}
 	}
+	// Release before attaching: the mutation (manifest write, session standup)
+	// is complete, and attachOrReport blocks for the whole time you're in the
+	// session. Holding the lock across the attach was pinning it against every
+	// other rig command for that rig — including a radar Enter on the very rig
+	// you're sitting in, which is what wedged the radar with no output.
+	_ = lock.Close()
 	return attachOrReport(session)
 }
