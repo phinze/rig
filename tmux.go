@@ -36,6 +36,17 @@ func tmuxHasSession(name string) bool {
 	return exec.Command("tmux", "has-session", "-t", name).Run() == nil
 }
 
+// tmuxSocketPath returns the exact server socket used by the current tmux
+// environment. Teardown persists it before crossing into a systemd service,
+// whose environment may not carry TMUX or TMUX_TMPDIR.
+func tmuxSocketPath() string {
+	out, err := exec.Command("tmux", "display-message", "-p", "#{socket_path}").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // tmuxLastAttached maps each live tmux session name to the unix time it was
 // last attached (0 if never). It's how `rig switch` sorts most-recently-touched
 // first, the same session_last_attached signal session-wizard's `t` sorts on.
@@ -311,6 +322,41 @@ func tmuxKillSession(name string) error {
 		return nil
 	}
 	cmd := exec.Command("tmux", "kill-session", "-t", name)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	return cmd.Run()
+}
+
+// tmuxKillSessionAt addresses the server recorded before teardown left the
+// caller's pane. A missing socket means that whole server is gone, but a live
+// socket that cannot be queried is an error: cleanup must retain its durable
+// job instead of mistaking a connection failure for an absent session.
+func tmuxKillSessionAt(name, socket string) error {
+	if socket == "" {
+		// Backward compatibility for teardown jobs written before tmux_socket was
+		// recorded. Their retry still uses the caller's tmux environment.
+		return tmuxKillSession(name)
+	}
+	if _, err := os.Stat(socket); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("checking tmux socket %s: %w", socket, err)
+	}
+	out, err := exec.Command("tmux", "-S", socket, "list-sessions", "-F", "#{session_name}").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("listing sessions on %s: %w: %s", socket, err, strings.TrimSpace(string(out)))
+	}
+	found := false
+	for session := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
+		if session == name {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil
+	}
+	cmd := exec.Command("tmux", "-S", socket, "kill-session", "-t", "="+name)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	return cmd.Run()
 }

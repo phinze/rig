@@ -1,7 +1,9 @@
 package main
 
 import (
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -155,6 +157,79 @@ esac
 				t.Fatalf("teardown: %v", err)
 			}
 		})
+	}
+}
+
+func TestTeardownUsesRecordedTmuxSocket(t *testing.T) {
+	realTmux, err := exec.LookPath("tmux")
+	if err != nil {
+		t.Skip("tmux not installed")
+	}
+	root := t.TempDir()
+	socket := filepath.Join(root, "rig.sock")
+	session := "rig-recorded-socket"
+	if out, err := exec.Command(realTmux, "-S", socket, "-f", "/dev/null",
+		"new-session", "-d", "-s", session).CombinedOutput(); err != nil {
+		t.Fatalf("starting tmux server: %v\n%s", err, out)
+	}
+	t.Cleanup(func() { _ = exec.Command(realTmux, "-S", socket, "kill-server").Run() })
+
+	bin := filepath.Join(root, "bin")
+	if err := os.Mkdir(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wrapper := fmt.Sprintf("#!/bin/sh\nexec %s -S %s \"$@\"\n", shellQuote(realTmux), shellQuote(socket))
+	if err := os.WriteFile(filepath.Join(bin, "tmux"), []byte(wrapper), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	if got := tmuxSocketPath(); got != socket {
+		t.Fatalf("tmuxSocketPath() = %q, want %q", got, socket)
+	}
+
+	// Model the systemd worker: the caller's TMUX connection is gone and its
+	// default socket directory points somewhere unrelated. The recorded socket
+	// must still be sufficient to find and kill the exact session.
+	t.Setenv("TMUX", "")
+	t.Setenv("TMUX_TMPDIR", filepath.Join(root, "wrong-tmux-dir"))
+	if err := tmuxKillSessionAt(session, socket); err != nil {
+		t.Fatal(err)
+	}
+	if err := exec.Command(realTmux, "-S", socket, "has-session", "-t", "="+session).Run(); err == nil {
+		t.Errorf("tmux session %s survived socket-addressed teardown", session)
+	}
+}
+
+func TestTeardownRetainsTmuxConnectionErrors(t *testing.T) {
+	root := t.TempDir()
+	bin := filepath.Join(root, "bin")
+	if err := os.Mkdir(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "tmux"), []byte("#!/bin/sh\necho connection failed >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	socket := filepath.Join(root, "tmux.sock")
+	if err := os.WriteFile(socket, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+
+	err := tmuxKillSessionAt("rig-fail-closed", socket)
+	if err == nil || !strings.Contains(err.Error(), "connection failed") {
+		t.Fatalf("tmuxKillSessionAt error = %v, want connection failure", err)
+	}
+}
+
+func TestStopUserScopeAcceptsAlreadyGone(t *testing.T) {
+	bin := t.TempDir()
+	script := "#!/bin/sh\necho 'Failed to stop test.scope: Unit test.scope not loaded.' >&2\nexit 5\n"
+	if err := os.WriteFile(filepath.Join(bin, "systemctl"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	if err := stopUserScope("test.scope"); err != nil {
+		t.Fatalf("already-removed scope should be idempotent: %v", err)
 	}
 }
 

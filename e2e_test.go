@@ -348,6 +348,11 @@ exit 1
 	if out, err := downCmd.CombinedOutput(); err != nil {
 		t.Fatalf("rig down: %v\n%s", err, out)
 	}
+	waitFor(t, 10*time.Second, "rig down to finish", func() bool {
+		_, statErr := os.Stat(basedir)
+		sessionGone := exec.Command(realTmux, "-L", "rig-e2e", "has-session", "-t", "="+session).Run() != nil
+		return os.IsNotExist(statErr) && sessionGone
+	})
 
 	if _, err := os.Stat(basedir); err == nil {
 		t.Errorf("basedir still exists after down")
@@ -388,6 +393,8 @@ func TestReview(t *testing.T) {
 	env := append(os.Environ(),
 		"HOME="+home,
 		"PATH="+bin+":"+os.Getenv("PATH"),
+		"SHELL=/bin/sh",
+		"HISTFILE=/dev/null",
 		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.com",
 		"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@example.com",
 		"JJ_USER=Test", "JJ_EMAIL=test@example.com",
@@ -525,6 +532,10 @@ exit 1
 	if out, err := downCmd.CombinedOutput(); err != nil {
 		t.Fatalf("rig down --force: %v\n%s", err, out)
 	}
+	waitFor(t, 10*time.Second, "review rig down to finish", func() bool {
+		_, err := os.Stat(basedir)
+		return os.IsNotExist(err)
+	})
 	if _, err := os.Stat(basedir); err == nil {
 		t.Errorf("basedir still exists after down")
 	}
@@ -655,6 +666,10 @@ exit 1
 	if out, err := downCmd.CombinedOutput(); err != nil {
 		t.Fatalf("rig down --force: %v\n%s", err, out)
 	}
+	waitFor(t, 10*time.Second, "own-PR rig down to finish", func() bool {
+		_, err := os.Stat(basedir)
+		return os.IsNotExist(err)
+	})
 }
 
 // TestReap walks a rig through every reap gate: an active session keeps it,
@@ -683,6 +698,8 @@ func TestReap(t *testing.T) {
 	env := append(os.Environ(),
 		"HOME="+home,
 		"PATH="+bin+":"+os.Getenv("PATH"),
+		"SHELL=/bin/sh",
+		"HISTFILE=/dev/null",
 		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.com",
 		"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@example.com",
 		"JJ_USER=Test", "JJ_EMAIL=test@example.com",
@@ -914,6 +931,17 @@ func mustReadFile(t *testing.T, path string) []byte {
 		t.Fatalf("reading %s: %v", path, err)
 	}
 	return b
+}
+
+func waitFor(t *testing.T, timeout time.Duration, description string, ready func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for !ready() {
+		if !time.Now().Before(deadline) {
+			t.Fatalf("timed out waiting for %s", description)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 func mustMkdir(t *testing.T, dir string) {

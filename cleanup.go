@@ -29,6 +29,7 @@ type teardownJob struct {
 	Basedir       string              `json:"basedir"`
 	Quarantined   string              `json:"quarantined,omitempty"`
 	Session       string              `json:"session"`
+	TmuxSocket    string              `json:"tmux_socket,omitempty"`
 	Created       time.Time           `json:"created"`
 	ISOWorkspaces []isoCleanup        `json:"iso_workspaces,omitempty"`
 	Compose       []string            `json:"compose_projects,omitempty"`
@@ -209,6 +210,7 @@ func prepareTeardownJob(basedir string, m manifest) (*teardownJob, error) {
 		ID:           m.ID,
 		Basedir:      basedir,
 		Session:      tmuxSessionName(basedir),
+		TmuxSocket:   tmuxSocketPath(),
 		Created:      time.Now(),
 		ForgetGroups: map[string][]string{},
 		ScratchDirs:  claudeScratchDirs(basedir),
@@ -269,7 +271,7 @@ func executeTeardownJob(job *teardownJob) error {
 func executeTeardownJobForPlatform(job *teardownJob, platform string) error {
 	killFirst := platform == "linux"
 	if killFirst {
-		if err := tmuxKillSession(job.Session); err != nil {
+		if err := tmuxKillSessionAt(job.Session, job.TmuxSocket); err != nil {
 			return fmt.Errorf("tmux kill-session %s: %w", job.Session, err)
 		}
 		if err := stopRigProcessScopes(job.ID); err != nil {
@@ -343,7 +345,7 @@ func executeTeardownJobForPlatform(job *teardownJob, platform string) error {
 		return fmt.Errorf("removing teardown job: %w", err)
 	}
 	if !killFirst {
-		if err := tmuxKillSession(job.Session); err != nil {
+		if err := tmuxKillSessionAt(job.Session, job.TmuxSocket); err != nil {
 			// Everything else is already idempotently gone, but retain a retry
 			// record when tmux itself refused the final step.
 			if persistErr := writeTeardownJob(job); persistErr != nil {
@@ -512,14 +514,23 @@ func stopRigProcessScopes(rigID string) error {
 			return err
 		}
 	}
-	remaining, err := rigProcessScopes(rigID)
-	if err != nil {
-		return fmt.Errorf("verifying process scopes: %w", err)
+	// systemctl stop waits for the stop job, but cgroup removal can trail the
+	// unit transition briefly. Give procfs a bounded chance to converge before
+	// retaining the teardown job as genuinely incomplete.
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		remaining, err := rigProcessScopes(rigID)
+		if err != nil {
+			return fmt.Errorf("verifying process scopes: %w", err)
+		}
+		if len(remaining) == 0 {
+			return nil
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("process scopes still running for %s: %v", rigID, remaining)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
-	if len(remaining) > 0 {
-		return fmt.Errorf("process scopes still running for %s: %v", rigID, remaining)
-	}
-	return nil
 }
 
 type rigProcessScope struct {
@@ -574,6 +585,12 @@ func cleanupOrphanedRigRuntime(active, tearingDown map[string]bool, dryRun bool)
 func stopUserScope(scope string) error {
 	out, err := exec.Command("systemctl", "--user", "stop", scope).CombinedOutput()
 	if err != nil {
+		// Killing the tmux session and discovering its pane scopes race with
+		// systemd's asynchronous scope removal. A scope that vanished between
+		// those steps is already in the desired state.
+		if strings.Contains(string(out), "not loaded") {
+			return nil
+		}
 		return fmt.Errorf("stopping %s: %w: %s", scope, err, strings.TrimSpace(string(out)))
 	}
 	return nil
