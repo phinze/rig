@@ -17,15 +17,20 @@
       system:
       let
         pkgs = import nixpkgs { inherit system; };
-      in
-      {
-        packages.default = pkgs.buildGoModule {
+        rig = pkgs.buildGoModule {
           pname = "rig";
           version = "0.0.1";
           src = ./.;
-          vendorHash = "sha256-q9WvkLsvWGzFnN55LdjI6M4+Zvbm5kBNUxsrIwV2APQ=";
+          vendorHash = "sha256-U2fw/1tnRwmd9qzEcrMduZbbNU67NbDhG2Id5IHj5js=";
           meta.mainProgram = "rig";
         };
+      in
+      {
+        packages.default = rig;
+
+        # Keep the fixed-output dependency hash honest. `go test` resolves
+        # modules directly and cannot catch a stale buildGoModule vendorHash.
+        checks.default = rig;
 
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [

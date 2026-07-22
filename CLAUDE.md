@@ -39,13 +39,14 @@ sketch" and §"CLI shape".
 # direnv handles environment setup automatically on cd
 go build ./...
 go test ./...
+nix flake check
 ```
 
 This is a personal, single-author repo. Land work by committing straight to
 `main` — no PR ceremony, no review gate, `pr-time` is overkill here. The whole
-flow is: keep the tree green (`go build ./... && go test ./...`), draft the
-commit message and get a nod, `jj describe` the change, then advance the `main`
-bookmark to it.
+flow is: keep the tree green (`go build ./... && go test ./... && nix flake
+check`), draft the commit message and get a nod, `jj describe` the change, then
+advance the `main` bookmark to it.
 
 ## Conventions
 
