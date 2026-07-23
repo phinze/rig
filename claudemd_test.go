@@ -43,6 +43,12 @@ func TestWriteRigClaudeMD(t *testing.T) {
 	if !strings.Contains(got, "jj workspaces") {
 		t.Errorf("expected jj-not-git guidance in:\n%s", got)
 	}
+	// The home anchor: name this rig's dir and set the stay-inside-the-rig
+	// default, so a pasted prompt full of foreign absolute paths doesn't quietly
+	// pull the agent into another rig's workspace.
+	if !strings.Contains(got, dir) || !strings.Contains(got, "This rig is your home") {
+		t.Errorf("missing home anchor in:\n%s", got)
+	}
 }
 
 // A title-less rig (e.g. a GH issue with no resolved title yet) should still
