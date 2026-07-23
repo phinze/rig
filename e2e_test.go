@@ -156,8 +156,8 @@ func TestNew(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	agentArgs := string(mustReadFile(t, marker))
-	if !strings.Contains(agentArgs, "Starting unticketed work with this kickoff: "+kickoff) ||
-		!strings.Contains(agentArgs, "There is no issue to read yet") {
+	if !strings.Contains(agentArgs, "This is your kickoff for a new rig: "+kickoff) ||
+		!strings.Contains(agentArgs, "there's no ticket to read") {
 		t.Errorf("agent did not receive the ticketless kickoff prompt:\n%s", agentArgs)
 	}
 

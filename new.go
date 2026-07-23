@@ -73,7 +73,7 @@ func runNew(args []string) error {
 		repo:     repo.Name,
 		agent:    agent,
 		prompt: fmt.Sprintf(
-			"Starting unticketed work with this kickoff: %s. There is no issue to read yet. Help me investigate and decide what, if anything, should be ticketed.",
+			"This is your kickoff for a new rig: %s. That's the whole brief so far — there's no ticket to read. If it gives you enough to start some introductory analysis or sketch out next steps, go ahead and dig in, then show me what you find. If it's too thin to act on well, ask me to elaborate before diving in.",
 			kickoff,
 		),
 	}
