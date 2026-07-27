@@ -97,10 +97,8 @@ func TestNew(t *testing.T) {
 		"PATH="+bin+":"+os.Getenv("PATH"),
 		"SHELL=/bin/sh",
 		"HISTFILE=/dev/null",
-		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.com",
-		"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@example.com",
-		"JJ_USER=Test", "JJ_EMAIL=test@example.com",
 	)
+	env = append(env, hermeticGitVars()...)
 	mustRun(t, repoDir, env, "git", "init", "-q", "-b", "main")
 	mustRun(t, repoDir, env, "git", "commit", "-q", "--allow-empty", "-m", "init")
 	mustRun(t, repoDir, env, "jj", "git", "init", "--colocate")
@@ -200,11 +198,8 @@ func TestUpDown(t *testing.T) {
 	env := append(os.Environ(),
 		"HOME="+home,
 		"PATH="+bin+":"+os.Getenv("PATH"),
-		// Avoid relying on the host's git/jj identity config.
-		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.com",
-		"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@example.com",
-		"JJ_USER=Test", "JJ_EMAIL=test@example.com",
 	)
+	env = append(env, hermeticGitVars()...)
 
 	// Stand up a colocated git+jj repo with a single commit and a main
 	// bookmark, then alias trunk() to main so rig's start-rev fallback
@@ -395,10 +390,8 @@ func TestReview(t *testing.T) {
 		"PATH="+bin+":"+os.Getenv("PATH"),
 		"SHELL=/bin/sh",
 		"HISTFILE=/dev/null",
-		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.com",
-		"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@example.com",
-		"JJ_USER=Test", "JJ_EMAIL=test@example.com",
 	)
+	env = append(env, hermeticGitVars()...)
 
 	// Source repo with a main commit and a separate pr-branch commit. The
 	// branch standing in for the PR head must exist so `rig review` finds it.
@@ -569,10 +562,8 @@ func TestUpFromOwnPR(t *testing.T) {
 	env := append(os.Environ(),
 		"HOME="+home,
 		"PATH="+bin+":"+os.Getenv("PATH"),
-		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.com",
-		"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@example.com",
-		"JJ_USER=Test", "JJ_EMAIL=test@example.com",
 	)
+	env = append(env, hermeticGitVars()...)
 
 	// Source repo with a main commit and a Linear-style PR branch. The branch
 	// carries the issue id (mir-75), which is what the pickup keys identity off.
@@ -700,10 +691,8 @@ func TestReap(t *testing.T) {
 		"PATH="+bin+":"+os.Getenv("PATH"),
 		"SHELL=/bin/sh",
 		"HISTFILE=/dev/null",
-		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.com",
-		"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@example.com",
-		"JJ_USER=Test", "JJ_EMAIL=test@example.com",
 	)
+	env = append(env, hermeticGitVars()...)
 
 	mustRun(t, repoDir, env, "git", "init", "-q", "-b", "main")
 	mustRun(t, repoDir, env, "git", "commit", "-q", "--allow-empty", "-m", "init")
@@ -832,10 +821,8 @@ func TestParkWake(t *testing.T) {
 	env := append(os.Environ(),
 		"HOME="+home,
 		"PATH="+bin+":"+os.Getenv("PATH"),
-		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.com",
-		"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@example.com",
-		"JJ_USER=Test", "JJ_EMAIL=test@example.com",
 	)
+	env = append(env, hermeticGitVars()...)
 
 	mustRun(t, repoDir, env, "git", "init", "-q", "-b", "main")
 	mustRun(t, repoDir, env, "git", "commit", "-q", "--allow-empty", "-m", "init")

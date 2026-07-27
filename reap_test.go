@@ -16,12 +16,7 @@ func TestWorkspaceTeardownBlocker(t *testing.T) {
 	if _, err := exec.LookPath("jj"); err != nil {
 		t.Skip("jj not installed")
 	}
-	t.Setenv("JJ_USER", "Test")
-	t.Setenv("JJ_EMAIL", "test@example.com")
-	t.Setenv("GIT_AUTHOR_NAME", "Test")
-	t.Setenv("GIT_AUTHOR_EMAIL", "test@example.com")
-	t.Setenv("GIT_COMMITTER_NAME", "Test")
-	t.Setenv("GIT_COMMITTER_EMAIL", "test@example.com")
+	setHermeticGit(t)
 	fakeGh(t)
 
 	ws := t.TempDir()
@@ -141,12 +136,7 @@ func TestEvolvingWorkspaceTeardown(t *testing.T) {
 	if _, err := exec.LookPath("jj"); err != nil {
 		t.Skip("jj not installed")
 	}
-	t.Setenv("JJ_USER", "Test")
-	t.Setenv("JJ_EMAIL", "test@example.com")
-	t.Setenv("GIT_AUTHOR_NAME", "Test")
-	t.Setenv("GIT_AUTHOR_EMAIL", "test@example.com")
-	t.Setenv("GIT_COMMITTER_NAME", "Test")
-	t.Setenv("GIT_COMMITTER_EMAIL", "test@example.com")
+	setHermeticGit(t)
 	fakeGh(t)
 
 	ws := t.TempDir()

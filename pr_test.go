@@ -50,12 +50,7 @@ func TestJJPRBranch(t *testing.T) {
 		t.Skip("jj not installed")
 	}
 	// Hermetic identity so we don't depend on the host's jj/git config.
-	t.Setenv("JJ_USER", "Test")
-	t.Setenv("JJ_EMAIL", "test@example.com")
-	t.Setenv("GIT_AUTHOR_NAME", "Test")
-	t.Setenv("GIT_AUTHOR_EMAIL", "test@example.com")
-	t.Setenv("GIT_COMMITTER_NAME", "Test")
-	t.Setenv("GIT_COMMITTER_EMAIL", "test@example.com")
+	setHermeticGit(t)
 
 	repo := t.TempDir()
 	run := func(args ...string) {
@@ -235,12 +230,7 @@ exit 1
 
 func setTestVCSIdentity(t *testing.T) {
 	t.Helper()
-	t.Setenv("JJ_USER", "Test")
-	t.Setenv("JJ_EMAIL", "test@example.com")
-	t.Setenv("GIT_AUTHOR_NAME", "Test")
-	t.Setenv("GIT_AUTHOR_EMAIL", "test@example.com")
-	t.Setenv("GIT_COMMITTER_NAME", "Test")
-	t.Setenv("GIT_COMMITTER_EMAIL", "test@example.com")
+	setHermeticGit(t)
 }
 
 func initPRTestRepo(t *testing.T, repo, branch string) {
