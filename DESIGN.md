@@ -346,6 +346,124 @@ plain tmux sessions too, so it's the one board for all of it and
 session-wizard's job folds in as well. Not yet; first it has to earn the
 switcher seat on rigs alone.
 
+## Sweeping (`rig sweep`)
+
+Monday morning, and Friday left behind a dozen rigs that are each one
+command from their next step. Two of them merged over the weekend and want
+tearing down. Four are approved and green and want merging. One came back
+with change requests and wants you in the seat. The rest want nothing.
+Finding that out costs a `rig waiting`, a squint, and then a dozen commands
+typed by hand.
+
+The odd thing is that rig already *computes* every bit of that judgment; it
+just never acts on it. `waiting` folds a rig's PRs into a disposition and
+prints a table with a next-step column you retype. `radar` renders the same
+dispositions live but its only verb is Enter, meaning "go there" — and half
+of Monday's pile doesn't want you to go anywhere, it wants one command run
+against it. `reap` does act, but only at the fully-resolved-and-cold end
+(merged, WIP-free, 24h idle) and only ever to tear down. A ready-to-merge
+PR is precisely a rig reap must refuse.
+
+So the gap isn't a view and it isn't a policy. It's the actionable middle:
+a pass over the rig set that proposes each rig's next step and then carries
+out the ones you agree with. That's a third interaction model, distinct from
+a glanceable board and from an unattended cron.
+
+The shape is plan-then-stream, the same trick `down` already plays when it
+pops the radar to pick a landing spot: a Bubble Tea board of proposed
+actions where you toggle what to apply, then the TUI releases the terminal
+and the real `gh` and teardown output streams underneath it. The first cut
+was a pure stream that asked y/n per rig, and smoke-testing killed it — with
+six approved PRs and one teardown you scrolled past six things you couldn't
+act on to reach the single prompt that mattered, and the hint explaining why
+the six did nothing printed *after* it. Choosing across a dozen rigs at once
+is a board problem. Watching the chosen work happen is a stream problem.
+Doing both in one modality made each worse. So: board to decide, stream to
+execute, and `-n` to plan without either.
+
+The ladder is `parkedDisposition` generalized past parked rigs, which is
+most of why this was cheap to build: same vocabulary, so sweep, waiting, and
+the radar can't disagree about what a rig's state *is*, only about what to
+do about it. Merged and clean tears down. Approved with CI clear offers the
+merge. Changes requested is reported with its wake command rather than
+executed, because it wants a human and a batch pass is the wrong shape for
+that. A review rig ignores its disposition entirely and asks the teardown
+gate, since "you posted a review" is its terminal condition and the author's
+merge state says nothing about it.
+
+Two edges earned their special cases. Empty `Checks` means the repo has no
+CI configured, not CI that hasn't reported, so it counts as clear. And a rig
+with no PR looks on disk exactly like abandoned scaffolding whether or not
+you're sitting in it — the live tmux session is the only thing that tells
+them apart, and getting it wrong is the whole difference between a useful
+pass and an annoying one.
+
+Merging is the one genuinely new capability here, and the only irreversible
+step. Teardown is safe to batch precisely because the lifecycle invariant
+holds: `down` can't destroy anything `up` can't rebuild, so a wrong check
+costs a rebuild, not work. Merge has no such property, and the board encodes
+that asymmetry in its defaults: teardown rows start checked, merge rows
+start unchecked, and `a` (select all) is defined to touch only teardowns. A
+flag would have been the obvious guard, but a checkbox you must deliberately
+tick is a *better* confirmation than a flag plus a y/n, and it doesn't make
+you remember an incantation every Monday. `gh pr merge` is called without
+`--delete-branch` on purpose: teardown accounts for merged work by immutable
+head OID and copes fine with a branch GitHub already removed, but deleting
+the *local* branch under a live jj workspace is a different and much worse
+problem.
+
+The cascade is what keeps it one sitting instead of two. Merging is usually
+the only thing standing between a rig and teardown, so a rig whose PRs just
+landed drops the fetch cache (trunk moved under every workspace, and the gate
+would otherwise ask its question against a trunk predating the very merge
+it's reacting to), re-asks the gate, and tears down right there in the
+stream. The first cut instead re-planned and put the board back up, which
+made you approve the same rig twice — you already said "land this", and
+teardown is the reversible half. The gate keeps the final say either way: the
+first real run merged three PRs and `chase-a-flake` still stayed, because
+`nix-config` had working-copy changes. Teardown itself goes through
+`rigTeardownBlocker` and `teardownRig` unchanged, re-checked under the rig
+lock the way reap does. The plan is built and checked off *outside* the lock,
+deliberately, since holding it while you read the board would block every
+other rig command.
+
+The scan runs *inside* the TUI rather than before it. It costs a gh
+round-trip per branch plus a jj fetch and teardown check per candidate, which
+on a real Monday is several seconds; doing it first and opening the board
+afterwards meant staring at a dead terminal wondering if it had hung. So the
+board goes up immediately in a loading state and the scan reports its phases
+into it — reading workspaces, asking GitHub about N rigs, then checking each
+teardown candidate by name. Same render-now-fill-in-later posture the radar
+takes, for the same reason. Keys other than the exits are inert while it
+loads, since a keystroke that half-acts on an empty board is worse than one
+that does nothing.
+
+Every action needs a deliberate check, which means a sweep with nobody to
+answer can only ever be a plan. A non-tty invocation prints the same report
+and stops rather than refusing outright, so the command stays safe to pipe or
+drop in a cron without a surprise teardown.
+
+Execution fails fast, which the first real run taught us. The merge method
+was guessed as squash; `mirendev/runtime` forbids squash merges outright, so
+all six queued merges failed identically and the one line that mattered was
+buried under five repetitions of itself. An error during the stream is nearly
+always a fact about the setup rather than about one PR, so the first one stops
+the pass with everything after it untouched. The default is now a merge
+commit, which is what we actually use. The single exception to fail-fast is a
+rig whose lock is held: that's another rig command mid-flight, not a broken
+sweep, so it skips and the pass carries on.
+
+A rig spanning repos carries one PR per repo (plus anything `rig track`
+recorded), and they land together or not at all — one checkbox, every PR. The
+corollary is that a rig whose PRs *disagree* about review, one approved and
+one still out, never reaches the "approved" disposition and is deliberately
+left alone. Landing half a cross-repo change is worse than landing none of it.
+
+The horizon is folding this back into the radar: once the ladder exists as a
+function, a radar row already knows its own next step, and the board can
+grow per-row verbs that call into the same policy instead of duplicating it.
+That's the right order — the pass earns the policy, the board borrows it.
+
 ## Open questions
 
 - ~~**Language.**~~ Answered: Go. Fish was at its ceiling for this shape
@@ -392,7 +510,10 @@ left is growth on the built base:
 
 1. `rig radar` (above) — the live-TUI switcher, first replacing ilmari on
    rigs, later absorbing plain tmux sessions so it becomes the one board.
-2. Sand off the open questions still open (sandbox primitive, multi-tracker
+2. Fold `rig sweep`'s ladder back into the radar as per-row verbs, so the
+   board can advance the row you're looking at instead of only switching
+   to it.
+3. Sand off the open questions still open (sandbox primitive, multi-tracker
    shim, picker source mixing) as real use pushes on them.
 
 ## Related

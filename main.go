@@ -43,6 +43,8 @@ func main() {
 		err = runWake(args)
 	case "waiting":
 		err = runWaiting(args)
+	case "sweep":
+		err = runSweep(args)
 	case "down":
 		err = runDown(args)
 	case "reap":
@@ -130,6 +132,14 @@ usage:
   rig wake [query|PR-URL]   resume a rig, waking it first when parked
   rig waiting               review status of parked rigs, most-actionable first
                             (which came back with changes, which are mergeable)
+  rig sweep [-n] [--merge-method merge|squash|rebase]
+                            the Monday pass: a board of every rig's proposed
+                            next step, checkable, then it streams the work.
+                            Merged rigs are pre-checked to tear down; approved
+                            and green PRs are offered to merge but start
+                            unchecked (merge commits by default). Stops at the
+                            first failure. -n plans without touching anything;
+                            outside a terminal it prints the plan and stops
   rig down [--force]        break the current rig down
                             (refuses if it has WIP or an unmerged PR; --force
                             overrides)

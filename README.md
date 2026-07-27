@@ -12,6 +12,13 @@ ticket yet. `rig review <pr-url>` does it for reviewing a pull request.
 `rig add owner/repo` brings more repos under the same rig, `rig ls` / `rig cd`
 move between rigs in flight, and `rig down` breaks it all back down.
 
+`rig sweep` is the Monday-morning pass. It works out every rig's next step and
+draws them as a board you check off: merged work pre-checked to tear down,
+approved-and-green PRs offered to merge but left unchecked, and the rigs that
+came back wanting a human listed with the command to wake them. Enter drops out
+of the TUI and streams the actual work underneath it. `-n` plans without
+touching anything.
+
 The tmux session is a Recto carousel. Its main window holds the task-level
 agent beside the currently relevant repo's diff; every other repo waits as a
 full-screen Recto tab with its viewer state intact. `rig recto cloud` pulls a

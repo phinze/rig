@@ -18,6 +18,14 @@ work in. `rig new` starts the same shape from a free-form kickoff when there is
 no ticket yet. `rig add owner/repo` brings additional repos under the same rig.
 `rig down` breaks it back down.
 
+`rig sweep` is the pass over every rig that proposes each one's next step. It's
+plan-then-stream: a Bubble Tea board of checkable actions (teardowns pre-checked,
+merges deliberately not), then the TUI exits and the real gh and teardown output
+streams. It reuses `parkedDisposition` for state and
+`rigTeardownBlocker`/`teardownRig` for teardown, so it can't disagree with
+`waiting`, `radar`, or `reap` about what a rig's state is — only about what to do
+about it. See DESIGN.md §"Sweeping".
+
 The tmux layout is a Recto carousel: `main/<repo>` holds the task-level agent
 and the active repo's persistent Recto, while the other repos wait as
 full-screen Recto windows. `rig recto <repo> [recto args...]` promotes one and

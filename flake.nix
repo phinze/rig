@@ -21,7 +21,7 @@
           pname = "rig";
           version = "0.0.1";
           src = ./.;
-          vendorHash = "sha256-U2fw/1tnRwmd9qzEcrMduZbbNU67NbDhG2Id5IHj5js=";
+          vendorHash = "sha256-i8UEIG6MuO3miZs4LikT9C7CA33wX0bqPd6ynjoAYjc=";
           meta.mainProgram = "rig";
         };
       in
