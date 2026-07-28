@@ -283,6 +283,32 @@ manifest, and teardown knowledge; nix-config owns scheduling (the
 systemd timer invokes `rig reap` and keeps the legacy phase only until
 old-layout workspaces age out).
 
+Teardown jobs are durable so a crash can't lose the inventory, but durability
+turned out to have a sharp edge: a job that outlives its rig is aimed at a
+*name*, not at the thing it was made for. Session name, iso session, jj
+workspace names and agent scratch dirs are all `<id>`- or basedir-shaped, and
+`rig up` on the same ticket rebuilds every one of them identically. So a job
+stuck since 14:34 replayed its forget step at 18:07 and deregistered the jj
+workspace of a rig created at 17:31 — which then sat orphaned for five days,
+invisible to a gate that could only report jj's "doesn't have a working-copy
+commit" and fail closed.
+
+Two things keep that from recurring. The job records the manifest's `created`
+stamp, and a retry that finds a *different* stamp at its basedir knows it's
+been superseded: it abandons every rig-shaped step and clears only the trash
+it made. And the forget step, the irreversible one, now records progress per
+source repo as it goes, so it is never replayed at all.
+
+What kept the job alive long enough to do the damage was the other half:
+`RemoveAll` on the quarantined copy failed permanently, because a container
+had written root-owned build output into a root-owned directory and unlinking
+a file needs write access to its *parent*. Retaining the job there is correct
+and stays — the bytes are real and somebody has to collect them — but the
+error now names the cause, since retrying a permission failure achieves
+nothing on its own and the operator has no way to guess that sudo is the
+missing ingredient. The retention was never the bug; replaying the *other*
+steps was.
+
 Deferred to a future pass: being smart about the claude sessions
 running inside a rig. Killing the rig's tmux session takes its pane
 processes with it, but the legacy nightly's phase 3 (SIGTERM idle

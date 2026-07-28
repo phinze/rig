@@ -24,18 +24,43 @@ const teardownJobVersion = 1
 // can be retried after the active path has been quarantined, and a process dying
 // halfway through teardown does not erase the only inventory of what remains.
 type teardownJob struct {
-	Version       int                 `json:"version"`
-	ID            string              `json:"id"`
-	Basedir       string              `json:"basedir"`
-	Quarantined   string              `json:"quarantined,omitempty"`
-	Session       string              `json:"session"`
-	TmuxSocket    string              `json:"tmux_socket,omitempty"`
-	Created       time.Time           `json:"created"`
+	Version     int       `json:"version"`
+	ID          string    `json:"id"`
+	Basedir     string    `json:"basedir"`
+	Quarantined string    `json:"quarantined,omitempty"`
+	Session     string    `json:"session"`
+	TmuxSocket  string    `json:"tmux_socket,omitempty"`
+	Created     time.Time `json:"created"`
+	// RigCreated is the manifest timestamp of the rig this job was made for. It
+	// exists because everything else here is derived from the rig's *identity* —
+	// the tmux session name, the iso session, the jj workspace names, the agent
+	// scratch dirs are all `<id>`- or basedir-shaped — and a rebuilt rig reuses
+	// every one of them. A retried job with no way to tell the two apart will
+	// happily dismantle the replacement, which is not hypothetical: a job stuck
+	// since 14:34 forgot the jj workspace of a fresh rig created at 17:31.
+	RigCreated    time.Time           `json:"rig_created,omitzero"`
 	ISOWorkspaces []isoCleanup        `json:"iso_workspaces,omitempty"`
 	Compose       []string            `json:"compose_projects,omitempty"`
 	ForgetGroups  map[string][]string `json:"forget_groups,omitempty"`
 	ScratchDirs   []string            `json:"scratch_dirs,omitempty"`
 	path          string
+}
+
+// supersededByNewRig reports whether the basedir this job targets is now
+// occupied by a different rig. Compares the manifest's creation stamp against
+// the one recorded when the job was made: same rig, same stamp. A basedir that's
+// gone (the ordinary case — we quarantined it) is not superseded, and neither is
+// a job written before this field existed, which reads as zero and can only fall
+// back to the old, trusting behaviour.
+func (job *teardownJob) supersededByNewRig() bool {
+	if job.RigCreated.IsZero() {
+		return false
+	}
+	m, err := readManifest(job.Basedir)
+	if err != nil {
+		return false // no manifest to contradict us
+	}
+	return !m.Created.IsZero() && !m.Created.Equal(job.RigCreated)
 }
 
 type isoCleanup struct {
@@ -221,6 +246,7 @@ func prepareTeardownJob(basedir string, m manifest) (*teardownJob, error) {
 		Session:      tmuxSessionName(basedir),
 		TmuxSocket:   tmuxSocketPath(),
 		Created:      time.Now(),
+		RigCreated:   m.Created,
 		ForgetGroups: map[string][]string{},
 		ScratchDirs:  claudeScratchDirs(basedir),
 	}
@@ -278,6 +304,17 @@ func executeTeardownJob(job *teardownJob) error {
 // session would SIGHUP this very process, so it finishes cleanup and clears the
 // tombstone before killing the session last.
 func executeTeardownJobForPlatform(job *teardownJob, platform string) error {
+	// Before anything: has someone rebuilt this rig underneath us? Every
+	// destructive step below is aimed at a name the replacement now answers to,
+	// so a stale job must abandon them rather than aim them at the wrong rig.
+	// The only work still legitimately ours is the trash we already made.
+	if job.supersededByNewRig() {
+		fmt.Fprintf(os.Stderr,
+			"rig: teardown %s superseded — a newer rig now occupies %s; cleaning only its quarantined copy\n",
+			job.ID, job.Basedir)
+		return finishQuarantine(job)
+	}
+
 	killFirst := platform == "linux"
 	if killFirst {
 		if err := tmuxKillSessionAt(job.Session, job.TmuxSocket); err != nil {
@@ -314,19 +351,26 @@ func executeTeardownJobForPlatform(job *teardownJob, platform string) error {
 		}
 	}
 
-	for source, names := range job.ForgetGroups {
+	// Forgetting is recorded as it happens, source by source, so a job that dies
+	// later never replays it. Without that the step is only "idempotent" in the
+	// sense that running it twice on the *same* workspace is harmless — which
+	// stops being true the moment the name belongs to something else.
+	for _, source := range sortedKeys(job.ForgetGroups) {
 		var registered []string
-		for _, name := range names {
+		for _, name := range job.ForgetGroups[source] {
 			if workspaceRegistered(source, name) {
 				registered = append(registered, name)
 			}
 		}
-		if len(registered) == 0 {
-			continue
+		if len(registered) > 0 {
+			fmt.Fprintf(os.Stderr, "rig: jj workspace forget %v (from %s)\n", registered, source)
+			if err := jjWorkspaceForget(source, registered); err != nil {
+				return fmt.Errorf("jj workspace forget: %w", err)
+			}
 		}
-		fmt.Fprintf(os.Stderr, "rig: jj workspace forget %v (from %s)\n", registered, source)
-		if err := jjWorkspaceForget(source, registered); err != nil {
-			return fmt.Errorf("jj workspace forget: %w", err)
+		delete(job.ForgetGroups, source)
+		if err := writeTeardownJob(job); err != nil {
+			return fmt.Errorf("recording forgotten workspaces: %w", err)
 		}
 	}
 
@@ -344,11 +388,8 @@ func executeTeardownJobForPlatform(job *teardownJob, platform string) error {
 			return err
 		}
 	}
-	if job.Quarantined != "" {
-		if err := os.RemoveAll(job.Quarantined); err != nil {
-			return fmt.Errorf("removing quarantined basedir %s: %w", job.Quarantined, err)
-		}
-		_ = os.Remove(filepath.Dir(job.Quarantined))
+	if err := removeQuarantined(job); err != nil {
+		return err
 	}
 	if err := os.Remove(job.path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("removing teardown job: %w", err)
@@ -362,6 +403,55 @@ func executeTeardownJobForPlatform(job *teardownJob, platform string) error {
 			}
 			return fmt.Errorf("tmux kill-session %s: %w", job.Session, err)
 		}
+	}
+	return nil
+}
+
+// sortedKeys returns a map's keys in a stable order, so a job that dies partway
+// through resumes in the same order it started.
+func sortedKeys(m map[string][]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// removeQuarantined deletes the trash copy of a torn-down rig. Failure keeps
+// the job for a later retry, which is deliberate: the bytes are still there and
+// somebody has to collect them.
+//
+// The common cause is worth naming in the error, because it isn't obvious and
+// it isn't fixable by retrying. A container that ran as root leaves root-owned
+// build output inside a root-owned directory, and unlinking a file needs write
+// access to its *parent*, which the rig's own user doesn't have. Retrying that
+// forever gets nowhere; the operator needs to know to reach for sudo.
+func removeQuarantined(job *teardownJob) error {
+	if job.Quarantined == "" {
+		return nil
+	}
+	if err := os.RemoveAll(job.Quarantined); err != nil {
+		if os.IsPermission(err) {
+			return fmt.Errorf("removing quarantined basedir %s: %w\n"+
+				"      it holds files this user cannot unlink, usually root-owned container output;\n"+
+				"      clear it with elevated permissions and rerun `rig reap`", job.Quarantined, err)
+		}
+		return fmt.Errorf("removing quarantined basedir %s: %w", job.Quarantined, err)
+	}
+	_ = os.Remove(filepath.Dir(job.Quarantined))
+	return nil
+}
+
+// finishQuarantine is the tail a superseded job runs instead of the real
+// teardown: drop the trash it created, then retire the job. Everything else it
+// would have done now belongs to a rig it knows nothing about.
+func finishQuarantine(job *teardownJob) error {
+	if err := removeQuarantined(job); err != nil {
+		return err
+	}
+	if err := os.Remove(job.path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("removing teardown job: %w", err)
 	}
 	return nil
 }
