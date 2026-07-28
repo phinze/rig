@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -125,16 +126,54 @@ type sweepPlan struct {
 	detail string
 	merges []rigPR  // every PR this rig would land
 	held   []string // PRs that kept themselves out, e.g. "#3 CI failing"
+	repos  int      // how many repos the rig spans
+	dirty  []string // repos holding local work, for the WIP marker
+	// collect is whether a teardown row should arrive pre-checked. See
+	// sweepCollectable — it is not the same question as "is this safe", which
+	// the gate already answered by producing an actionDown at all.
+	collect bool
+}
+
+// sweepStaleAfter is how long a rig with nothing to show for itself must sit
+// untouched before its teardown arrives pre-checked. It's reap's idle window,
+// on purpose: reap already had to decide when a rig has stopped mattering, and
+// two different answers to that would be worse than either.
+const sweepStaleAfter = 24 * time.Hour
+
+// sweepCollectable decides whether a teardown starts checked. A rig that
+// demonstrably shipped is a formality — the work is on trunk, tearing down is
+// bookkeeping — so it's checked as soon as it's clean. A rig with nothing to
+// show for itself is the opposite: a clean tree there means nothing came of it
+// *yet*, and every rig carries a live agent conversation whose only anchor is
+// the basedir path. Discarding that an hour after a kickoff is hostile, so it
+// waits for the staleness window.
+//
+// Either way the row is visible and one keystroke from checked; this only picks
+// the default. An agent mid-turn is never pre-checked, whatever else is true.
+func sweepCollectable(shipped bool, agent string, lastActive *time.Time, now time.Time) bool {
+	if agent == "working" {
+		return false
+	}
+	if shipped {
+		return true
+	}
+	// No recorded activity at all reads as cold, matching reap's treatment of a
+	// rig with no agent session to date.
+	return lastActive == nil || now.Sub(*lastActive) > sweepStaleAfter
 }
 
 // sweepInput is everything the ladder decides from, pulled out as plain data so
 // the policy is testable without a filesystem, a jj repo, or GitHub.
 type sweepInput struct {
-	Disp        string // parkedDisposition's vocabulary, computed over all rigs
-	PRs         []rigPR
-	Review      bool   // manifest kind == review
-	Blocker     string // rigTeardownBlocker's verdict, "" when clean
-	SessionLive bool
+	Disp    string // parkedDisposition's vocabulary, computed over all rigs
+	PRs     []rigPR
+	Review  bool   // manifest kind == review
+	Blocker string // rigTeardownBlocker's verdict, "" when clean
+	// Shipped means this rig was seen to have a PR at some point, live or
+	// recorded in the manifest. It's what separates a rig that finished and had
+	// its branch deleted from one that never produced anything — both of which
+	// otherwise present as "no PR, clean tree".
+	Shipped bool
 }
 
 // sweepDecision is the ladder: disposition in, next step out. It deliberately
@@ -155,7 +194,17 @@ func sweepDecision(in sweepInput) (action, detail string) {
 	switch in.Disp {
 	case "changes requested":
 		return actionWake, "review came back with changes"
+	}
 
+	// Red CI is your move, not a reviewer's, so it outranks everything below and
+	// leaves the quiet section entirely. parkedDisposition can't see this — it
+	// folds review state only — and burying "CI failing" under "awaiting review"
+	// was the single most misleading thing the board did.
+	if red := failingPRs(in.PRs); len(red) > 0 {
+		return actionWake, "CI failing on " + strings.Join(red, ", ")
+	}
+
+	switch in.Disp {
 	case "merged":
 		if in.Blocker != "" {
 			return actionNone, in.Blocker
@@ -175,22 +224,46 @@ func sweepDecision(in sweepInput) (action, detail string) {
 		return actionMerge, mergeDetail(ready, held)
 
 	case "no PR":
-		// A rig with no PR is either abandoned scaffolding or work you haven't
-		// pushed yet. The teardown gate tells those apart on disk, but it can't
-		// see the one case that matters most: a rig you are sitting in right now,
-		// which has a live session and no reason to be swept. Leaving it alone is
-		// the whole difference between a useful pass and an annoying one.
-		if in.SessionLive {
-			return actionNone, "in flight"
-		}
+		// "No PR" covers more ground than it sounds like: work you haven't pushed
+		// yet, a repo that lands straight on trunk and never has one, and — most
+		// often — a rig whose PR merged and whose branch GitHub then deleted, so
+		// there's nothing left to look up. Only the teardown gate can tell those
+		// apart, so always ask it.
+		//
+		// An earlier cut short-circuited on a live tmux session here, meaning to
+		// protect the rig you're sitting in. Nearly every rig has a live session,
+		// so all it really did was hide finished work: three merged, spotless rigs
+		// sat in the quiet list as "in flight" and could never be offered. Whether
+		// you're mid-thought is now a checkbox default (see newSweepModel), not a
+		// reason to withhold the row.
 		if in.Blocker != "" {
 			return actionNone, in.Blocker
 		}
-		return actionDown, "no PR and nothing to lose"
+		if in.Shipped {
+			return actionDown, "shipped, nothing outstanding"
+		}
+		// Not "nothing happened here" — we genuinely don't know. A rig that
+		// merged before the manifest started recording PR numbers lands here too,
+		// and claiming its work never existed would be a lie the staleness
+		// default is already covering for.
+		return actionDown, "no PR on record"
 
 	default: // waiting
 		return actionNone, "awaiting review"
 	}
+}
+
+// failingPRs names the rig's open PRs whose CI is red. Pending checks aren't
+// here: those resolve themselves, and nagging about them would put half the
+// board in the needs-you pile every time someone pushed.
+func failingPRs(prs []rigPR) []string {
+	var out []string
+	for _, pr := range prs {
+		if pr.State == "OPEN" && pr.Checks == "failing" {
+			out = append(out, shortRepo(pr.Repo)+"#"+strconv.Itoa(pr.Number))
+		}
+	}
+	return out
 }
 
 // mergeablePRs splits an approved rig's PRs into the ones that could merge right
@@ -227,6 +300,85 @@ func mergeDetail(ready []rigPR, held []string) string {
 		detail += " (holding " + strings.Join(held, ", ") + ")"
 	}
 	return detail
+}
+
+// observedPRNumbers maps the rig's live PRs back onto the repo subdirs they
+// belong to, which is the shape the manifest records. Only repos the manifest
+// doesn't already know about are returned, so a settled rig produces no write.
+func observedPRNumbers(m manifest, prs []rigPR) map[string]int {
+	var seen map[string]int
+	for sub, nameWithOwner := range m.Repos {
+		if m.PRs[sub] != 0 {
+			continue
+		}
+		for _, pr := range prs {
+			if pr.Number > 0 && strings.EqualFold(pr.Repo, nameWithOwner) {
+				if seen == nil {
+					seen = map[string]int{}
+				}
+				seen[sub] = pr.Number
+				break
+			}
+		}
+	}
+	return seen
+}
+
+// rigDirtyRepos names the repos in a rig holding work that isn't accounted for
+// yet — uncommitted changes, or commits that are neither on trunk nor covered
+// by one of the rig's PR heads. It's what tells a rig you've genuinely started
+// from one that's merely sitting there, which the disposition alone can't:
+// "no PR" reads identically for both.
+//
+// Subtracting the PR heads is what makes the marker mean something. Without it
+// every open PR's own commits read as WIP, so an approved, fully-pushed rig
+// wore the same "WIP" as one holding unpushed work — the exact distinction the
+// marker exists to draw. The same immutable-head-OID trick authoringTeardownBlocker
+// uses, so the two agree about what counts as accounted for.
+//
+// Deliberately local-only: no git fetch, no gh, just jj revsets against whatever
+// trunk() already resolves to, so it's cheap enough to run for every rig on the
+// board rather than only teardown candidates. A stale trunk can at worst call
+// freshly-merged work dirty, which errs toward telling you something is there.
+func rigDirtyRepos(basedir string, m manifest, prs []rigPR) []string {
+	subdirs := make([]string, 0, len(m.Repos))
+	for sub := range m.Repos {
+		subdirs = append(subdirs, sub)
+	}
+	sort.Strings(subdirs)
+
+	var dirty []string
+	for _, sub := range subdirs {
+		ws := filepath.Join(basedir, sub)
+		if _, err := os.Stat(filepath.Join(ws, ".jj")); err != nil {
+			continue
+		}
+		// One question covers both halves. Uncommitted edits live in @ itself, so
+		// a dirty working copy shows up as a non-empty off-trunk commit here and
+		// needs no separate check — and asking separately actively misleads,
+		// because a workspace parked exactly on its pushed PR head has a
+		// perfectly non-empty @ and nothing unaccounted for at all.
+		clauses := []string{"::@ & ~empty() & ~::trunk()"}
+		for _, pr := range prs {
+			if pr.HeadOID == "" || !strings.EqualFold(pr.Repo, m.Repos[sub]) {
+				continue
+			}
+			if revExists(ws, pr.HeadOID) {
+				clauses = append(clauses, fmt.Sprintf("~::%q", pr.HeadOID))
+			}
+		}
+		beyond, err := jjRevsetEmpty(ws, strings.Join(clauses, " & "))
+		// A workspace jj can't read is a state worth naming, not one to silently
+		// call clean — mir-822 sat broken for days looking tidy.
+		if err != nil {
+			dirty = append(dirty, sub+"?")
+			continue
+		}
+		if !beyond {
+			dirty = append(dirty, sub)
+		}
+	}
+	return dirty
 }
 
 // sweepScan builds the whole picture: every rig, its live PRs, and the step it
@@ -268,6 +420,7 @@ func planSweep(rigs []rigInfo, statuses []rigStatus, fetched map[string]bool, sa
 		byPath[r.Path] = r
 	}
 
+	now := time.Now()
 	plans := make([]sweepPlan, 0, len(statuses))
 	for _, s := range statuses {
 		r, ok := byPath[s.Path]
@@ -279,22 +432,46 @@ func planSweep(rigs []rigInfo, statuses []rigStatus, fetched map[string]bool, sa
 			plans = append(plans, sweepPlan{rig: r, status: s, detail: fmt.Sprintf("reading manifest: %v", err)})
 			continue
 		}
+		// Note any PR we can see right now, so this rig stays recognisable as one
+		// that shipped after GitHub deletes the branch. Best-effort: a failure
+		// here costs nothing but a repeat next sweep, and must never fail a scan.
+		if seen := observedPRNumbers(m, s.PRs); len(seen) > 0 {
+			if _, err := recordObservedPRs(s.Path, seen); err != nil {
+				fmt.Fprintf(os.Stderr, "rig: warning: recording PRs for %s: %v\n", s.ID, err)
+			} else {
+				for sub, n := range seen {
+					if m.PRs == nil {
+						m.PRs = map[string]int{}
+					}
+					if m.PRs[sub] == 0 {
+						m.PRs[sub] = n
+					}
+				}
+			}
+		}
+
 		in := sweepInput{
-			Disp:        parkedDisposition(s.PRs),
-			PRs:         s.PRs,
-			Review:      m.isReview(),
-			SessionLive: s.SessionLive,
+			Disp:    parkedDisposition(s.PRs),
+			PRs:     s.PRs,
+			Review:  m.isReview(),
+			Shipped: len(m.PRs) > 0 || len(s.PRs) > 0,
 		}
 		// The teardown gate is the expensive half — a jj fetch plus a gh call per
-		// branch — so it's both consulted lazily and the thing worth narrating.
-		if in.Review || in.Disp == "merged" || (in.Disp == "no PR" && !in.SessionLive) {
+		// branch — so it's consulted only where the answer can change the verdict,
+		// and it's the thing worth narrating while you wait.
+		if in.Review || in.Disp == "merged" || in.Disp == "no PR" {
 			if say != nil {
 				say("checking " + s.ID)
 			}
 			in.Blocker = rigTeardownBlocker(s.Path, fetched)
 		}
 		action, detail := sweepDecision(in)
-		p := sweepPlan{rig: r, status: s, action: action, detail: detail}
+		p := sweepPlan{
+			rig: r, status: s, action: action, detail: detail,
+			repos:   len(m.Repos),
+			dirty:   rigDirtyRepos(s.Path, m, s.PRs),
+			collect: sweepCollectable(in.Shipped, s.Agent, s.LastActive, now),
+		}
 		if action == actionMerge {
 			p.merges, p.held = mergeablePRs(s.PRs)
 		}
@@ -440,7 +617,8 @@ func reportSweep(plans []sweepPlan) {
 		case actionWake:
 			next = "rig wake " + p.status.ID
 		}
-		fmt.Fprintf(w, "  %s\t%s\t%s\n", p.status.ID, p.detail, next)
+		fmt.Fprintf(w, "  %s\t%s\t%s\t%s\t%s\n",
+			p.status.ID, sweepRefs(p), p.detail, sweepMeta(p), next)
 	}
 	_ = w.Flush()
 }
@@ -513,7 +691,9 @@ type (
 // newSweepModel splits the plans into what you can act on and what you can only
 // look at. Merge rows start unchecked: it's the one irreversible action in the
 // pass, so it takes a deliberate keystroke, and "select all" is defined to leave
-// them alone. Teardowns start checked — a wrong one costs a `rig up` rebuild.
+// them alone. Teardown defaults come from sweepCollectable, which is stricter
+// than "is this safe" — a rig can be perfectly safe to tear down and still be
+// one you'd be annoyed to lose.
 func newSweepModel(plans []sweepPlan, dryRun bool) sweepModel {
 	m := sweepModel{dryRun: dryRun}
 	m.spin = spinner.New(spinner.WithSpinner(spinner.Dot),
@@ -532,7 +712,7 @@ func (m *sweepModel) load(plans []sweepPlan) {
 		case actionMerge:
 			m.items = append(m.items, sweepItem{plan: p, selected: false})
 		case actionDown:
-			m.items = append(m.items, sweepItem{plan: p, selected: true})
+			m.items = append(m.items, sweepItem{plan: p, selected: p.collect})
 		default:
 			m.inert = append(m.inert, p)
 		}
@@ -674,10 +854,14 @@ func (m sweepModel) View() string {
 	}
 	wID = min(wID, sweepMaxIDWidth)
 
-	// Same for the PR refs, so "rfd#154" and "runtime#971" start in one place.
+	// Same for the PR refs, so "rfd#154" and "runtime#971" start in one place —
+	// across every group, since the quiet rows carry refs now too.
 	wRef := 0
 	for _, it := range m.items {
 		wRef = max(wRef, lipgloss.Width(sweepRefs(it.plan)))
+	}
+	for _, p := range m.inert {
+		wRef = max(wRef, lipgloss.Width(sweepRefs(p)))
 	}
 
 	writeGroup := func(header, action string) {
@@ -706,27 +890,23 @@ func (m sweepModel) View() string {
 	}
 	// Inert rows sit under the checkboxes rather than beside them: four leading
 	// spaces where a "[x] " would be, so the id column still lines up.
-	inertRow := func(p sweepPlan, style lipgloss.Style, trailer string) string {
-		id := padRight(sweepClip(p.status.ID, wID), wID)
-		lead := "     " + id + "  "
-		detail := sweepClip(p.detail, m.detailWidth(lipgloss.Width(lead)+lipgloss.Width(trailer)))
-		row := lead + style.Render(detail)
-		if trailer != "" {
-			row += "  " + radarFaintStyle.Render(trailer)
-		}
-		return row
+	inertRow := func(p sweepPlan, style lipgloss.Style) string {
+		lead, detail, pad := m.sweepLine(
+			"     "+padRight(sweepClip(p.status.ID, wID), wID)+"  ",
+			sweepRefs(p), wRef, p.detail, sweepMeta(p))
+		return lead + style.Render(detail) + pad + radarFaintStyle.Render(sweepMeta(p))
 	}
 	if len(wake) > 0 {
 		b.WriteString("\n" + radarHeaderStyle.Render(" NEEDS YOU") + "\n")
 		for _, p := range wake {
-			b.WriteString(inertRow(p, radarHotStyle, "rig wake "+p.status.ID) + "\n")
+			b.WriteString(inertRow(p, radarHotStyle) + "\n")
 		}
 	}
 	if len(quiet) > 0 {
 		if m.showAll {
 			b.WriteString("\n" + radarHeaderStyle.Render(" QUIET") + "\n")
 			for _, p := range quiet {
-				b.WriteString(inertRow(p, radarFaintStyle, "") + "\n")
+				b.WriteString(inertRow(p, radarFaintStyle) + "\n")
 			}
 		} else {
 			b.WriteString("\n" + radarFaintStyle.Render(
@@ -767,19 +947,61 @@ func (m sweepModel) View() string {
 // sweepMaxIDWidth caps the id column. A Linear id is 8 characters and a kickoff
 // slug can be 55; letting the longest one size the column costs every other row
 // its detail.
-const sweepMaxIDWidth = 30
+const (
+	sweepMaxIDWidth  = 30
+	sweepMaxRefWidth = 26
+)
 
-// sweepRefs renders a merge row's PR refs ("runtime#971"), or "" for any other
-// action.
+// sweepRefs renders a row's PR refs ("runtime#971"). Merge rows name only the
+// PRs they'd land; every other row names all of them, so a rig's scope is
+// visible even when there's nothing to do about it — "awaiting review" reads
+// very differently once you can see it's two PRs across two repos.
 func sweepRefs(p sweepPlan) string {
-	if p.action != actionMerge {
-		return ""
+	prs := p.status.PRs
+	if p.action == actionMerge {
+		prs = p.merges
 	}
-	refs := make([]string, len(p.merges))
-	for i, pr := range p.merges {
-		refs[i] = shortRepo(pr.Repo) + "#" + strconv.Itoa(pr.Number)
+	refs := make([]string, 0, len(prs))
+	for _, pr := range prs {
+		refs = append(refs, shortRepo(pr.Repo)+"#"+strconv.Itoa(pr.Number))
 	}
-	return strings.Join(refs, " ")
+	return sweepClip(strings.Join(refs, " "), sweepMaxRefWidth)
+}
+
+// sweepMeta is the right-aligned tail: local work, breadth, and how long it's
+// been since anyone touched the rig. All three come from data the scan already
+// has, and each answers a question the disposition alone can't — whether
+// there's anything in the tree, whether this is a one-repo change or a
+// five-repo one, and whether "awaiting review" means since lunch or since
+// Tuesday.
+func sweepMeta(p sweepPlan) string {
+	var parts []string
+	if len(p.dirty) > 0 {
+		parts = append(parts, "WIP "+strings.Join(p.dirty, ","))
+	}
+	if p.repos > 1 {
+		parts = append(parts, strconv.Itoa(p.repos)+" repos")
+	}
+	if p.status.LastActive != nil {
+		parts = append(parts, age(*p.status.LastActive))
+	}
+	return strings.Join(parts, " · ")
+}
+
+// sweepLine lays out one board line's columns and right-aligns the metadata
+// tail against the terminal edge. It hands the pieces back rather than a
+// finished string so the caller can style the detail, or reverse-video the lot
+// for the cursor row.
+func (m sweepModel) sweepLine(lead, refs string, wRef int, detail, meta string) (outLead, outDetail, pad string) {
+	if wRef > 0 {
+		lead += padRight(refs, wRef) + "  "
+	}
+	detail = sweepClip(detail, m.detailWidth(lipgloss.Width(lead)+lipgloss.Width(meta)+2))
+	if meta == "" || m.width <= 0 {
+		return lead, detail, ""
+	}
+	gap := max(2, m.width-lipgloss.Width(lead)-lipgloss.Width(detail)-lipgloss.Width(meta)-1)
+	return lead, detail, strings.Repeat(" ", gap)
 }
 
 // sweepTail is a row's free-text column. Merge rows carry PR titles: a branch
@@ -849,14 +1071,12 @@ func (m sweepModel) renderItem(i int, it sweepItem, wID, wRef int) string {
 		box = "[x]"
 	}
 	id := padRight(sweepClip(it.plan.status.ID, wID), wID)
-	lead := " " + box + " " + id + "  "
-	if wRef > 0 {
-		lead += padRight(sweepRefs(it.plan), wRef) + "  "
-	}
-	tail := sweepClip(sweepTail(it.plan), m.detailWidth(lipgloss.Width(lead)))
+	meta := sweepMeta(it.plan)
+	lead, detail, pad := m.sweepLine(
+		" "+box+" "+id+"  ", sweepRefs(it.plan), wRef, sweepTail(it.plan), meta)
 
 	if i == m.cursor {
-		return radarCursorStyle.Render(lead + tail + " ")
+		return radarCursorStyle.Render(lead + detail + pad + meta + " ")
 	}
 	style := radarGoodStyle
 	if it.plan.action == actionDown {
@@ -865,7 +1085,7 @@ func (m sweepModel) renderItem(i int, it sweepItem, wID, wRef int) string {
 	if !it.selected {
 		style = radarFaintStyle
 	}
-	return lead + style.Render(tail)
+	return lead + style.Render(detail) + pad + radarFaintStyle.Render(meta)
 }
 
 // sweepPick puts the board up immediately and runs the scan behind it, feeding

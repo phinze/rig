@@ -391,12 +391,64 @@ that. A review rig ignores its disposition entirely and asks the teardown
 gate, since "you posted a review" is its terminal condition and the author's
 merge state says nothing about it.
 
-Two edges earned their special cases. Empty `Checks` means the repo has no
-CI configured, not CI that hasn't reported, so it counts as clear. And a rig
-with no PR looks on disk exactly like abandoned scaffolding whether or not
-you're sitting in it — the live tmux session is the only thing that tells
-them apart, and getting it wrong is the whole difference between a useful
-pass and an annoying one.
+Empty `Checks` means the repo has no CI configured, not CI that hasn't
+reported, so it counts as clear. Red CI, though, is your move rather than a
+reviewer's, so it outranks everything except a change request and leaves the
+quiet section entirely. `parkedDisposition` can't see this — it folds review
+state only — and burying "CI failing" under "awaiting review" was the single
+most misleading thing the board did. Pending checks stay quiet: they resolve
+themselves, and nagging about them would put half the board in the needs-you
+pile every time anyone pushed.
+
+"No PR" turned out to cover far more ground than it sounds like: work you
+haven't pushed, a repo that lands straight on trunk and never has one, and —
+most often — a rig whose PR merged and whose branch GitHub then deleted, so
+there's nothing left to look up. Only the teardown gate can tell those apart,
+so it always asks. An earlier cut short-circuited on a live tmux session
+here, meaning to protect the rig you're sitting in. Nearly every rig has a
+live session, so all that really did was hide finished work: three merged,
+spotless rigs sat in the quiet list reading "in flight" and could never be
+offered. Whether you're mid-thought is a checkbox default now, not a reason
+to withhold the row, and the signal for it is a recent agent turn rather than
+a session that exists.
+
+Which leaves the question the "no PR" bucket kept dodging: a clean tree with
+no PR means either "this shipped and the branch is gone" or "nothing came of
+this yet", and those want opposite defaults. Every rig carries a live agent
+conversation — the smallest on a real board was still 95 turns — so a rig with
+no commits isn't empty, it's a thinking session that hasn't landed anything.
+Tearing that down loses no data (the transcript lives under `~/.claude`, and
+`rig up` rebuilds the basedir so `--resume` still finds it) but it loses the
+thread: you have to remember the rig existed. That's a real cost, and it isn't
+one a merged rig carries.
+
+So the manifest records a PR number the first time one is seen. A branch is
+perishable and a PR number isn't, so a rig that shipped stays recognisable
+long after GitHub deletes the head. Absent means *unknown*, never "never had
+one" — rigs predating the field read the same as rigs that genuinely produced
+nothing, and the copy says "no PR on record" rather than pretending to know.
+
+That feeds a checkbox default, not an eligibility rule: a rig that shipped is
+pre-checked the moment it's clean, because tearing it down is bookkeeping. A
+rig with nothing on record waits until it's been untouched for a day —
+reap's `maxIdle` window, reused deliberately so the two don't hold different
+opinions about when a rig has stopped mattering. An agent mid-turn is never
+pre-checked whatever else is true. The row is always visible and always one
+`a` away, so this only ever picks the default. Note that the "am I mid-turn"
+window and the "has this gone stale" window are different questions and must
+not share a constant: `agentActiveWindow` is three minutes and exists to drive
+a working/idle dot, and an early cut wrongly borrowed it here, pre-checking
+rigs you'd been talking to twenty minutes earlier.
+
+The rows carry metadata beyond the verdict, because the disposition alone
+kept flattening rigs that wanted different things. PR refs make a rig's scope
+visible ("awaiting review" reads differently once you see it's two PRs across
+two repos). A WIP marker names repos holding work that is neither on trunk
+nor covered by a PR head — subtracting those heads is what makes it mean
+something, since otherwise every open PR's own commits read as WIP and a
+fully-pushed rig wore the same badge as one sitting on unpushed work. And an
+idle age, because "awaiting review" since lunch and since Tuesday are not the
+same situation.
 
 Merging is the one genuinely new capability here, and the only irreversible
 step. Teardown is safe to batch precisely because the lifecycle invariant
@@ -458,6 +510,16 @@ recorded), and they land together or not at all — one checkbox, every PR. The
 corollary is that a rig whose PRs *disagree* about review, one approved and
 one still out, never reaches the "approved" disposition and is deliberately
 left alone. Landing half a cross-repo change is worse than landing none of it.
+
+Building the board also turned up a bug in the branch heuristic underneath
+all of this. `jjPRBranch` looked for the closest bookmark in `::@` that
+wasn't `trunk()` — which excludes the trunk commit but not bookmarks already
+merged *into* trunk. A merged branch stays a local bookmark, so once a rig's
+own branch was deleted post-merge, the search happily returned some *other*
+rig's merged branch instead. Three rigs were simultaneously resolving to one
+unrelated bookmark, pointing their PR lookups (and `rig pr`) at a PR none of
+them owned. Excluding all of `::trunk()` fixes it, and leaves every live
+branch untouched.
 
 The horizon is folding this back into the radar: once the ladder exists as a
 function, a radar row already knows its own next step, and the board can

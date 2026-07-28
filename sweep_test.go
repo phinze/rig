@@ -2,8 +2,12 @@ package main
 
 import (
 	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -55,12 +59,14 @@ func TestSweepDecision(t *testing.T) {
 			wantDetail: "CI pending",
 		},
 		{
-			name: "approved but CI failing holds",
+			// Approved and red is still your move — the reviewer is done, the
+			// build isn't — so it goes to needs-you rather than sitting quiet.
+			name: "approved but CI failing summons you",
 			in: sweepInput{Disp: "approved", PRs: []rigPR{
-				{prInfo: prInfo{Number: 10, State: "OPEN", Review: "APPROVED", Checks: "failing"}},
+				{Repo: "o/runtime", prInfo: prInfo{Number: 10, State: "OPEN", Review: "APPROVED", Checks: "failing"}},
 			}},
-			wantAction: actionNone,
-			wantDetail: "CI failing",
+			wantAction: actionWake,
+			wantDetail: "CI failing on runtime#10",
 		},
 		{
 			name:       "changes requested wants you in the seat",
@@ -74,24 +80,58 @@ func TestSweepDecision(t *testing.T) {
 			wantDetail: "awaiting review",
 		},
 		{
-			name:       "abandoned no-PR rig with a dead session is offered up",
-			in:         sweepInput{Disp: "no PR", SessionLive: false, Blocker: ""},
+			// The common shape of a finished rig: its PR merged, GitHub deleted
+			// the branch, so there's nothing left to look up. An earlier cut hid
+			// these behind a live-session check and they became unreachable.
+			name:       "clean rig that shipped is offered up",
+			in:         sweepInput{Disp: "no PR", Blocker: "", Shipped: true},
 			wantAction: actionDown,
+			wantDetail: "shipped, nothing outstanding",
 		},
 		{
-			// The rig you're sitting in right now looks identical on disk to an
-			// abandoned one. The live session is what tells them apart, and getting
-			// this wrong is the difference between a useful pass and an annoying one.
-			name:       "no-PR rig with a live session is left alone",
-			in:         sweepInput{Disp: "no PR", SessionLive: true},
-			wantAction: actionNone,
-			wantDetail: "in flight",
+			// Identical on disk to the case above, and a completely different
+			// thing: nothing ever came of this one, so say so rather than call it
+			// "nothing outstanding" as though it had finished.
+			name:       "clean rig that never shipped says so",
+			in:         sweepInput{Disp: "no PR", Blocker: ""},
+			wantAction: actionDown,
+			wantDetail: "no PR on record",
 		},
 		{
 			name:       "no-PR rig holding WIP is left alone",
 			in:         sweepInput{Disp: "no PR", Blocker: "rig has unmerged work"},
 			wantAction: actionNone,
 			wantDetail: "unmerged work",
+		},
+		{
+			// Red CI is your move, not a reviewer's. parkedDisposition only folds
+			// review state, so without this the row read "awaiting review" and sat
+			// in the quiet pile.
+			name: "failing CI outranks awaiting review",
+			in: sweepInput{Disp: "waiting", PRs: []rigPR{
+				{Repo: "o/mirendev", prInfo: prInfo{Number: 111, State: "OPEN", Review: "REVIEW_REQUIRED", Checks: "failing"}},
+			}},
+			wantAction: actionWake,
+			wantDetail: "CI failing on mirendev#111",
+		},
+		{
+			// Changes-requested is the more specific answer, so it still wins.
+			name: "changes requested outranks failing CI",
+			in: sweepInput{Disp: "changes requested", PRs: []rigPR{
+				{Repo: "o/r", prInfo: prInfo{Number: 1, State: "OPEN", Review: "CHANGES_REQUESTED", Checks: "failing"}},
+			}},
+			wantAction: actionWake,
+			wantDetail: "review came back with changes",
+		},
+		{
+			// Pending checks resolve themselves; nagging would put half the board
+			// in the needs-you pile every time anyone pushed.
+			name: "pending CI is not a summons",
+			in: sweepInput{Disp: "waiting", PRs: []rigPR{
+				{Repo: "o/r", prInfo: prInfo{Number: 2, State: "OPEN", Review: "REVIEW_REQUIRED", Checks: "pending"}},
+			}},
+			wantAction: actionNone,
+			wantDetail: "awaiting review",
 		},
 		{
 			// A review rig's PRs belong to the author, so their merge state says
@@ -264,6 +304,66 @@ func updateModel(m sweepModel, msg tea.Msg) sweepModel {
 	return next.(sweepModel)
 }
 
+// rigDirtyRepos has to subtract the rig's pushed PR heads, or the WIP marker
+// fires on every open PR and stops distinguishing anything. A workspace parked
+// exactly on its pushed head is the case that catches naive implementations:
+// its working copy is genuinely non-empty, and nothing about it is unaccounted
+// for.
+func TestRigDirtyReposSubtractsPushedPRHeads(t *testing.T) {
+	if _, err := exec.LookPath("jj"); err != nil {
+		t.Skip("jj not installed")
+	}
+	setHermeticGit(t)
+
+	basedir := t.TempDir()
+	ws := filepath.Join(basedir, "repo")
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = ws
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+	}
+	run("git", "init", "-q", "-b", "main")
+	run("git", "commit", "-q", "--allow-empty", "-m", "init")
+	run("jj", "git", "init", "--colocate")
+	run("jj", "config", "set", "--repo", `revset-aliases."trunk()"`, "main")
+
+	// Feature commit C off trunk, with @ parked on an empty child of it — the
+	// shape of a pushed, up-to-date PR.
+	if err := os.WriteFile(filepath.Join(ws, "feat.txt"), []byte("feature\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("jj", "commit", "-m", "feat")
+	headRaw, err := exec.Command("jj", "-R", ws, "log", "--no-graph", "-r", "@-", "-T", "commit_id").Output()
+	if err != nil {
+		t.Fatalf("resolving feature commit: %v", err)
+	}
+	head := strings.TrimSpace(string(headRaw))
+
+	m := manifest{ID: "t", Repos: map[string]string{"repo": "o/r"}}
+	pushed := []rigPR{{Repo: "o/r", prInfo: prInfo{Number: 1, State: "OPEN", HeadOID: head}}}
+
+	if got := rigDirtyRepos(basedir, m, pushed); len(got) != 0 {
+		t.Errorf("dirty = %v, want none — the only off-trunk work is the pushed PR head", got)
+	}
+	// The same tree with no PR to account for it really is unaccounted work.
+	if got := rigDirtyRepos(basedir, m, nil); len(got) != 1 || got[0] != "repo" {
+		t.Errorf("dirty = %v, want [repo] when no PR covers the commit", got)
+	}
+	// And an edit layered on top of the pushed head is work the PR doesn't carry.
+	if err := os.WriteFile(filepath.Join(ws, "extra.txt"), []byte("more\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := rigDirtyRepos(basedir, m, pushed); len(got) != 1 || got[0] != "repo" {
+		t.Errorf("dirty = %v, want [repo] for edits beyond the PR head", got)
+	}
+}
+
 // A dry run has to be inert even when it would otherwise abort: nothing is
 // executed, so nothing can fail, and it reports the whole plan.
 func TestExecuteSweepDryRunTouchesNothing(t *testing.T) {
@@ -335,6 +435,110 @@ func TestSweepBoardDefaults(t *testing.T) {
 	// Wake and quiet rigs are shown but never actionable.
 	if len(m.inert) != 2 {
 		t.Errorf("inert = %d, want 2", len(m.inert))
+	}
+}
+
+// Whether a teardown starts checked is a different question from whether it's
+// safe — the gate already settled safety by producing an actionDown at all.
+// This is about whether losing the rig would annoy you.
+func TestSweepCollectable(t *testing.T) {
+	now := time.Now()
+	recent := now.Add(-20 * time.Minute)
+	stale := now.Add(-3 * 24 * time.Hour)
+
+	cases := []struct {
+		name       string
+		shipped    bool
+		agent      string
+		lastActive *time.Time
+		want       bool
+	}{
+		{"shipped and quiet is a formality", true, "idle", &recent, true},
+		{"shipped but mid-turn waits for you", true, "working", &recent, false},
+		{
+			// The case that started all this: a kickoff conversation an hour old
+			// with nothing committed yet. Safe to discard, and infuriating to.
+			"nothing landed and still warm is protected", false, "idle", &recent, false,
+		},
+		{"nothing landed and long cold is collectable", false, "idle", &stale, true},
+		{"no recorded activity at all reads as cold", false, "", nil, true},
+		{"mid-turn beats staleness", false, "working", &stale, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := sweepCollectable(c.shipped, c.agent, c.lastActive, now); got != c.want {
+				t.Errorf("collectable = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// A protected rig is still shown and still one keystroke from checked. Hiding
+// it was the old bug; the new behaviour must only soften the default.
+func TestSweepProtectedTeardownIsStillOffered(t *testing.T) {
+	plans := []sweepPlan{
+		{status: rigStatus{ID: "warm-kickoff"}, action: actionDown, detail: "no PR on record"},
+		{status: rigStatus{ID: "shipped"}, action: actionDown, detail: "shipped, nothing outstanding", collect: true},
+	}
+	m := newSweepModel(plans, false)
+	if len(m.items) != 2 {
+		t.Fatalf("both teardowns should be offered, got %d rows", len(m.items))
+	}
+	if m.items[0].selected {
+		t.Error("a warm rig with nothing landed should not start checked")
+	}
+	if !m.items[1].selected {
+		t.Error("a shipped, quiet rig should start checked")
+	}
+	// `a` is the one keystroke that collects the protected one too.
+	if got := press(m, "a").items[0].selected; !got {
+		t.Error("`a` should be able to check a protected teardown")
+	}
+}
+
+// The metadata tail answers what the disposition can't: is there anything in
+// the tree, how wide is this rig, and how long has it sat.
+func TestSweepMeta(t *testing.T) {
+	old := time.Now().Add(-50 * time.Hour)
+	p := sweepPlan{
+		status: rigStatus{ID: "r", LastActive: &old},
+		repos:  3,
+		dirty:  []string{"nix-config", "runtime"},
+	}
+	got := sweepMeta(p)
+	for _, want := range []string{"WIP nix-config,runtime", "3 repos", "2d"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("meta = %q, want it to contain %q", got, want)
+		}
+	}
+
+	// A single-repo rig shouldn't waste the column saying "1 repos", and a rig
+	// with a clean tree shouldn't claim WIP.
+	quiet := sweepMeta(sweepPlan{status: rigStatus{ID: "r"}, repos: 1})
+	if quiet != "" {
+		t.Errorf("meta = %q, want empty for a clean single-repo rig with no activity", quiet)
+	}
+}
+
+// Quiet rows carry PR refs too — "awaiting review" reads differently once you
+// can see it's two PRs across two repos.
+func TestSweepRefsCoverInertRows(t *testing.T) {
+	p := sweepPlan{
+		action: actionNone,
+		status: rigStatus{ID: "r", PRs: []rigPR{
+			{Repo: "o/reviewagent", prInfo: prInfo{Number: 19, State: "OPEN"}},
+			{Repo: "o/rfd", prInfo: prInfo{Number: 156, State: "OPEN"}},
+		}},
+	}
+	if got, want := sweepRefs(p), "reviewagent#19 rfd#156"; got != want {
+		t.Errorf("refs = %q, want %q", got, want)
+	}
+
+	// A merge row narrows to what it would actually land.
+	p.action = actionMerge
+	p.merges = []rigPR{{Repo: "o/rfd", prInfo: prInfo{Number: 156}}}
+	if got, want := sweepRefs(p), "rfd#156"; got != want {
+		t.Errorf("merge refs = %q, want %q", got, want)
 	}
 }
 
@@ -473,6 +677,9 @@ func testPlans() []sweepPlan {
 		return sweepPlan{
 			status: rigStatus{ID: id, Title: id + " title"},
 			action: action, detail: detail, merges: merges,
+			// Stands for a rig that shipped and went quiet, the ordinary case
+			// where a teardown arrives pre-checked.
+			collect: action == actionDown,
 		}
 	}
 	pr := func(repo string, n int) rigPR {

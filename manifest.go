@@ -52,6 +52,18 @@ type manifest struct {
 	// TOML encodes each as a string array; a legacy scalar reads as a one-element
 	// list.
 	Branches map[string][]string
+	// PRs maps a repo's subdir to a pull request number this rig was once
+	// observed to have. It exists because a branch is a perishable record and a
+	// PR number isn't: GitHub deletes the head branch on merge, after which
+	// branch-keyed lookups return nothing and a rig that shipped becomes
+	// indistinguishable from one that never produced anything. Both read as "no
+	// PR, clean tree", which is exactly the pair sweep has to tell apart before
+	// deciding whether a teardown is a formality or a discard.
+	//
+	// Recorded opportunistically the first time a PR is seen for a repo, so it's
+	// absent on rigs that predate the field or never got swept. Absent means
+	// "unknown", never "never had one" — callers must degrade, not conclude.
+	PRs map[string]int
 }
 
 // isReview reports whether this rig is a `rig review` pickup, whose terminal
@@ -76,7 +88,25 @@ func writeManifest(basedir string, m manifest) error {
 	}
 	writeTable(&b, "repos", m.Repos)
 	writeBranchTable(&b, "branches", m.Branches)
+	writeIntTable(&b, "prs", m.PRs)
 	return os.WriteFile(filepath.Join(basedir, manifestName), []byte(b.String()), 0o644)
+}
+
+// writeIntTable emits a sorted [name] table of key = number pairs, unquoted so
+// they read back as TOML integers. Same empty-map elision as writeTable.
+func writeIntTable(b *strings.Builder, name string, table map[string]int) {
+	if len(table) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "\n[%s]\n", name)
+	keys := make([]string, 0, len(table))
+	for k := range table {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		fmt.Fprintf(b, "%s = %d\n", k, table[k])
+	}
 }
 
 // writeTable emits a sorted [name] table of key = "value" pairs, or nothing
@@ -167,7 +197,7 @@ func readManifest(basedir string) (manifest, error) {
 	}
 	defer f.Close()
 
-	m := manifest{Repos: map[string]string{}, Branches: map[string][]string{}}
+	m := manifest{Repos: map[string]string{}, Branches: map[string][]string{}, PRs: map[string]int{}}
 	section := ""
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
@@ -215,6 +245,12 @@ func readManifest(basedir string) (manifest, error) {
 				m.Branches[key] = parseTOMLStringArray(val)
 			} else {
 				m.Branches[key] = []string{parseTOMLString(val)}
+			}
+		case "prs":
+			// A value we can't parse is dropped rather than recorded as zero: a
+			// bogus PR number would be worse than the absent-means-unknown default.
+			if n, err := strconv.Atoi(strings.TrimSpace(val)); err == nil && n > 0 {
+				m.PRs[key] = n
 			}
 		}
 	}
@@ -274,6 +310,46 @@ func addBranchToManifest(basedir, subdir, branch string) (bool, error) {
 		m.Branches = map[string][]string{}
 	}
 	m.Branches[subdir] = append(m.Branches[subdir], branch)
+	return true, writeManifest(basedir, m)
+}
+
+// recordObservedPRs notes the PR numbers seen for a rig's repos, so the fact
+// that this rig once shipped something survives GitHub deleting the branch.
+// Best-effort by design: it takes the mutation lock without blocking and gives
+// up on contention, because this rides along with a read-only scan and must
+// never make one wait or fail. Reports whether it wrote anything.
+//
+// Existing entries are never overwritten. The first PR a repo had is the one
+// that answers "did work happen here", and a later secondary shouldn't displace
+// it.
+func recordObservedPRs(basedir string, seen map[string]int) (bool, error) {
+	if len(seen) == 0 {
+		return false, nil
+	}
+	lock, err := acquireRigMutationLockMode(basedir, true)
+	if err != nil {
+		return false, nil // busy: try again on the next scan
+	}
+	defer func() { _ = lock.Close() }()
+
+	m, err := readManifest(basedir)
+	if err != nil {
+		return false, err
+	}
+	if m.PRs == nil {
+		m.PRs = map[string]int{}
+	}
+	changed := false
+	for subdir, number := range seen {
+		if number <= 0 || m.PRs[subdir] != 0 {
+			continue
+		}
+		m.PRs[subdir] = number
+		changed = true
+	}
+	if !changed {
+		return false, nil
+	}
 	return true, writeManifest(basedir, m)
 }
 

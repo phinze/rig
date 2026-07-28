@@ -19,12 +19,18 @@ no ticket yet. `rig add owner/repo` brings additional repos under the same rig.
 `rig down` breaks it back down.
 
 `rig sweep` is the pass over every rig that proposes each one's next step. It's
-plan-then-stream: a Bubble Tea board of checkable actions (teardowns pre-checked,
-merges deliberately not), then the TUI exits and the real gh and teardown output
-streams. It reuses `parkedDisposition` for state and
-`rigTeardownBlocker`/`teardownRig` for teardown, so it can't disagree with
+plan-then-stream: a Bubble Tea board of checkable actions, then the TUI exits and
+the real gh and teardown output streams. It reuses `parkedDisposition` for state
+and `rigTeardownBlocker`/`teardownRig` for teardown, so it can't disagree with
 `waiting`, `radar`, or `reap` about what a rig's state is — only about what to do
 about it. See DESIGN.md §"Sweeping".
+
+Two things there are easy to get wrong. Merges never arrive pre-checked and `a`
+skips them, because merging is the only irreversible act in the pass. And
+"pre-checked" is a separate judgment from "safe": `sweepCollectable` asks whether
+losing the rig would annoy you, gating on `sweepStaleAfter` (reap's 24h window)
+for rigs with no PR on record. Don't reach for `agentActiveWindow` there — it's
+three minutes and exists for the working/idle dot.
 
 The tmux layout is a Recto carousel: `main/<repo>` holds the task-level agent
 and the active repo's persistent Recto, while the other repos wait as

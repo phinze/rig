@@ -191,6 +191,68 @@ func TestManifestNoBranchesTable(t *testing.T) {
 	}
 }
 
+// A PR number outlives the branch that carried it, which is the whole reason
+// the manifest records one — so it has to survive a write/read cycle intact,
+// and leave no dangling table when there's nothing to record.
+func TestManifestPRsRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	m := manifest{
+		ID:    "mir-1",
+		Repos: map[string]string{"runtime": "mirendev/runtime"},
+		PRs:   map[string]int{"runtime": 977},
+	}
+	if err := writeManifest(dir, m); err != nil {
+		t.Fatalf("writeManifest: %v", err)
+	}
+	raw := string(mustReadFile(t, dir+"/"+manifestName))
+	if !strings.Contains(raw, "runtime = 977") {
+		t.Errorf("expected an unquoted integer PR number:\n%s", raw)
+	}
+	got, err := readManifest(dir)
+	if err != nil {
+		t.Fatalf("readManifest: %v", err)
+	}
+	if got.PRs["runtime"] != 977 {
+		t.Errorf("PRs = %v, want runtime=977", got.PRs)
+	}
+
+	bare := t.TempDir()
+	if err := writeManifest(bare, manifest{ID: "mir-2"}); err != nil {
+		t.Fatal(err)
+	}
+	if raw := string(mustReadFile(t, bare+"/"+manifestName)); strings.Contains(raw, "[prs]") {
+		t.Errorf("expected no [prs] table when none recorded:\n%s", raw)
+	}
+}
+
+// recordObservedPRs is the write half, and it must be conservative: it never
+// overwrites the PR that already answered "did work happen here", and it
+// reports honestly whether it wrote at all.
+func TestRecordObservedPRs(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	dir := t.TempDir()
+	if err := writeManifest(dir, manifest{ID: "mir-1", Repos: map[string]string{"runtime": "mirendev/runtime"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	wrote, err := recordObservedPRs(dir, map[string]int{"runtime": 977})
+	if err != nil || !wrote {
+		t.Fatalf("first record: wrote=%v err=%v", wrote, err)
+	}
+	// A later secondary PR must not displace the first one.
+	if wrote, err := recordObservedPRs(dir, map[string]int{"runtime": 981}); err != nil || wrote {
+		t.Errorf("second record: wrote=%v err=%v, want no write", wrote, err)
+	}
+	got, err := readManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.PRs["runtime"] != 977 {
+		t.Errorf("PRs = %v, want the original 977 kept", got.PRs)
+	}
+}
+
 // addRepoToManifest should record the branch when given one and leave it out
 // when handed the empty string (the added-repo / trunk case).
 func TestAddRepoToManifestBranch(t *testing.T) {
