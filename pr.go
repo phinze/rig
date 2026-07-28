@@ -190,14 +190,22 @@ func repoSubdirForCwd(basedir, cwd string, m manifest) (string, error) {
 }
 
 // jjPRBranch returns the branch backing the workspace's PR: the closest
-// non-trunk bookmark in the ancestry of @. trunk() is excluded so a rig whose
-// work isn't on a branch yet resolves to "" (the bookmark we'd find would just
-// be main) rather than pointing gh at the trunk. Empty is not an error — the
-// caller turns it into a hint about pushing a branch first.
+// bookmark in the ancestry of @ that isn't already part of trunk. A rig whose
+// work isn't on a branch yet resolves to "" rather than pointing gh at the
+// trunk. Empty is not an error — the caller turns it into a hint about pushing
+// a branch first.
+//
+// Excluding all of `::trunk()`, not just the trunk commit, is what keeps the
+// answer honest after a merge. A merged branch stays a local bookmark and
+// becomes an ancestor of trunk, so the narrower `~ trunk()` kept finding it —
+// and once the rig's own branch was deleted post-merge, it would happily return
+// some *other* rig's merged branch instead. Three rigs were simultaneously
+// resolving to one unrelated bookmark that way, which pointed their PR lookups
+// (and `rig pr`) at a PR none of them owned.
 func jjPRBranch(workspaceDir string) (string, error) {
 	cmd := exec.Command("jj", "log",
 		"--no-graph", "--ignore-working-copy",
-		"-r", "heads(::@ & bookmarks() ~ trunk())",
+		"-r", "heads(::@ & bookmarks() ~ ::trunk())",
 		"-T", `bookmarks.map(|b| b.name()).join("\n") ++ "\n"`,
 	)
 	cmd.Dir = workspaceDir
