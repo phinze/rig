@@ -68,6 +68,33 @@ func TestWriteRigClaudeMD_NoTitle(t *testing.T) {
 	}
 }
 
+// The pasted brief only earns a bullet in the auto-loaded instructions when it
+// actually exists — most rigs are kickoff-line-only, and a pointer to a missing
+// file is worse than no pointer at all. Regenerating on `rig add` is what makes
+// the bullet stick, so this goes through the same render path.
+func TestRigInstructionsPointAtKickoff(t *testing.T) {
+	dir := t.TempDir()
+	m := manifest{ID: "local-thing", Title: "Investigate flaky radar refresh", Repos: map[string]string{"rig": "phinze/rig"}}
+
+	if got := renderRigInstructions(dir, m); strings.Contains(got, rigKickoffName) {
+		t.Errorf("instructions advertise a kickoff file that isn't there:\n%s", got)
+	}
+
+	if err := writeRigKickoff(dir, m.Title, "  jim: radar hangs on enter\nme: after a sweep?  "); err != nil {
+		t.Fatalf("writeRigKickoff: %v", err)
+	}
+	raw := string(mustReadFile(t, filepath.Join(dir, rigKickoffName)))
+	want := "# Kickoff: Investigate flaky radar refresh\n\njim: radar hangs on enter\nme: after a sweep?\n"
+	if raw != want {
+		t.Errorf("kickoff file =\n%q\nwant\n%q", raw, want)
+	}
+
+	got := renderRigInstructions(dir, m)
+	if !strings.Contains(got, "The brief lives in `"+rigKickoffName+"`") || !strings.Contains(got, "../"+rigKickoffName) {
+		t.Errorf("instructions missing the kickoff pointer:\n%s", got)
+	}
+}
+
 func TestWriteRigAgentInstructions(t *testing.T) {
 	dir := t.TempDir()
 	m := manifest{ID: "MIR-10", Repos: map[string]string{"rig": "phinze/rig"}}

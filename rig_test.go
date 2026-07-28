@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -90,6 +91,72 @@ func TestKickoffPromptEscapeCancels(t *testing.T) {
 
 	if m.kickoff != "" || !m.done || cmd == nil {
 		t.Errorf("escape left prompt in state %#v", m)
+	}
+}
+
+// The context step is a textarea, so enter has to stay a newline and ctrl-d
+// has to mean "done" — including the empty case, which is the common one.
+func TestContextPromptAcceptsMultiline(t *testing.T) {
+	m := newContextPromptModel("investigate the flake")
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("first line")})
+	m = updated.(contextPromptModel)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(contextPromptModel)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("second line")})
+	m = updated.(contextPromptModel)
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
+	m = updated.(contextPromptModel)
+
+	if m.context != "first line\nsecond line" {
+		t.Errorf("context = %q, want two lines", m.context)
+	}
+	if cmd == nil || !m.done || m.cancelled {
+		t.Errorf("ctrl-d left prompt in state %#v", m)
+	}
+}
+
+// A paste arrives as one key message whose runes carry the line breaks; CRLF
+// content must not come out double-spaced.
+func TestContextPromptPasteNormalizesCRLF(t *testing.T) {
+	m := newContextPromptModel("investigate the flake")
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Paste: true, Runes: []rune("one\r\ntwo\r\n\r\nthree")})
+	m = updated.(contextPromptModel)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
+	m = updated.(contextPromptModel)
+
+	if want := "one\ntwo\n\nthree"; m.context != want {
+		t.Errorf("pasted context = %q, want %q", m.context, want)
+	}
+}
+
+// Escape skips the step (an empty blob), ctrl-c abandons `rig new` outright.
+// The difference matters: one goes on to build the rig, the other doesn't.
+func TestContextPromptSkipVersusCancel(t *testing.T) {
+	skipped, _ := newContextPromptModel("k").Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if m := skipped.(contextPromptModel); m.context != "" || m.cancelled || !m.done {
+		t.Errorf("escape left prompt in state %#v", m)
+	}
+
+	cancelled, _ := newContextPromptModel("k").Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if m := cancelled.(contextPromptModel); !m.cancelled || !m.done {
+		t.Errorf("ctrl-c left prompt in state %#v", m)
+	}
+}
+
+func TestKickoffPromptMentionsPastedContext(t *testing.T) {
+	plain := kickoffPrompt("investigate the flake", false)
+	if !strings.Contains(plain, "investigate the flake") || !strings.Contains(plain, "no ticket to read") {
+		t.Errorf("bare kickoff prompt = %q", plain)
+	}
+	if strings.Contains(plain, rigKickoffName) {
+		t.Errorf("bare kickoff prompt points at a file that wasn't written: %q", plain)
+	}
+
+	withContext := kickoffPrompt("investigate the flake", true)
+	if !strings.Contains(withContext, "../"+rigKickoffName) {
+		t.Errorf("context kickoff prompt = %q, want a pointer to ../%s", withContext, rigKickoffName)
 	}
 }
 

@@ -69,10 +69,17 @@ job (climbing rig, fishing rig, sound rig):
   the one that doesn't. A gh-issue or your-own-PR URL dispatches the same
   shape.
 - `rig new [kickoff]`: start your own work before it has a tracker identity.
-  With no argument it asks for a one-line kickoff, then runs the same primary
-  repo picker as `up`. The kickoff becomes the title and a readable local id;
-  the workspace starts at `trunk()` with no branch recorded until the work
-  grows one.
+  With no argument it asks for a one-line kickoff, then offers a textarea for
+  whatever context the title only gestures at, then runs the same primary repo
+  picker as `up`. The kickoff becomes the title and a readable local id; the
+  workspace starts at `trunk()` with no branch recorded until the work grows
+  one. Pasted context is written to `KICKOFF.md` at the rig root rather than
+  inlined in the launch prompt, which is typed into the agent's shell and would
+  make a poor courier for a Slack thread. Being a file is the better half of the
+  bargain anyway: the brief outlives the context window, a resumed session, and
+  the arrival of a second agent. Empty is the common answer — esc skips the step,
+  and piped stdin (`pbpaste | rig new fix the flake`) is the shape for scripts
+  and agent shells with no TTY to prompt at.
 - `rig review <pr>` — the jreview sibling, pointed at *other people's* work:
   pitch a rig around a PR awaiting your review, checked out read-only at its
   head. Hand it a URL that turns out to be yours and it just routes you to

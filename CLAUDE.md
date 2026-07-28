@@ -15,8 +15,12 @@ captures *how it currently works* as the code grows.
 `~/workspaces/`, drops a jj workspace for the primary repo inside it, writes
 a `.rig.toml` and `.envrc`, and spawns a tmux session ready for an agent to
 work in. `rig new` starts the same shape from a free-form kickoff when there is
-no ticket yet. `rig add owner/repo` brings additional repos under the same rig.
-`rig down` breaks it back down.
+no ticket yet, followed by an optional textarea for pasted context that lands in
+`KICKOFF.md` at the rig root (esc skips it; piped stdin fills it non-
+interactively). The agent is pointed at that file rather than handed its
+contents, because the launch prompt travels by `tmux send-keys` into a shell.
+`rig add owner/repo` brings additional repos under the same rig. `rig down`
+breaks it back down.
 
 `rig sweep` is the pass over every rig that proposes each one's next step. It's
 plan-then-stream: a Bubble Tea board of checkable actions, then the TUI exits and

@@ -103,7 +103,9 @@ usage:
                             RIG_AGENT sets the default
   rig new [kickoff] [--repo owner/repo] [--agent AGENT]
                             start unticketed work in a normal authoring rig
-                            (prompts for the kickoff when omitted, then uses the
+                            (prompts for the kickoff when omitted, then for a
+                            blob of context to paste — esc skips it, and piped
+                            stdin supplies it without a prompt — then uses the
                             same repo picker as up; starts at trunk with no
                             branch recorded yet)
   rig review [pr-url] [--agent AGENT]

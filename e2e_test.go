@@ -159,6 +159,48 @@ func TestNew(t *testing.T) {
 		t.Errorf("agent did not receive the ticketless kickoff prompt:\n%s", agentArgs)
 	}
 
+	// The kickoff-only rig gets no KICKOFF.md, and nothing in its generated
+	// instructions should claim otherwise.
+	if _, err := os.Stat(filepath.Join(basedir, "KICKOFF.md")); !os.IsNotExist(err) {
+		t.Errorf("kickoff-only rig grew a KICKOFF.md (stat err = %v)", err)
+	}
+	if got := string(mustReadFile(t, filepath.Join(basedir, "CLAUDE.md"))); strings.Contains(got, "KICKOFF.md") {
+		t.Errorf("instructions point at an absent brief:\n%s", got)
+	}
+
+	// Piped stdin is the non-interactive shape of the context step: the blob
+	// lands in KICKOFF.md and the agent is pointed at it rather than handed it.
+	if err := os.Remove(marker); err != nil {
+		t.Fatalf("clearing agent marker: %v", err)
+	}
+	blob := "jim: radar hangs on enter again\nme: only after a sweep?\njim: yeah, every time"
+	withContext := exec.Command(rigBin, "new", "Fix radar enter hang", "--repo", "fakeowner/fakerepo", "--agent", "codex")
+	withContext.Dir = home
+	withContext.Env = env
+	withContext.Stdin = strings.NewReader(blob)
+	if out, err := withContext.CombinedOutput(); err != nil {
+		t.Fatalf("rig new with piped context: %v\n%s", err, out)
+	}
+
+	ctxBase := filepath.Join(home, "workspaces", "fix-radar-enter-hang")
+	if got := string(mustReadFile(t, filepath.Join(ctxBase, "KICKOFF.md"))); got != "# Kickoff: Fix radar enter hang\n\n"+blob+"\n" {
+		t.Errorf("KICKOFF.md =\n%s", got)
+	}
+	if got := string(mustReadFile(t, filepath.Join(ctxBase, "AGENTS.md"))); !strings.Contains(got, "The brief lives in `KICKOFF.md`") {
+		t.Errorf("instructions missing the brief pointer:\n%s", got)
+	}
+
+	deadline = time.Now().Add(3 * time.Second)
+	for {
+		if _, err := os.Stat(marker); err == nil || !time.Now().Before(deadline) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := string(mustReadFile(t, marker)); !strings.Contains(got, "../KICKOFF.md") {
+		t.Errorf("agent was not pointed at the pasted context:\n%s", got)
+	}
+
 	// A repeated kickoff should point back to the existing rig instead of
 	// silently manufacturing another local identity.
 	again := exec.Command(rigBin, "new", kickoff, "--repo", "fakeowner/fakerepo")

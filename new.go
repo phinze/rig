@@ -2,10 +2,12 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -47,6 +49,17 @@ func runNew(args []string) error {
 		return fmt.Errorf("checking basedir: %w", err)
 	}
 
+	// The context step comes after the collision checks so a blob you just
+	// pasted is never thrown away by an "already exists", and before the repo
+	// picker so the two things you type stay adjacent.
+	context, ok, err := resolveKickoffContext(kickoff)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil // cancelled at the context step
+	}
+
 	repo, err := resolveRepo(repoFlag)
 	if err != nil {
 		return err
@@ -63,6 +76,14 @@ func runNew(args []string) error {
 		return err
 	}
 
+	// Before addRepoWorkspace, which regenerates the agent instructions: they
+	// grow a pointer bullet when the kickoff file is on disk.
+	if context != "" {
+		if err := writeRigKickoff(basedir, kickoff, context); err != nil {
+			return fmt.Errorf("writing %s: %w", rigKickoffName, err)
+		}
+	}
+
 	repoDest, err := addRepoWorkspace(basedir, rigID, repo, "trunk()", "")
 	if err != nil {
 		return err
@@ -72,10 +93,7 @@ func runNew(args []string) error {
 		rectoCmd: "recto",
 		repo:     repo.Name,
 		agent:    agent,
-		prompt: fmt.Sprintf(
-			"This is your kickoff for a new rig: %s. That's the whole brief so far — there's no ticket to read. If it gives you enough to start some introductory analysis or sketch out next steps, go ahead and dig in, then show me what you find. If it's too thin to act on well, ask me to elaborate before diving in.",
-			kickoff,
-		),
+		prompt:   kickoffPrompt(kickoff, context != ""),
 	}
 	session, err := spawnSession(basedir, repoDest, sess)
 	if err != nil {
@@ -84,6 +102,112 @@ func runNew(args []string) error {
 
 	fmt.Fprintf(os.Stderr, "rig: new %s — %s\n", rigID, basedir)
 	return attachOrReport(session)
+}
+
+// kickoffPrompt is the opening message the agent wakes up to. Pasted context
+// is handed over as a path rather than inlined: the prompt reaches the agent by
+// being typed into its shell (spawnSession → tmux send-keys), which is a poor
+// courier for a multi-line blob, and a file survives the context window, a
+// resumed session, and whatever other agent the rig grows later.
+func kickoffPrompt(kickoff string, hasContext bool) string {
+	brief := "That's the whole brief so far — there's no ticket to read."
+	if hasContext {
+		brief = fmt.Sprintf("There's no ticket to read, but I pasted a blob of context into ../%s — start there.", rigKickoffName)
+	}
+	return fmt.Sprintf(
+		"This is your kickoff for a new rig: %s. %s If it gives you enough to start some introductory analysis or sketch out next steps, go ahead and dig in, then show me what you find. If it's too thin to act on well, ask me to elaborate before diving in.",
+		kickoff, brief,
+	)
+}
+
+// resolveKickoffContext gathers the optional blob that follows the kickoff
+// line — the Slack thread, the stack trace, the half-written note that explains
+// what the title only gestures at. Interactively it's a textarea you can skip
+// with a keystroke; piped (`pbpaste | rig new fix the flake`) it's all of
+// stdin, which is also how an agent shell can hand a brief over without a TTY.
+// The bool reports whether to keep going: false means you cancelled.
+func resolveKickoffContext(kickoff string) (string, bool, error) {
+	if !stdinIsTTY() {
+		blob, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return "", false, fmt.Errorf("reading kickoff context from stdin: %w", err)
+		}
+		return strings.TrimSpace(string(blob)), true, nil
+	}
+
+	m := newContextPromptModel(kickoff)
+	result, err := tea.NewProgram(m, tea.WithInput(os.Stdin), tea.WithOutput(os.Stderr)).Run()
+	if err != nil {
+		return "", false, fmt.Errorf("reading kickoff context: %w", err)
+	}
+	final := result.(contextPromptModel)
+	return strings.TrimSpace(final.context), !final.cancelled, nil
+}
+
+type contextPromptModel struct {
+	kickoff   string
+	area      textarea.Model
+	context   string
+	cancelled bool
+	done      bool
+}
+
+func newContextPromptModel(kickoff string) contextPromptModel {
+	area := textarea.New()
+	area.Placeholder = "Paste anything else worth knowing…"
+	area.ShowLineNumbers = false
+	// MaxHeight is a line ceiling as much as a display one — leaving the default
+	// 99 in place would quietly refuse the hundredth line of a long paste.
+	area.MaxHeight = 0
+	area.SetWidth(76)
+	area.SetHeight(10)
+	area.Focus()
+	return contextPromptModel{kickoff: kickoff, area: area}
+}
+
+func (m contextPromptModel) Init() tea.Cmd { return textarea.Blink }
+
+func (m contextPromptModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		// Bracketed paste, normalized before the textarea's sanitizer sees it:
+		// it maps '\r' and '\n' to a newline each, so CRLF content would arrive
+		// double-spaced.
+		if msg.Paste {
+			m.area.InsertString(strings.ReplaceAll(string(msg.Runes), "\r\n", "\n"))
+			return m, nil
+		}
+		switch msg.Type {
+		case tea.KeyCtrlD:
+			// Enter is a newline here, so accepting needs its own key. Empty is
+			// a legitimate answer: most kickoffs don't come with a blob.
+			m.context = m.area.Value()
+			m.done = true
+			return m, tea.Quit
+		case tea.KeyEsc:
+			m.done = true
+			return m, tea.Quit
+		case tea.KeyCtrlC:
+			m.cancelled = true
+			m.done = true
+			return m, tea.Quit
+		}
+	case tea.WindowSizeMsg:
+		m.area.SetWidth(max(20, msg.Width-2))
+		m.area.SetHeight(min(max(msg.Height-6, 6), 20))
+	}
+
+	var cmd tea.Cmd
+	m.area, cmd = m.area.Update(msg)
+	return m, cmd
+}
+
+func (m contextPromptModel) View() string {
+	if m.done {
+		return ""
+	}
+	return fmt.Sprintf("Kickoff: %s\nContext (optional):\n%s\nctrl-d done · esc skip · ctrl-c cancel\n",
+		m.kickoff, m.area.View())
 }
 
 // resolveKickoff accepts an inline kickoff (`rig new investigate the flake`)

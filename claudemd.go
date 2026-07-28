@@ -14,6 +14,25 @@ const rigClaudeMDName = "CLAUDE.md"
 
 const rigAgentsMDName = "AGENTS.md"
 
+// rigKickoffName holds the context pasted at `rig new` time. Unlike the
+// generated instruction files it is written once and never touched again: it's
+// your words, not rig's, and the agent is pointed at it rather than handed it,
+// so a blob of any size costs the launch prompt one path.
+const rigKickoffName = "KICKOFF.md"
+
+// writeRigKickoff records the kickoff line and its pasted context at the
+// basedir root. The heading gives the blob a title when the paste itself is
+// raw log or chat transcript with no shape of its own.
+func writeRigKickoff(basedir, kickoff, context string) error {
+	body := fmt.Sprintf("# Kickoff: %s\n\n%s\n", kickoff, strings.TrimSpace(context))
+	return os.WriteFile(filepath.Join(basedir, rigKickoffName), []byte(body), 0o644)
+}
+
+func hasRigKickoff(basedir string) bool {
+	_, err := os.Stat(filepath.Join(basedir, rigKickoffName))
+	return err == nil
+}
+
 // writeRigClaudeMD renders the basedir CLAUDE.md from the manifest. It's
 // regenerated whenever the repo set changes (initial up, every rig add) so the
 // repo list never drifts. Kept deliberately thin: auto-loaded context should
@@ -68,6 +87,12 @@ func renderRigInstructions(basedir string, m manifest) string {
 	fmt.Fprintf(&b, "# Rig %s\n\n", heading)
 	b.WriteString("You are working inside a **rig**: a task-shaped workspace dedicated to this\n")
 	b.WriteString("one task, holding every repo the task touches.\n\n")
+
+	if hasRigKickoff(basedir) {
+		fmt.Fprintf(&b, "- **The brief lives in `%s`** at the rig root (`../%s` from a repo):\n", rigKickoffName, rigKickoffName)
+		b.WriteString("  the kickoff line plus whatever context was pasted with it. Read it before\n")
+		b.WriteString("  you start.\n")
+	}
 
 	fmt.Fprintf(&b, "- **This rig is your home: `%s`.** The task's repos live below, under this\n", abbrevHome(basedir))
 	b.WriteString("  directory, and that's where the work happens. Bring another repo the task\n")
