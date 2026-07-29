@@ -483,6 +483,50 @@ fully-pushed rig wore the same badge as one sitting on unpushed work. And an
 idle age, because "awaiting review" since lunch and since Tuesday are not the
 same situation.
 
+None of which told you what a rig was *about*. The board's free-text column
+started out as the verdict — "no PR on record", "merged and clean" — and the
+MERGE group was the only one that read well, because it had already been
+special-cased to show PR titles instead. That case generalizes: "no PR on
+record" is true of every row carrying it, the same way "approved, CI clear"
+is true of every merge row, so a board of ticket numbers left you deciding
+whether to delete `mir-1477` on the strength of the number alone. The verdict
+became its own narrow column (the *why*) and the wide one became the
+*subject*, answering "what is this rig about" for every group.
+
+The subject ladder is PR title, then task title, then agent session title. A
+PR title is the most authoritative account of what a rig produced and the one
+you most want in front of you before pressing enter on a merge. The task
+title costs nothing — it's been on `rigStatus` all along, and the radar has
+been rendering it since day one; sweep simply never looked. A merge row names
+every PR it would land, since one checkbox lands all of them, but everywhere
+else a lone PR speaks for its rig and several don't (two titles joined
+overrun a column you're only reading for context), so a multi-repo rig falls
+back to its own title outside the MERGE group.
+
+The third rung reads the `ai-title` record out of the newest Claude
+transcript, which is a bounded tail read: Claude Code re-emits the record
+every time it refines the title, so the newest sits at the very end of the
+file — on a 13MB transcript the last one landed in the final 0.1%. It almost
+never fires, since a manifest always carries a title; it's there for one
+written before the field existed. Worth knowing if it's ever promoted up the
+ladder, because the tradeoff isn't one-sided: the agent's own title is
+*sharper* than the task title on ticket rigs, where the manifest holds a
+problem statement ("Cluster-local OCI registry still has no authentication…")
+and the agent holds an intent ("Add authentication to cluster-local OCI
+registry") — and *worse* on kickoff rigs, where rig's own launch prompt
+bleeds in and "sweep polish" becomes "Sweep polish rig kickoff and analysis".
+It's also Claude-only; Codex rollouts and Antigravity history record a cwd
+and a timestamp but never a title.
+
+Colour follows the split. Selection state rides the subject, the widest cell
+and so the one that reads as "queued" from across the board. Red is reserved
+for a why that names something broken, which today is exactly the wake rows'
+failing CI — it used to cover the whole line, and now it sits on the four
+words that earned it while the title beside them stays readable. All four
+columns resolve against one grid shared by every group, so the board reads as
+a single table; a subject column that shifted between MERGE and NEEDS YOU
+would be worse than no subject column at all.
+
 Merging is the one genuinely new capability here, and the only irreversible
 step. Teardown is safe to batch precisely because the lifecycle invariant
 holds: `down` can't destroy anything `up` can't rebuild, so a wrong check

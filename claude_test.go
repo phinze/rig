@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -113,5 +114,50 @@ func TestClaudeSessionActivity(t *testing.T) {
 
 	if got := claudeSessionActivity(home, filepath.Join(home, "workspaces", "nope")); got != 0 {
 		t.Errorf("claudeSessionActivity for unknown rig = %d, want 0", got)
+	}
+}
+
+func TestClaudeSessionTitle(t *testing.T) {
+	home := t.TempDir()
+	basedir := filepath.Join(home, "workspaces", "fake-1")
+	dir := filepath.Join(home, ".claude", "projects", claudeProjectDirName(basedir)+"-fakerepo")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Claude Code re-emits the record every time it refines the title, so the
+	// last one wins. Padding pushes the early ones out of the tail window,
+	// which is exactly what a long real session does.
+	var b strings.Builder
+	b.WriteString(`{"type":"ai-title","aiTitle":"First guess","sessionId":"s"}` + "\n")
+	for b.Len() < claudeTitleTail*2 {
+		b.WriteString(`{"type":"user","message":{"content":"` + strings.Repeat("x", 4000) + `"}}` + "\n")
+	}
+	b.WriteString(`{"type":"assistant","message":{"content":"no title here"}}` + "\n")
+	b.WriteString(`{"type":"ai-title","aiTitle":"Add authentication to the registry","sessionId":"s"}` + "\n")
+	if err := os.WriteFile(filepath.Join(dir, "a.jsonl"), []byte(b.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, want := claudeSessionTitle(home, basedir), "Add authentication to the registry"; got != want {
+		t.Errorf("claudeSessionTitle = %q, want %q", got, want)
+	}
+
+	// A session that never got named, and a rig with no session at all, both
+	// have to come back empty so the subject column falls through cleanly
+	// rather than rendering a stray brace.
+	untitled := filepath.Join(home, "workspaces", "fake-2")
+	d2 := filepath.Join(home, ".claude", "projects", claudeProjectDirName(untitled))
+	if err := os.MkdirAll(d2, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d2, "a.jsonl"), []byte("{\"type\":\"user\"}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := claudeSessionTitle(home, untitled); got != "" {
+		t.Errorf("claudeSessionTitle for an unnamed session = %q, want empty", got)
+	}
+	if got := claudeSessionTitle(home, filepath.Join(home, "workspaces", "nope")); got != "" {
+		t.Errorf("claudeSessionTitle for unknown rig = %q, want empty", got)
 	}
 }

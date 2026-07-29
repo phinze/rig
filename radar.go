@@ -1810,6 +1810,16 @@ func padRight(s string, w int) string {
 	return s
 }
 
+// padLeft is padRight's mirror, for cells that read best flush against the
+// right edge — the sweep board's meta tail, where lining the ages up is the
+// whole point of the column.
+func padLeft(s string, w int) string {
+	if gap := w - lipgloss.Width(s); gap > 0 {
+		return strings.Repeat(" ", gap) + s
+	}
+	return s
+}
+
 // radarTruncateTitle clips a title to w cells. A path-shaped title (a bare
 // session or a repo rig, whose title is its working dir) collapses its leading
 // segments so the tail — the last segments, where the repo name lives — survives

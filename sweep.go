@@ -128,6 +128,11 @@ type sweepPlan struct {
 	held   []string // PRs that kept themselves out, e.g. "#3 CI failing"
 	repos  int      // how many repos the rig spans
 	dirty  []string // repos holding local work, for the WIP marker
+	// agentTitle is what the agent called its own conversation, filled in only
+	// when the rungs above it in sweepSubject came back empty. Reading it costs
+	// a file read, so the plan carries the answer rather than the board asking
+	// for it on every repaint.
+	agentTitle string
 	// collect is whether a teardown row should arrive pre-checked. See
 	// sweepCollectable — it is not the same question as "is this safe", which
 	// the gate already answered by producing an actionDown at all.
@@ -284,10 +289,11 @@ func mergeablePRs(prs []rigPR) (ready []rigPR, held []string) {
 	return ready, held
 }
 
-// mergeDetail is the one-line explanation for everywhere that isn't the board:
-// the text report, and the non-tty path. The board itself shows PR titles
-// instead, since "approved, CI clear" is true of every row in its MERGE group
-// by construction and says nothing you can tell two rigs apart by.
+// mergeDetail is a merge row's why. It's the same for every row in the MERGE
+// group by construction — that's what qualified them — which is why it can't
+// be the only thing a row says, and why the subject column exists. What it
+// does carry that nothing else does is the holding note: an approved rig whose
+// sibling PR is still going red or amber.
 func mergeDetail(ready []rigPR, held []string) string {
 	if len(ready) == 0 {
 		if len(held) > 0 {
@@ -406,7 +412,7 @@ func sweepScan(fetched map[string]bool, report func(string)) ([]sweepPlan, error
 	statuses := rigStatuses(rigs, home, time.Now())
 	say(fmt.Sprintf("asking GitHub about %d rigs", len(statuses)))
 	enrichWithPRs(statuses)
-	return planSweep(rigs, statuses, fetched, say), nil
+	return planSweep(rigs, statuses, home, fetched, say), nil
 }
 
 // planSweep builds one plan per rig and orders them the way the board groups
@@ -414,7 +420,7 @@ func sweepScan(fetched map[string]bool, report func(string)) ([]sweepPlan, error
 // the rigs that want a human, then everything quiet. The teardown gate is
 // consulted lazily — it costs jj and gh calls, and only the merged / no-PR /
 // review branches of the ladder actually consume it.
-func planSweep(rigs []rigInfo, statuses []rigStatus, fetched map[string]bool, say func(string)) []sweepPlan {
+func planSweep(rigs []rigInfo, statuses []rigStatus, home string, fetched map[string]bool, say func(string)) []sweepPlan {
 	byPath := make(map[string]rigInfo, len(rigs))
 	for _, r := range rigs {
 		byPath[r.Path] = r
@@ -474,6 +480,11 @@ func planSweep(rigs []rigInfo, statuses []rigStatus, fetched map[string]bool, sa
 		}
 		if action == actionMerge {
 			p.merges, p.held = mergeablePRs(s.PRs)
+		}
+		// Last rung of the subject ladder, and the only one that costs a read —
+		// so ask for it only once the free rungs have come back empty.
+		if sweepSubject(p) == "" {
+			p.agentTitle = claudeSessionTitle(home, s.Path)
 		}
 		plans = append(plans, p)
 	}
@@ -617,8 +628,8 @@ func reportSweep(plans []sweepPlan) {
 		case actionWake:
 			next = "rig wake " + p.status.ID
 		}
-		fmt.Fprintf(w, "  %s\t%s\t%s\t%s\t%s\n",
-			p.status.ID, sweepRefs(p), p.detail, sweepMeta(p), next)
+		fmt.Fprintf(w, "  %s\t%s\t%s\t%s\t%s\t%s\n",
+			p.status.ID, sweepRefs(p), sweepSubject(p), p.detail, sweepMeta(p), next)
 	}
 	_ = w.Flush()
 }
@@ -841,28 +852,7 @@ func (m sweepModel) View() string {
 	gap := max(1, m.width-lipgloss.Width(title)-lipgloss.Width(count))
 	b.WriteString(title + strings.Repeat(" ", gap) + radarFaintStyle.Render(count) + "\n")
 
-	// One id column shared by every group, so the board reads as one table
-	// rather than four that each found their own alignment. Kickoff slugs run to
-	// 55 characters and would otherwise shove the detail off the right edge for
-	// the sake of one row, so the column is capped and long ids are clipped.
-	wID := 0
-	for _, it := range m.items {
-		wID = max(wID, lipgloss.Width(it.plan.status.ID))
-	}
-	for _, p := range m.inert {
-		wID = max(wID, lipgloss.Width(p.status.ID))
-	}
-	wID = min(wID, sweepMaxIDWidth)
-
-	// Same for the PR refs, so "rfd#154" and "runtime#971" start in one place —
-	// across every group, since the quiet rows carry refs now too.
-	wRef := 0
-	for _, it := range m.items {
-		wRef = max(wRef, lipgloss.Width(sweepRefs(it.plan)))
-	}
-	for _, p := range m.inert {
-		wRef = max(wRef, lipgloss.Width(sweepRefs(p)))
-	}
+	c := m.columns()
 
 	writeGroup := func(header, action string) {
 		first := true
@@ -874,7 +864,7 @@ func (m sweepModel) View() string {
 				b.WriteString("\n" + radarHeaderStyle.Render(" "+header) + "\n")
 				first = false
 			}
-			b.WriteString(m.renderItem(i, it, wID, wRef) + "\n")
+			b.WriteString(m.renderItem(i, it, c) + "\n")
 		}
 	}
 	writeGroup("MERGE", actionMerge)
@@ -888,25 +878,24 @@ func (m sweepModel) View() string {
 			quiet = append(quiet, p)
 		}
 	}
-	// Inert rows sit under the checkboxes rather than beside them: four leading
-	// spaces where a "[x] " would be, so the id column still lines up.
-	inertRow := func(p sweepPlan, style lipgloss.Style) string {
-		lead, detail, pad := m.sweepLine(
-			"     "+padRight(sweepClip(p.status.ID, wID), wID)+"  ",
-			sweepRefs(p), wRef, p.detail, sweepMeta(p))
-		return lead + style.Render(detail) + pad + radarFaintStyle.Render(sweepMeta(p))
+	// Inert rows sit under the checkboxes rather than beside them: blanks where
+	// a "[x]" would be, so the id column still lines up.
+	inertRow := func(p sweepPlan) string {
+		lead, subject, why, meta := m.sweepLine("   ", p, c)
+		return lead + radarFaintStyle.Render(subject) +
+			sweepWhyStyle(p).Render(why) + radarFaintStyle.Render(meta)
 	}
 	if len(wake) > 0 {
 		b.WriteString("\n" + radarHeaderStyle.Render(" NEEDS YOU") + "\n")
 		for _, p := range wake {
-			b.WriteString(inertRow(p, radarHotStyle) + "\n")
+			b.WriteString(inertRow(p) + "\n")
 		}
 	}
 	if len(quiet) > 0 {
 		if m.showAll {
 			b.WriteString("\n" + radarHeaderStyle.Render(" QUIET") + "\n")
 			for _, p := range quiet {
-				b.WriteString(inertRow(p, radarFaintStyle) + "\n")
+				b.WriteString(inertRow(p) + "\n")
 			}
 		} else {
 			b.WriteString("\n" + radarFaintStyle.Render(
@@ -944,13 +933,64 @@ func (m sweepModel) View() string {
 	return b.String()
 }
 
-// sweepMaxIDWidth caps the id column. A Linear id is 8 characters and a kickoff
-// slug can be 55; letting the longest one size the column costs every other row
-// its detail.
+// Caps on the fixed columns, so one outlier row can't starve the subject
+// column every other row is read for. A Linear id is 8 characters and a kickoff
+// slug can be 55. A why is usually "merged and clean" but a teardown blocker
+// carries a jj error and runs long. sweepMinSubject is the floor the subject
+// keeps on a narrow terminal, below which it stops being worth showing.
 const (
 	sweepMaxIDWidth  = 30
 	sweepMaxRefWidth = 26
+	sweepMaxWhyWidth = 30
+	sweepMinSubject  = 12
 )
+
+// sweepCols is the board's column grid, resolved once per frame across every
+// group so the whole thing reads as one table rather than four that each found
+// their own alignment. The fixed columns size to their content (capped); the
+// subject takes whatever's left.
+type sweepCols struct {
+	id      int
+	ref     int // 0 when no row on the board has a PR, and then the column vanishes
+	subject int // 0 means no terminal width yet: don't clip, don't pad
+	why     int
+	meta    int
+}
+
+func (m sweepModel) columns() sweepCols {
+	var c sweepCols
+	measure := func(p sweepPlan) {
+		c.id = max(c.id, lipgloss.Width(p.status.ID))
+		c.ref = max(c.ref, lipgloss.Width(sweepRefs(p)))
+		c.why = max(c.why, lipgloss.Width(p.detail))
+		c.meta = max(c.meta, lipgloss.Width(sweepMeta(p)))
+	}
+	for _, it := range m.items {
+		measure(it.plan)
+	}
+	for _, p := range m.inert {
+		measure(p)
+	}
+	c.id = min(c.id, sweepMaxIDWidth)
+	c.why = min(c.why, sweepMaxWhyWidth)
+	if m.width > 0 {
+		// The subject takes the slack: everything the fixed columns don't want,
+		// less the two single-space gutters that follow it and one column held
+		// back from the right edge.
+		c.subject = max(sweepMinSubject, m.width-c.leadWidth()-c.why-c.meta-3)
+	}
+	return c
+}
+
+// leadWidth is everything left of the subject: the checkbox, the id, and the
+// refs when any row has them.
+func (c sweepCols) leadWidth() int {
+	w := 1 + 3 + 1 + c.id + 2
+	if c.ref > 0 {
+		w += c.ref + 2
+	}
+	return w
+}
 
 // sweepRefs renders a row's PR refs ("runtime#971"). Merge rows name only the
 // PRs they'd land; every other row names all of them, so a rig's scope is
@@ -988,55 +1028,85 @@ func sweepMeta(p sweepPlan) string {
 	return strings.Join(parts, " · ")
 }
 
-// sweepLine lays out one board line's columns and right-aligns the metadata
-// tail against the terminal edge. It hands the pieces back rather than a
-// finished string so the caller can style the detail, or reverse-video the lot
-// for the cursor row.
-func (m sweepModel) sweepLine(lead, refs string, wRef int, detail, meta string) (outLead, outDetail, pad string) {
-	if wRef > 0 {
-		lead += padRight(refs, wRef) + "  "
+// sweepLine lays one row onto the shared grid and hands its four regions back
+// rather than a finished string, so the caller can colour the subject by
+// selection and the why by urgency — or reverse-video the lot for the cursor
+// row. Concatenated in order they are the whole line.
+//
+// box is the three-cell checkbox, or blanks for the read-only groups, which is
+// what keeps the id column aligned across rows you can act on and rows you
+// can't.
+func (m sweepModel) sweepLine(box string, p sweepPlan, c sweepCols) (lead, subject, why, meta string) {
+	lead = " " + box + " " + padRight(sweepClip(p.status.ID, c.id), c.id) + "  "
+	if c.ref > 0 {
+		lead += padRight(sweepRefs(p), c.ref) + "  "
 	}
-	detail = sweepClip(detail, m.detailWidth(lipgloss.Width(lead)+lipgloss.Width(meta)+2))
-	if meta == "" || m.width <= 0 {
-		return lead, detail, ""
+	subject = sweepClip(sweepSubject(p), c.subject)
+	why = sweepClip(p.detail, c.why)
+	meta = sweepMeta(p)
+	if c.subject == 0 {
+		// No WindowSizeMsg yet, so there's no edge to align against. Keep the
+		// columns separated and let the terminal wrap.
+		return lead, subject, "  " + why, "  " + meta
 	}
-	gap := max(2, m.width-lipgloss.Width(lead)-lipgloss.Width(detail)-lipgloss.Width(meta)-1)
-	return lead, detail, strings.Repeat(" ", gap)
+	return lead, padRight(subject, c.subject) + " ",
+		padRight(why, c.why) + " ", padLeft(meta, c.meta)
 }
 
-// sweepTail is a row's free-text column. Merge rows carry PR titles: a branch
-// name and a rig id are often the same slug twice, so "approved, CI clear" —
-// true of every row in the group by construction — left you unable to tell which
-// PR you were about to land. Everything else shows why it's here. A rig spanning
-// repos names each title, since one checkbox lands all of them.
-func sweepTail(p sweepPlan) string {
-	if p.action != actionMerge {
-		return p.detail
+// sweepWhyStyle colours the why column. Red is reserved for a why that names
+// something broken — today that's exactly the wake rows' failing CI, and it's
+// the whole reason those rows left the quiet section. Before the subject
+// column existed the red covered the entire line; now it sits on the four
+// words that earned it and the title beside them stays readable.
+func sweepWhyStyle(p sweepPlan) lipgloss.Style {
+	if p.action == actionWake {
+		return radarHotStyle
 	}
-	titles := make([]string, 0, len(p.merges))
-	for _, pr := range p.merges {
-		if pr.Title != "" {
-			titles = append(titles, pr.Title)
+	return radarFaintStyle
+}
+
+// sweepSubject is a row's answer to "what is this rig about" — the column that
+// keeps the board from being a list of ticket numbers you have to remember.
+// Every group gets one, which is the point: MERGE rows already carried PR
+// titles and were the only group that read well, while TEAR DOWN showed "no PR
+// on record" three times over and left you guessing which of three ticket
+// numbers you were about to delete.
+//
+// The ladder runs PR title, then task title, then agent session title. A PR
+// title is the most authoritative statement of what a rig produced, and it's
+// the one you most want in front of you before pressing enter on a merge. The
+// task title is free (it's already on the status, and radar has been rendering
+// it all along) and always present, so the third rung almost never fires — it's
+// there for a manifest written before the field existed, or one edited by hand.
+func sweepSubject(p sweepPlan) string {
+	if t := sweepPRTitles(p); t != "" {
+		return t
+	}
+	if p.status.Title != "" {
+		return p.status.Title
+	}
+	return p.agentTitle
+}
+
+// sweepPRTitles is the PR rung of the ladder. A merge row names every PR it
+// would land, because one checkbox lands all of them and you should see what
+// you're committing to. Everywhere else a lone PR speaks for the rig and
+// several don't — two titles joined overrun a column you're only reading for
+// context — so a multi-PR rig falls through to its own title instead.
+func sweepPRTitles(p sweepPlan) string {
+	if p.action == actionMerge {
+		titles := make([]string, 0, len(p.merges))
+		for _, pr := range p.merges {
+			if pr.Title != "" {
+				titles = append(titles, pr.Title)
+			}
 		}
+		return strings.Join(titles, " · ")
 	}
-	tail := strings.Join(titles, " · ")
-	if tail == "" {
-		tail = p.detail // no titles came back; better than a blank row
+	if len(p.status.PRs) == 1 {
+		return p.status.PRs[0].Title
 	}
-	if len(p.held) > 0 {
-		tail += " (holding " + strings.Join(p.held, ", ") + ")"
-	}
-	return tail
-}
-
-// detailWidth is what's left for the free-text detail column after the fixed
-// ones. Zero width (no WindowSizeMsg yet) means don't clip at all rather than
-// clip to nothing.
-func (m sweepModel) detailWidth(used int) int {
-	if m.width <= 0 {
-		return 0
-	}
-	return max(12, m.width-used-2)
+	return ""
 }
 
 // sweepClip trims s to w display cells, marking the cut with an ellipsis. Only
@@ -1065,18 +1135,19 @@ func sweepClip(s string, w int) string {
 // renderItem draws one checkable row. The cursor reverses the whole line, so
 // the row's own colors are dropped there — reverse video over colored text is
 // unreadable in half the palettes people run.
-func (m sweepModel) renderItem(i int, it sweepItem, wID, wRef int) string {
+//
+// Selection state rides the subject rather than the why, because the subject
+// is the widest cell on the row and so the one that reads as "this is queued"
+// from across the board.
+func (m sweepModel) renderItem(i int, it sweepItem, c sweepCols) string {
 	box := "[ ]"
 	if it.selected {
 		box = "[x]"
 	}
-	id := padRight(sweepClip(it.plan.status.ID, wID), wID)
-	meta := sweepMeta(it.plan)
-	lead, detail, pad := m.sweepLine(
-		" "+box+" "+id+"  ", sweepRefs(it.plan), wRef, sweepTail(it.plan), meta)
+	lead, subject, why, meta := m.sweepLine(box, it.plan, c)
 
 	if i == m.cursor {
-		return radarCursorStyle.Render(lead + detail + pad + meta + " ")
+		return radarCursorStyle.Render(lead + subject + why + meta + " ")
 	}
 	style := radarGoodStyle
 	if it.plan.action == actionDown {
@@ -1085,7 +1156,8 @@ func (m sweepModel) renderItem(i int, it sweepItem, wID, wRef int) string {
 	if !it.selected {
 		style = radarFaintStyle
 	}
-	return lead + style.Render(detail) + pad + radarFaintStyle.Render(meta)
+	return lead + style.Render(subject) +
+		sweepWhyStyle(it.plan).Render(why) + radarFaintStyle.Render(meta)
 }
 
 // sweepPick puts the board up immediately and runs the scan behind it, feeding

@@ -36,6 +36,12 @@ losing the rig would annoy you, gating on `sweepStaleAfter` (reap's 24h window)
 for rigs with no PR on record. Don't reach for `agentActiveWindow` there — it's
 three minutes and exists for the working/idle dot.
 
+Each row is subject + why, not one blurred column: `sweepSubject` says what the
+rig is about (PR title, then `status.Title`, then `claudeSessionTitle`) and
+`p.detail` says why it's in this group. Column widths come from `m.columns()`
+once per frame across every group, so all four share one grid — size a column
+inside a group and the board stops reading as a table.
+
 The tmux layout is a Recto carousel: `main/<repo>` holds the task-level agent
 and the active repo's persistent Recto, while the other repos wait as
 full-screen Recto windows. `rig recto <repo> [recto args...]` promotes one and

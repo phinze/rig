@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -27,12 +28,21 @@ func claudeProjectDirName(path string) string {
 // any cwd under it (claude is spawned in the primary repo workspace, not
 // the basedir). Returns 0 when nothing is found.
 func claudeSessionActivity(home, basedir string) int64 {
+	_, latest := claudeNewestSession(home, basedir)
+	return latest
+}
+
+// claudeNewestSession returns the path and mtime (unix seconds) of the most
+// recently touched claude session recorded for cwds inside the rig's basedir.
+// Empty path and 0 when the rig has no claude session at all.
+func claudeNewestSession(home, basedir string) (string, int64) {
 	mangled := claudeProjectDirName(basedir)
 	root := filepath.Join(home, ".claude", "projects")
 	entries, err := os.ReadDir(root)
 	if err != nil {
-		return 0
+		return "", 0
 	}
+	var newest string
 	var latest int64
 	for _, e := range entries {
 		if !e.IsDir() {
@@ -41,7 +51,8 @@ func claudeSessionActivity(home, basedir string) int64 {
 		if e.Name() != mangled && !strings.HasPrefix(e.Name(), mangled+"-") {
 			continue
 		}
-		files, err := os.ReadDir(filepath.Join(root, e.Name()))
+		dir := filepath.Join(root, e.Name())
+		files, err := os.ReadDir(dir)
 		if err != nil {
 			continue
 		}
@@ -51,12 +62,64 @@ func claudeSessionActivity(home, basedir string) int64 {
 			}
 			if info, err := f.Info(); err == nil {
 				if t := info.ModTime().Unix(); t > latest {
-					latest = t
+					latest, newest = t, filepath.Join(dir, f.Name())
 				}
 			}
 		}
 	}
-	return latest
+	return newest, latest
+}
+
+// claudeTitleTail bounds how much of a session transcript we'll read looking
+// for its title. Sessions run to tens of megabytes and this is called once per
+// rig inside sweep's scan, so a full read isn't on. It doesn't need to be:
+// Claude Code re-emits the ai-title record every time it refines the title, so
+// the newest one sits at the very end of the file — on a 13MB transcript the
+// last one landed in the final 0.1%. 256KB is enormous headroom for that.
+const claudeTitleTail = 256 << 10
+
+// claudeSessionTitle reads the name the agent gave its own conversation. It's
+// the last rung of the sweep board's subject ladder: a rig with no PR and no
+// task title still has an agent that named what it's doing.
+//
+// Reading a tail means the first line in the buffer is usually cut mid-JSON.
+// That's fine — it fails to parse and gets skipped like any other line we
+// don't recognise — and it's why this scans forward keeping the last match
+// rather than stopping at the first one it sees.
+//
+// Claude-only: Codex rollouts and Antigravity's history record a cwd and a
+// timestamp but never a title, so those rigs fall through to "".
+func claudeSessionTitle(home, basedir string) string {
+	path, _ := claudeNewestSession(home, basedir)
+	if path == "" {
+		return ""
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	if info, err := f.Stat(); err == nil && info.Size() > claudeTitleTail {
+		if _, err := f.Seek(info.Size()-claudeTitleTail, io.SeekStart); err != nil {
+			return ""
+		}
+	}
+	title := ""
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	for sc.Scan() {
+		var row struct {
+			Type    string `json:"type"`
+			AITitle string `json:"aiTitle"`
+		}
+		if json.Unmarshal(sc.Bytes(), &row) != nil || row.Type != "ai-title" {
+			continue
+		}
+		if row.AITitle != "" {
+			title = row.AITitle
+		}
+	}
+	return title
 }
 
 // codexSessionActivity returns the newest mtime of a Codex rollout whose cwd

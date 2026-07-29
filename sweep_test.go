@@ -204,10 +204,10 @@ func TestSweepMultiRepoMergeRow(t *testing.T) {
 	if got, want := sweepRefs(p), "runtime#971 cloud#42"; got != want {
 		t.Errorf("refs = %q, want %q", got, want)
 	}
-	tail := sweepTail(p)
+	subject := sweepSubject(p)
 	for _, title := range []string{"Enable distributed runners", "Wire the runner UI"} {
-		if !strings.Contains(tail, title) {
-			t.Errorf("tail = %q, want it to name %q", tail, title)
+		if !strings.Contains(subject, title) {
+			t.Errorf("subject = %q, want it to name %q", subject, title)
 		}
 	}
 
@@ -400,16 +400,100 @@ func TestSweepTeardownLockContentionIsASkip(t *testing.T) {
 	}
 }
 
-// Merge rows show titles, but a PR whose title didn't come back must still
-// render something rather than a blank row.
-func TestSweepTailFallsBackWithoutTitles(t *testing.T) {
-	p := sweepPlan{
-		action: actionMerge,
-		detail: "approved, CI clear",
-		merges: []rigPR{{Repo: "o/a", prInfo: prInfo{Number: 1}}},
+// The subject ladder, rung by rung. Each one exists because the one above it
+// can genuinely be missing: a PR title that didn't come back, then a manifest
+// too old (or too hand-edited) to carry a title.
+func TestSweepSubjectLadder(t *testing.T) {
+	withPR := sweepPlan{
+		status:     rigStatus{Title: "task title", PRs: []rigPR{{prInfo: prInfo{Number: 1, Title: "PR title"}}}},
+		agentTitle: "agent title",
+		action:     actionMerge,
+		merges:     []rigPR{{Repo: "o/a", prInfo: prInfo{Number: 1, Title: "PR title"}}},
 	}
-	if got := sweepTail(p); got != "approved, CI clear" {
-		t.Errorf("tail = %q, want the detail as fallback", got)
+	if got := sweepSubject(withPR); got != "PR title" {
+		t.Errorf("subject = %q, want the PR title to win", got)
+	}
+
+	// A PR gh knew about but couldn't name falls through rather than rendering
+	// an empty column.
+	noTitle := withPR
+	noTitle.merges = []rigPR{{Repo: "o/a", prInfo: prInfo{Number: 1}}}
+	noTitle.status.PRs = noTitle.merges
+	if got := sweepSubject(noTitle); got != "task title" {
+		t.Errorf("subject = %q, want the task title once the PR has none", got)
+	}
+
+	untitled := noTitle
+	untitled.status.Title = ""
+	if got := sweepSubject(untitled); got != "agent title" {
+		t.Errorf("subject = %q, want the agent session title as the last rung", got)
+	}
+}
+
+// A lone PR speaks for its rig, so a wake or teardown row shows its title. Two
+// PRs don't — joined they overrun a column you're only reading for context —
+// so a multi-repo rig falls back to its own title outside the MERGE group,
+// where the joined titles are the point.
+func TestSweepSubjectMultiPRFallsBackOutsideMerge(t *testing.T) {
+	p := sweepPlan{
+		status: rigStatus{Title: "estimate review costs", PRs: []rigPR{
+			{Repo: "o/reviewagent", prInfo: prInfo{Number: 19, Title: "Add a cost model"}},
+			{Repo: "o/rfd", prInfo: prInfo{Number: 156, Title: "RFD-95: promote Biscuit"}},
+		}},
+		action: actionWake,
+		detail: "CI failing on rfd#156",
+	}
+	if got := sweepSubject(p); got != "estimate review costs" {
+		t.Errorf("subject = %q, want the rig's own title for a multi-PR wake row", got)
+	}
+
+	solo := p
+	solo.status.PRs = solo.status.PRs[:1]
+	if got := sweepSubject(solo); got != "Add a cost model" {
+		t.Errorf("subject = %q, want the lone PR's title", got)
+	}
+}
+
+// Every group gets a subject and keeps its why, and both start in the same
+// screen column across all four groups. The board reading as one table is the
+// point — a subject column that shifted between MERGE and NEEDS YOU would be
+// worse than no subject column at all.
+func TestSweepBoardSubjectAndWhyShareOneGrid(t *testing.T) {
+	m := newSweepModel(testPlans(), false)
+	m.width, m.showAll = 160, true
+	view := m.View()
+
+	subjectAt, whyAt := -1, -1
+	for _, tc := range []struct{ id, subject, why string }{
+		{"mir-982", "mir-982 title", "approved, CI clear"},
+		{"old-rig", "old-rig title", "merged and clean"},
+		{"mir-1364", "mir-1364 title", "review came back with changes"},
+		{"mir-822", "mir-822 title", "awaiting review"},
+	} {
+		line := ""
+		for l := range strings.SplitSeq(view, "\n") {
+			if strings.Contains(l, tc.id) {
+				line = l
+				break
+			}
+		}
+		if line == "" {
+			t.Fatalf("no row for %s in:\n%s", tc.id, view)
+		}
+		s, w := strings.Index(line, tc.subject), strings.Index(line, tc.why)
+		if s < 0 || w < 0 {
+			t.Fatalf("row %s = %q, want it to carry both %q and %q", tc.id, line, tc.subject, tc.why)
+		}
+		if subjectAt < 0 {
+			subjectAt, whyAt = s, w
+			continue
+		}
+		if s != subjectAt {
+			t.Errorf("row %s starts its subject at %d, want %d (one grid across groups)", tc.id, s, subjectAt)
+		}
+		if w != whyAt {
+			t.Errorf("row %s starts its why at %d, want %d (one grid across groups)", tc.id, w, whyAt)
+		}
 	}
 }
 
