@@ -33,6 +33,8 @@ func main() {
 		err = runRecto(args)
 	case "ls":
 		err = runLs(args)
+	case "notify":
+		err = runNotify(args)
 	case "switch", "cd": // cd is a retained alias
 		err = runSwitch(args)
 	case "radar":
@@ -133,6 +135,13 @@ usage:
                             (for example: rig recto cloud focus src/app.go:42)
   rig ls [--full]           list rigs in flight
                             (--full adds PR/CI, one gh call per repo)
+  rig notify post --source S --key K --title T [--body B] [--level info|warn|error] [--rig ID]
+  rig notify list [--format=json|table]
+  rig notify dismiss <source/key>... | --all
+                            the ambient inbox: anything that isn't a rig (crons,
+                            watchers, nix-config-sync) posts here and it shows up
+                            in ls, sweep and radar. Re-posting a key updates one
+                            entry and counts the repeats instead of piling up
   rig switch [query]        jump to a rig's tmux session, most-recently-used
                             first (fzf if ambiguous; aliased as rig cd)
   rig radar                 live TUI board over every rig, meant for a tmux

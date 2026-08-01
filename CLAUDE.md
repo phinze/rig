@@ -42,6 +42,17 @@ rig is about (PR title, then `status.Title`, then `claudeSessionTitle`) and
 once per frame across every group, so all four share one grid — size a column
 inside a group and the board stops reading as a table.
 
+`rig notify` is the ambient inbox, and it's the one part of rig that isn't
+rig-scoped. Tools that aren't rigs (crons, watchers, `nix-config-sync`) post to
+it and the entries surface in `ls`, `sweep`, and `radar`. Identity is
+`(source, key)` rather than a generated id, because the archetypal poster is an
+hourly job saying the same thing every hour: re-posting a key updates one entry
+and bumps `Count`, so you read "stalled, 37 runs" instead of scrolling 37 rows.
+An entry may name a rig, which pins it to that rig's row; most won't, and those
+banner above the table. Each board picks its own density — `ls` and `sweep`
+print every loose entry, the radar prints one summary line because it lives in a
+popup where rows are expensive.
+
 The tmux layout is a Recto carousel: `main/<repo>` holds the task-level agent
 and the active repo's persistent Recto, while the other repos wait as
 full-screen Recto windows. `rig recto <repo> [recto args...]` promotes one and

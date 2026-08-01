@@ -111,6 +111,11 @@ func runLs(args []string) error {
 		enrichWithPRs(statuses)
 	}
 
+	inbox := activeNotifications()
+	for i := range statuses {
+		statuses[i].Notifications = notificationsForRig(inbox, statuses[i].ID)
+	}
+
 	if jsonOut {
 		blob, err := encodeRigsJSON(statuses)
 		if err != nil {
@@ -120,19 +125,45 @@ func runLs(args []string) error {
 		return nil
 	}
 
+	// Loose inbox entries belong to no rig, so they can't ride a row. They go
+	// above the table on purpose: a stalled background job is exactly the thing
+	// you'd never scroll down to find.
+	for _, line := range notifyBanner(looseNotifications(inbox)) {
+		fmt.Fprintln(os.Stderr, line)
+	}
+
 	if len(statuses) == 0 {
 		fmt.Fprintln(os.Stderr, "rig: no rigs in flight")
 		return nil
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
 	for _, s := range statuses {
+		title := s.Title
+		if mark := rigNotifyMark(s); mark != "" {
+			title = mark + " " + title
+		}
 		if full {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", s.ID, age(s.Created), agentMarker(s), prMarker(s), s.Title)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", s.ID, age(s.Created), agentMarker(s), prMarker(s), title)
 		} else {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", s.ID, age(s.Created), agentMarker(s), s.Title)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", s.ID, age(s.Created), agentMarker(s), title)
 		}
 	}
 	return w.Flush()
+}
+
+// rigNotifyMark is the badge a rig-pinned notification puts on that rig's row,
+// at the loudest level pinned to it.
+func rigNotifyMark(s rigStatus) string {
+	worst := ""
+	for _, n := range s.Notifications {
+		if worst == "" || notifyLevels[n.Level] > notifyLevels[worst] {
+			worst = n.Level
+		}
+	}
+	if worst == "" {
+		return ""
+	}
+	return notifyLevelMark(worst)
 }
 
 // rigStatus is the enriched view rig ls renders: a rigInfo plus the live
@@ -149,6 +180,10 @@ type rigStatus struct {
 	Parked      bool       `json:"parked"`                // dormant, awaiting review
 	LastActive  *time.Time `json:"last_active,omitempty"` // newest agent turn, if any
 	PRs         []rigPR    `json:"prs,omitempty"`         // populated only under --full
+
+	// Notifications are the inbox entries pinned to this rig. Loose entries
+	// (the common case) belong to no rig and never appear here.
+	Notifications []notification `json:"notifications,omitempty"`
 
 	// radar-only, never serialized: a row that's a bare tmux session (not a
 	// rig) carries bare=true and the raw session name to attach to. A row in the

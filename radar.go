@@ -167,6 +167,11 @@ type radarModel struct {
 	fetchedAt map[string]time.Time // slug → when its PRs were fetched
 	pending   map[string]bool      // slug → PR fetch in flight
 
+	// Loose inbox entries, rendered as one summary line above the board. The
+	// radar lives in a tmux popup where every row costs, so it says how many and
+	// how loud rather than reprinting each — `rig notify list` is the detail view.
+	inbox []notification
+
 	mode    radarMode
 	newDirs []string // zoxide frecency list, fetched when the NEW picker opens
 	filter  string   // fuzzy query; empty = show everything
@@ -549,6 +554,7 @@ func (m *radarModel) apply(scan radarScanMsg) {
 	}
 	m.scanErr = nil
 	m.attached = scan.attached
+	m.inbox = looseNotifications(activeNotifications())
 	// The selection to preserve is what the user is looking at now, so read
 	// it before the sections are replaced.
 	selected := m.selectedKey()
@@ -1458,6 +1464,7 @@ func (m radarModel) View() string {
 	if typing {
 		prompt = radarFaintStyle.Render("/ ") + m.filter + radarFaintStyle.Render("▌") + "\n\n"
 	}
+	prompt = m.inboxLine() + prompt
 
 	var footer string
 	switch {
@@ -1682,6 +1689,29 @@ func (m radarModel) View() string {
 		out += "\n" + radarErrStyle.Render("scan: "+m.scanErr.Error())
 	}
 	return out
+}
+
+// inboxLine is the radar's whole notification surface: one line naming the
+// loudest entry, with a count when there's more behind it. A single source
+// nagging every hour is the case worth reading at a glance; anything richer is
+// what `rig notify list` is for.
+func (m radarModel) inboxLine() string {
+	if len(m.inbox) == 0 {
+		return ""
+	}
+	top := m.inbox[0] // activeNotifications sorts loudest-then-newest first
+	line := fmt.Sprintf("%s %s: %s", notifyLevelMark(top.Level), top.Source, top.Title)
+	if rest := len(m.inbox) - 1; rest > 0 {
+		line += fmt.Sprintf("  +%d", rest)
+	}
+	style := radarWarnStyle
+	switch top.Level {
+	case "error":
+		style = radarErrStyle
+	case "info":
+		style = radarFaintStyle
+	}
+	return style.Render(" "+line) + "\n\n"
 }
 
 // viewportChrome reports the furniture the View spends around the body:

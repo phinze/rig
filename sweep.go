@@ -682,6 +682,11 @@ type sweepModel struct {
 	width   int
 	height  int
 
+	// Loose inbox entries, banner'd above the groups. A sweep is the pass where
+	// you decide what to do about everything, so a background job that has been
+	// failing since Tuesday belongs in it even though it isn't a rig.
+	inbox []notification
+
 	// The scan runs while the board is already on screen, so the model starts
 	// empty and loading. phase is whatever the scan last said it was doing.
 	loading bool
@@ -717,6 +722,7 @@ func newSweepModel(plans []sweepPlan, dryRun bool) sweepModel {
 // only read.
 func (m *sweepModel) load(plans []sweepPlan) {
 	m.plans = plans
+	m.inbox = looseNotifications(activeNotifications())
 	m.items, m.inert = nil, nil
 	for _, p := range plans {
 		switch p.action {
@@ -851,6 +857,13 @@ func (m sweepModel) View() string {
 	count := fmt.Sprintf("%d rigs ", total)
 	gap := max(1, m.width-lipgloss.Width(title)-lipgloss.Width(count))
 	b.WriteString(title + strings.Repeat(" ", gap) + radarFaintStyle.Render(count) + "\n")
+
+	if lines := notifyBanner(m.inbox); len(lines) > 0 {
+		b.WriteString("\n" + radarHeaderStyle.Render(" INBOX") + "\n")
+		for _, line := range lines {
+			b.WriteString("   " + radarWarnStyle.Render(line) + "\n")
+		}
+	}
 
 	c := m.columns()
 
