@@ -142,8 +142,7 @@ func attachExistingReviewRig(pr *prRef) (bool, error) {
 
 // reviewPickupPR builds a read-only review rig: the PR head fetched fork-safe
 // via pull/N/head, kind=review (done when you've posted a review, never gated
-// on merge), recto --pr showing just the branch's diff, and the agent dropped
-// straight into /review-pr.
+// on merge), and the agent dropped straight into /review-pr.
 func reviewPickupPR(pr *prRef, meta prMeta, pick *agentPick) error {
 	// Past every resume check, so this is a rig we're about to build: `rig review
 	// <url>` prompts for nothing else, and this is where its agent bar gets a turn.
@@ -184,7 +183,7 @@ func reviewPickupPR(pr *prRef, meta prMeta, pick *agentPick) error {
 	}
 
 	sess := sessionSpec{
-		rectoCmd: "recto --pr",
+		rectoCmd: rectoCommand(),
 		repo:     repo.Name,
 		agent:    pick.kind,
 		prompt: fmt.Sprintf(
@@ -267,8 +266,12 @@ func authorPickupPR(pr *prRef, meta prMeta, pick *agentPick) error {
 		return err
 	}
 
+	// This pickup is the sharpest case for rectoCommand's `--pr`: the workspace
+	// lands on branch@origin with a fresh empty change on top, so `@-` is the PR
+	// head and a diff against it is empty. You'd come back to your own PR and be
+	// shown nothing. The merge-base shows the PR.
 	sess := sessionSpec{
-		rectoCmd: "recto",
+		rectoCmd: rectoCommand(),
 		repo:     repo.Name,
 		agent:    pick.kind,
 		prompt: fmt.Sprintf(

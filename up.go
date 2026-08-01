@@ -93,7 +93,7 @@ func runUp(args []string) error {
 	// prompt. Linear-specific phrasing for now; when a second tracker
 	// arrives we'll dispatch on it.
 	sess := sessionSpec{
-		rectoCmd: "recto",
+		rectoCmd: rectoCommand(),
 		repo:     repo.Name,
 		agent:    pick.kind,
 		prompt: fmt.Sprintf(

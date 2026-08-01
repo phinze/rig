@@ -221,20 +221,29 @@ func findRectoPane(panes []rigTmuxPane, repo string) (rigTmuxPane, bool) {
 	return rigTmuxPane{}, false
 }
 
-func rectoCommand(m manifest) string {
-	if m.isReview() {
-		return "recto --pr"
-	}
-	return "recto"
+// rectoCommand is how every Recto in a rig starts, review or authoring. `--pr`
+// picks the trunk merge-base as the opening base instead of `@-`, which is the
+// rig's own unit of attention: a rig is one task, and the task's diff is the
+// whole stack that becomes the PR, not just whatever commit is on top right now.
+// The two agree at rig birth (a fresh workspace sits on trunk, so merge-base ==
+// `@-` == trunk) and only diverge once the stack is two deep — exactly when you
+// want the wider view. It costs nothing to be wrong about: `--pr` moves the
+// starting index within Recto's base ring rather than changing the ring, so `b`
+// cycles back to `@-` in one keystroke. And it's the richer starting point, not
+// merely the wider one — Recto's per-rev narrowing enumerates `base..@`, so from
+// the merge-base you can drill into any commit in the stack, while from `@-` you
+// have one rev and must cycle the base to see anything else.
+func rectoCommand() string {
+	return "recto --pr"
 }
 
-func ensureRepoRecto(session, basedir, repo string, m manifest, panes []rigTmuxPane) ([]rigTmuxPane, error) {
+func ensureRepoRecto(session, basedir, repo string, panes []rigTmuxPane) ([]rigTmuxPane, error) {
 	if _, ok := findRectoPane(panes, repo); ok {
 		return panes, nil
 	}
 	repoDir := filepath.Join(basedir, repo)
 	if w, ok := findRepoWindow(panes, repo, ""); ok {
-		pane, err := tmuxSplitHID(w.PaneID, repoDir, rectoCommand(m))
+		pane, err := tmuxSplitHID(w.PaneID, repoDir, rectoCommand())
 		if err != nil {
 			return nil, err
 		}
@@ -242,7 +251,7 @@ func ensureRepoRecto(session, basedir, repo string, m manifest, panes []rigTmuxP
 			return nil, err
 		}
 	} else {
-		pane, window, err := tmuxNewCommandWindow(session, repo, repoDir, rectoCommand(m))
+		pane, window, err := tmuxNewCommandWindow(session, repo, repoDir, rectoCommand())
 		if err != nil {
 			return nil, err
 		}
@@ -261,7 +270,7 @@ func promoteRecto(session, basedir, repo string, m manifest) error {
 	if err != nil {
 		return err
 	}
-	panes, err = ensureRepoRecto(session, basedir, repo, m, panes)
+	panes, err = ensureRepoRecto(session, basedir, repo, panes)
 	if err != nil {
 		return fmt.Errorf("starting %s recto: %w", repo, err)
 	}

@@ -48,6 +48,12 @@ full-screen Recto windows. `rig recto <repo> [recto args...]` promotes one and
 optionally drives it. Ad hoc shells are ordinary splits from a repo's Recto,
 not permanent empty panes.
 
+Every Recto starts with `--pr`, review rig or authoring rig, because a rig is
+one task and the task's diff is the whole stack rather than whatever commit is
+on top. `rectoCommand` is the single place that decides, and every launch site
+goes through it — see its comment for why the default is nearly free (`b`
+cycles back to `@-` in one keystroke).
+
 The agent is selectable with `--agent`, which takes either the long name or the
 short one it goes by in the picker: `cld`, `cdx`, `agy`. It defaults to Claude
 for compatibility, and `RIG_AGENT` (which every rig exports) moves the starting

@@ -94,7 +94,7 @@ func runNew(args []string) error {
 	}
 
 	sess := sessionSpec{
-		rectoCmd: "recto",
+		rectoCmd: rectoCommand(),
 		repo:     repo.Name,
 		agent:    pick.kind,
 		prompt:   kickoffPrompt(kickoff, context != ""),

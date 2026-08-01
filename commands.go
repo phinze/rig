@@ -66,7 +66,7 @@ func runAdd(args []string) error {
 	// for the occasional poke without making empty shells permanent furniture.
 	session := tmuxSessionName(basedir)
 	if tmuxHasSession(session) {
-		if pane, window, err := tmuxNewCommandWindow(session, repo, repoDest, "recto"); err == nil {
+		if pane, window, err := tmuxNewCommandWindow(session, repo, repoDest, rectoCommand()); err == nil {
 			_ = markRigPane(pane, rigPaneRecto, repo)
 			_ = markRigRepoWindow(window, repo)
 		}
