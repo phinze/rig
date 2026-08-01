@@ -22,7 +22,7 @@ var linearIDRe = regexp.MustCompile(`^[A-Z][A-Z0-9]*-[0-9]+$`)
 // fzf picker whose list is a fresh Linear search re-run on each keystroke,
 // seeded with whatever query the args spelled out. Returns "" (no error) when
 // the user cancels the picker.
-func resolveIssueID(args []string) (string, error) {
+func resolveIssueID(args []string, pick *agentPick) (string, error) {
 	if len(args) == 1 && linearIDRe.MatchString(args[0]) {
 		return args[0], nil
 	}
@@ -37,7 +37,7 @@ func resolveIssueID(args []string) (string, error) {
 	}
 	reloadCmd := shellQuote(exe) + " __issues {q}"
 
-	sel, err := fzfLiveSelect(reloadCmd, "Pick issue: ", strings.Join(args, " "))
+	sel, err := fzfLiveSelect(reloadCmd, "Pick issue: ", strings.Join(args, " "), pick)
 	if err != nil {
 		return "", err
 	}

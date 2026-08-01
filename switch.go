@@ -120,7 +120,7 @@ func pickRigStatus(statuses []rigStatus, args []string, prompt string) (*rigStat
 		// hidden lookup key (unique per rig, unlike id which can repeat).
 		rows[i] = fmt.Sprintf("%s\t%s\t%s\t%s", s.ID, switchStatusCol(s), s.Title, s.Slug)
 	}
-	sel, err := fzfSelect(rows, prompt)
+	sel, err := fzfSelect(rows, prompt, nil)
 	if err != nil {
 		return nil, err
 	}

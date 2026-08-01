@@ -57,7 +57,7 @@ func detectPrimaryRepo() (repoRef, error) {
 // there cwd is the only answer we can give without a flag. A zero repoRef (empty
 // Path) with a nil error means the picker was cancelled; callers abort quietly,
 // mirroring resolveIssueID's "" convention.
-func resolveRepo(override string) (repoRef, error) {
+func resolveRepo(override string, pick *agentPick) (repoRef, error) {
 	if override != "" {
 		owner, name, ok := strings.Cut(override, "/")
 		if !ok || owner == "" || name == "" {
@@ -100,7 +100,7 @@ func resolveRepo(override string) (repoRef, error) {
 		// column as the lookup key (paths are unique; short names may not be).
 		rows[i] = r.nameWithOwner() + "\t\t\t" + r.Path
 	}
-	sel, err := fzfSelect(rows, "Pick repo: ")
+	sel, err := fzfSelect(rows, "Pick repo: ", pick)
 	if err != nil {
 		return repoRef{}, err
 	}

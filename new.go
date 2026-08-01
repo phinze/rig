@@ -18,13 +18,14 @@ import (
 // hint to record. Like a repo added later with `rig add`, the workspace starts
 // at trunk() and branch discovery takes over once the work grows a bookmark.
 func runNew(args []string) error {
-	agent, args, err := extractAgentFlag(args)
+	pick, args, err := extractAgentFlag(args)
 	if err != nil {
 		return err
 	}
+	defer pick.cleanup()
 	repoFlag, args := extractRepoFlag(args)
 
-	kickoff, err := resolveKickoff(args)
+	kickoff, err := resolveKickoff(args, pick)
 	if err != nil {
 		return err
 	}
@@ -52,7 +53,7 @@ func runNew(args []string) error {
 	// The context step comes after the collision checks so a blob you just
 	// pasted is never thrown away by an "already exists", and before the repo
 	// picker so the two things you type stay adjacent.
-	context, ok, err := resolveKickoffContext(kickoff)
+	context, ok, err := resolveKickoffContext(kickoff, pick)
 	if err != nil {
 		return err
 	}
@@ -60,18 +61,21 @@ func runNew(args []string) error {
 		return nil // cancelled at the context step
 	}
 
-	repo, err := resolveRepo(repoFlag)
+	repo, err := resolveRepo(repoFlag, pick)
 	if err != nil {
 		return err
 	}
 	if repo.Path == "" {
 		return nil // repo picker cancelled
 	}
+	if ok, err := pick.ensurePicked(); err != nil || !ok {
+		return err
+	}
 	if err := ensureJJColocated(repo.Path); err != nil {
 		return fmt.Errorf("colocating jj on %s: %w", repo.Path, err)
 	}
 
-	m := manifest{ID: rigID, Title: kickoff, Agent: string(agent)}
+	m := manifest{ID: rigID, Title: kickoff, Agent: string(pick.kind)}
 	if err := createBasedir(basedir, m); err != nil {
 		return err
 	}
@@ -92,7 +96,7 @@ func runNew(args []string) error {
 	sess := sessionSpec{
 		rectoCmd: "recto",
 		repo:     repo.Name,
-		agent:    agent,
+		agent:    pick.kind,
 		prompt:   kickoffPrompt(kickoff, context != ""),
 	}
 	session, err := spawnSession(basedir, repoDest, sess)
@@ -126,7 +130,7 @@ func kickoffPrompt(kickoff string, hasContext bool) string {
 // with a keystroke; piped (`pbpaste | rig new fix the flake`) it's all of
 // stdin, which is also how an agent shell can hand a brief over without a TTY.
 // The bool reports whether to keep going: false means you cancelled.
-func resolveKickoffContext(kickoff string) (string, bool, error) {
+func resolveKickoffContext(kickoff string, pick *agentPick) (string, bool, error) {
 	if !stdinIsTTY() {
 		blob, err := io.ReadAll(os.Stdin)
 		if err != nil {
@@ -135,24 +139,28 @@ func resolveKickoffContext(kickoff string) (string, bool, error) {
 		return strings.TrimSpace(string(blob)), true, nil
 	}
 
-	m := newContextPromptModel(kickoff)
+	m := newContextPromptModel(kickoff, pick)
 	result, err := tea.NewProgram(m, tea.WithInput(os.Stdin), tea.WithOutput(os.Stderr)).Run()
 	if err != nil {
 		return "", false, fmt.Errorf("reading kickoff context: %w", err)
 	}
 	final := result.(contextPromptModel)
+	if pick != nil {
+		pick.kind = final.agent
+	}
 	return strings.TrimSpace(final.context), !final.cancelled, nil
 }
 
 type contextPromptModel struct {
 	kickoff   string
 	area      textarea.Model
+	agent     agentKind
 	context   string
 	cancelled bool
 	done      bool
 }
 
-func newContextPromptModel(kickoff string) contextPromptModel {
+func newContextPromptModel(kickoff string, pick *agentPick) contextPromptModel {
 	area := textarea.New()
 	area.Placeholder = "Paste anything else worth knowing…"
 	area.ShowLineNumbers = false
@@ -162,7 +170,7 @@ func newContextPromptModel(kickoff string) contextPromptModel {
 	area.SetWidth(76)
 	area.SetHeight(10)
 	area.Focus()
-	return contextPromptModel{kickoff: kickoff, area: area}
+	return contextPromptModel{kickoff: kickoff, area: area, agent: pick.offered()}
 }
 
 func (m contextPromptModel) Init() tea.Cmd { return textarea.Blink }
@@ -175,6 +183,12 @@ func (m contextPromptModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// double-spaced.
 		if msg.Paste {
 			m.area.InsertString(strings.ReplaceAll(string(msg.Runes), "\r\n", "\n"))
+			return m, nil
+		}
+		// Before the textarea sees it: the cycle key is ours, and letting it fall
+		// through would act on the blob you're pasting into.
+		if isAgentCycleKey(msg) {
+			m.agent = m.agent.next()
 			return m, nil
 		}
 		switch msg.Type {
@@ -206,15 +220,15 @@ func (m contextPromptModel) View() string {
 	if m.done {
 		return ""
 	}
-	return fmt.Sprintf("Kickoff: %s\nContext (optional):\n%s\nctrl-d done · esc skip · ctrl-c cancel\n",
-		m.kickoff, m.area.View())
+	return fmt.Sprintf("Kickoff: %s\nContext (optional):\n%s\n%s\nctrl-d done · esc skip · ctrl-c cancel\n",
+		m.kickoff, m.area.View(), agentBar(m.agent))
 }
 
 // resolveKickoff accepts an inline kickoff (`rig new investigate the flake`)
 // or asks for one when run interactively with no positional arguments. The
 // inline form keeps scripts and agent shells usable without pretending a pipe
 // can answer a terminal prompt.
-func resolveKickoff(args []string) (string, error) {
+func resolveKickoff(args []string, pick *agentPick) (string, error) {
 	if len(args) > 0 {
 		return strings.TrimSpace(strings.Join(args, " ")), nil
 	}
@@ -222,27 +236,32 @@ func resolveKickoff(args []string) (string, error) {
 		return "", fmt.Errorf("Kickoff prompt needs an interactive terminal; pass it inline, e.g. `rig new investigate the flake`")
 	}
 
-	m := newKickoffPromptModel()
+	m := newKickoffPromptModel(pick)
 	result, err := tea.NewProgram(m, tea.WithInput(os.Stdin), tea.WithOutput(os.Stderr)).Run()
 	if err != nil {
 		return "", fmt.Errorf("reading kickoff: %w", err)
 	}
-	return result.(kickoffPromptModel).kickoff, nil
+	final := result.(kickoffPromptModel)
+	if pick != nil {
+		pick.kind = final.agent
+	}
+	return final.kickoff, nil
 }
 
 type kickoffPromptModel struct {
 	input   textinput.Model
+	agent   agentKind
 	kickoff string
 	done    bool
 }
 
-func newKickoffPromptModel() kickoffPromptModel {
+func newKickoffPromptModel(pick *agentPick) kickoffPromptModel {
 	input := textinput.New()
 	input.Prompt = "Kickoff: "
 	input.Placeholder = "What are we working on?"
 	input.Width = 72
 	input.Focus()
-	return kickoffPromptModel{input: input}
+	return kickoffPromptModel{input: input, agent: pick.offered()}
 }
 
 func (m kickoffPromptModel) Init() tea.Cmd { return textinput.Blink }
@@ -250,6 +269,10 @@ func (m kickoffPromptModel) Init() tea.Cmd { return textinput.Blink }
 func (m kickoffPromptModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		if isAgentCycleKey(msg) {
+			m.agent = m.agent.next()
+			return m, nil
+		}
 		switch msg.Type {
 		case tea.KeyEnter:
 			m.kickoff = strings.TrimSpace(m.input.Value())
@@ -272,7 +295,7 @@ func (m kickoffPromptModel) View() string {
 	if m.done {
 		return ""
 	}
-	return m.input.View()
+	return m.input.View() + "\n\n" + agentBar(m.agent) + "\n"
 }
 
 // kickoffID turns the free-form kickoff into the stable identity used by the

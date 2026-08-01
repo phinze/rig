@@ -8,10 +8,11 @@ import (
 )
 
 func runUp(args []string) error {
-	agent, args, err := extractAgentFlag(args)
+	pick, args, err := extractAgentFlag(args)
 	if err != nil {
 		return err
 	}
+	defer pick.cleanup()
 	repoFlag, args := extractRepoFlag(args)
 
 	// A PR URL means "pick up my own work on this PR" — authoring, not the issue
@@ -22,11 +23,11 @@ func runUp(args []string) error {
 	// only per repo, and wouldn't match an issue-keyed rig anyway.
 	if len(args) >= 1 {
 		if pr := parsePRURL(args[0]); pr != nil {
-			return pickupPR(pr, "up", agent)
+			return pickupPR(pr, "up", pick)
 		}
 	}
 
-	id, err := resolveIssueID(args)
+	id, err := resolveIssueID(args, pick)
 	if err != nil {
 		return err
 	}
@@ -51,12 +52,18 @@ func runUp(args []string) error {
 		return err
 	}
 
-	repo, err := resolveRepo(repoFlag)
+	repo, err := resolveRepo(repoFlag, pick)
 	if err != nil {
 		return err
 	}
 	if repo.Path == "" {
 		return nil // repo picker cancelled
+	}
+
+	// Nothing prompted (an exact id plus --repo) means the agent bar hasn't been
+	// on screen yet, so it gets its own turn before we commit the choice.
+	if ok, err := pick.ensurePicked(); err != nil || !ok {
+		return err
 	}
 
 	basedir, err := basedirPath(tk.basedirName())
@@ -68,7 +75,7 @@ func runUp(args []string) error {
 		return fmt.Errorf("colocating jj on %s: %w", repo.Path, err)
 	}
 
-	m := manifest{ID: tk.rigID(), Title: tk.Title, Agent: string(agent)}
+	m := manifest{ID: tk.rigID(), Title: tk.Title, Agent: string(pick.kind)}
 	if err := createBasedir(basedir, m); err != nil {
 		return err
 	}
@@ -88,7 +95,7 @@ func runUp(args []string) error {
 	sess := sessionSpec{
 		rectoCmd: "recto",
 		repo:     repo.Name,
-		agent:    agent,
+		agent:    pick.kind,
 		prompt: fmt.Sprintf(
 			"Picking up %s (%s). Use the Linear MCP (it may take a few seconds to connect) to read the issue, mark it In Progress and assigned to me, then help me plan.",
 			tk.Identifier, tk.Title,

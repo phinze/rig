@@ -56,6 +56,11 @@ func main() {
 		// repository context from cwd on every invocation, including agent tool
 		// calls that change cwd without running a shell/direnv hook.
 		err = runGHShim(args)
+	case "__agent":
+		// Hidden: the fzf pickers bind ctrl-o to a transform-header that shells out
+		// here, since fzf can only hand state back through a file. Not meant to be
+		// typed.
+		err = runAgentPickCmd(args)
 	case "__issues":
 		// Hidden: fzf's live issue picker shells out to this on each keystroke to
 		// get fresh Linear-search rows. Not in usage; not meant to be typed.
@@ -99,8 +104,12 @@ usage:
                             of yours to resume; idempotent — re-up just switches.
                             Repo is chosen by an fzf picker over ghq repos, cwd
                             pre-selected on top, unless --repo names one)
-                            Agent is claude (default), codex, or antigravity;
-                            RIG_AGENT sets the default
+                            Agent is cld/claude (default), cdx/codex, or
+                            agy/antigravity. Every prompt a creation command
+                            already shows carries an agent bar that ctrl-o
+                            cycles; an invocation that prompts for nothing gets
+                            the bar on its own. --agent picks without asking,
+                            RIG_AGENT moves the starting position
   rig new [kickoff] [--repo owner/repo] [--agent AGENT]
                             start unticketed work in a normal authoring rig
                             (prompts for the kickoff when omitted, then for a

@@ -48,9 +48,25 @@ full-screen Recto windows. `rig recto <repo> [recto args...]` promotes one and
 optionally drives it. Ad hoc shells are ordinary splits from a repo's Recto,
 not permanent empty panes.
 
-The agent is selectable with `--agent claude|codex|antigravity` (or
-`RIG_AGENT`) and defaults to Claude for compatibility. Rig writes equivalent
-generated instructions and tracks session activity for all three.
+The agent is selectable with `--agent`, which takes either the long name or the
+short one it goes by in the picker: `cld`, `cdx`, `agy`. It defaults to Claude
+for compatibility, and `RIG_AGENT` (which every rig exports) moves the starting
+position. Rig writes equivalent generated instructions and tracks session
+activity for all three.
+
+Every prompt `up`, `new`, and `review` already show carries an agent bar that
+ctrl-o cycles, so the choice never costs a screen of its own. Two things there
+are load-bearing. The key is ctrl-o by elimination, not preference: fzf,
+textinput, and textarea between them claim most of the ctrl row (including
+ctrl-a for beginning-of-line), the radar already means new-session and refresh
+by ctrl-t and ctrl-r, and ctrl-a is the tmux prefix besides. The fzf half works
+by binding `transform-header` to a hidden `rig __agent cycle` — fzf can only
+hand state back through a file, so the choice round-trips through a temp file
+that `pick.sync()` reads after the picker exits. And `ensurePicked` is not the
+general path: it's the fallback for an invocation that prompted for *nothing*
+(`rig review <url>`, or an `up` with both an exact id and `--repo`), which is
+the only way those get to pick at all. An explicit `--agent` skips it, because
+you don't get asked what you just said.
 
 ## Architecture
 

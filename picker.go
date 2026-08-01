@@ -7,10 +7,16 @@ import (
 	"strings"
 )
 
+// liveSelectHint is the live picker's own header line, kept here because both
+// the plain --header and the agent-bar header block have to render it.
+const liveSelectHint = "tab: fresh Linear search"
+
 // fzfSelect pipes tab-delimited rows into fzf and returns the chosen row.
 // Only the first three columns are shown (with-nth=1,2,3); callers can stash
-// extra data in later columns. Returns "" if the user cancels (fzf exit 130).
-func fzfSelect(rows []string, prompt string) (string, error) {
+// extra data in later columns. A non-nil pick puts the agent bar in the header
+// and lets ctrl-o cycle it while you're choosing; the caller reads the result
+// back with pick.sync(). Returns "" if the user cancels (fzf exit 130).
+func fzfSelect(rows []string, prompt string, pick *agentPick) (string, error) {
 	if len(rows) == 0 {
 		return "", fmt.Errorf("nothing to pick from")
 	}
@@ -21,11 +27,14 @@ func fzfSelect(rows []string, prompt string) (string, error) {
 	if !stdinIsTTY() {
 		return "", noTTYError(prompt)
 	}
-	cmd := exec.Command("fzf",
+	args := []string{
 		"--height=40%", "--reverse",
 		"--with-nth=1,2,3", "--delimiter=\t",
-		"--prompt="+prompt,
-	)
+		"--prompt=" + prompt,
+	}
+	args = append(args, pick.fzfArgs("")...)
+	defer pick.sync()
+	cmd := exec.Command("fzf", args...)
 	cmd.Stdin = strings.NewReader(strings.Join(rows, "\n") + "\n")
 	cmd.Stderr = os.Stderr // fzf draws its UI on the controlling tty
 	out, err := cmd.Output()
@@ -49,21 +58,30 @@ func fzfSelect(rows []string, prompt string) (string, error) {
 // network round-trip for when you ask. reloadCmd is a shell snippet (run under
 // `sh -c`) printing tab-delimited rows, with the current query at fzf's {q}
 // placeholder; initialQuery pre-seeds the prompt so `rig up some words` searches
-// immediately while staying editable. Returns "" if the user cancels (fzf exit
-// 130).
-func fzfLiveSelect(reloadCmd, prompt, initialQuery string) (string, error) {
+// immediately while staying editable. A non-nil pick adds the agent bar under
+// the hint (see fzfSelect). Returns "" if the user cancels (fzf exit 130).
+func fzfLiveSelect(reloadCmd, prompt, initialQuery string, pick *agentPick) (string, error) {
 	if !stdinIsTTY() {
 		return "", noTTYError(prompt)
 	}
-	cmd := exec.Command("fzf",
+	args := []string{
 		"--height=40%", "--reverse",
 		"--with-nth=1,2,3", "--delimiter=\t",
-		"--prompt="+prompt,
-		"--query="+initialQuery,
-		"--header=tab: fresh Linear search",
-		"--bind=start:reload:"+reloadCmd,
-		"--bind=tab:reload:"+reloadCmd,
-	)
+		"--prompt=" + prompt,
+		"--query=" + initialQuery,
+		"--bind=start:reload:" + reloadCmd,
+		"--bind=tab:reload:" + reloadCmd,
+	}
+	// The agent bar shares the header with this picker's own hint, so it comes
+	// in through fzfArgs rather than a --header of its own: the cycle key's
+	// transform-header replaces the whole block and would otherwise drop the hint.
+	if headerArgs := pick.fzfArgs(liveSelectHint); len(headerArgs) > 0 {
+		args = append(args, headerArgs...)
+	} else {
+		args = append(args, "--header="+liveSelectHint)
+	}
+	defer pick.sync()
+	cmd := exec.Command("fzf", args...)
 	// The rows come from the start/change reload binds, not stdin; hand fzf an
 	// empty stdin so it doesn't try to read the controlling terminal (which it
 	// needs for the UI, opened separately via /dev/tty).

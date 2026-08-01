@@ -106,10 +106,35 @@ job (climbing rig, fishing rig, sound rig):
 
 ## Agent choice
 
-`rig up` and `rig review` accept `--agent claude|codex|antigravity`.
-`RIG_AGENT` supplies the default when the flag is absent, with Claude retained
-as the compatibility default. Rig launches the selected terminal agent in the
-left pane and saves the choice in the manifest. It renders the same generated
+`rig up`, `rig new`, and `rig review` accept `--agent`, by long name
+(`claude|codex|antigravity`) or by the three-letter one the picker uses
+(`cld|cdx|agy`). `RIG_AGENT` supplies the default when the flag is absent, with
+Claude retained as the compatibility default. Rig launches the selected terminal
+agent in the left pane and saves the choice in the manifest.
+
+The choice is also pickable, and deliberately not as a screen of its own. Every
+prompt a creation command already puts up — the kickoff line, the context
+textarea, the issue, repo, and PR pickers — carries an agent bar that ctrl-o
+cycles, so an agent you don't care about costs nothing and one you do costs a
+keystroke. The key fell out of elimination rather than mnemonics. ctrl-a is
+beginning-of-line in all three surfaces the bar rides on (fzf, bubbles'
+textinput, its textarea) and the tmux prefix besides; between them those three
+also claim b, c, d, e, f, g, h, j, k, l, m, n, p, q, t, u, v, w, and y. Of
+what's left, ctrl-t and ctrl-r already mean something in the radar, and ctrl-x
+reads as an emacs prefix waiting for a second key. fzf can't
+return the cycled value through its exit status, so it binds `transform-header`
+to a hidden `rig __agent cycle` — the same shell-back-into-rig idiom the live
+issue picker uses — which advances a temp file and reprints the header block,
+the picker's own hint included.
+
+An invocation that prompts for nothing (`rig review <url>`, or an `up` carrying
+both an exact id and `--repo`) has nothing to ride along on, so there the bar
+becomes its own one-line prompt rather than letting the default pass silently.
+It runs past every resume check, so re-running `rig review <url>` on a rig you
+already have still just attaches. Naming `--agent` skips it outright; inheriting
+`RIG_AGENT` does not, because a rig exports it to everything running inside it
+and "the rig I happen to be sitting in" isn't the same statement as "this one
+should use Codex." It renders the same generated
 context as `CLAUDE.md`, `AGENTS.md`, and `.agents/rules/rig.md`, leaving those
 files at the basedir so they do not become jj changes inside a repo workspace.
 Codex and Antigravity are explicitly pointed to `../AGENTS.md` in their opening

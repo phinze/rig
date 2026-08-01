@@ -22,7 +22,11 @@ import (
 // and a primary branch that evolved after the rig was created (for example a
 // publish-preview branch spun from the issue's original branch).
 func runPR(args []string) error {
-	return runPRWithPicker(args, fzfSelect)
+	// No agent bar here: `rig pr` picks among a rig's PRs, and that rig's agent
+	// was settled when it was built.
+	return runPRWithPicker(args, func(rows []string, prompt string) (string, error) {
+		return fzfSelect(rows, prompt, nil)
+	})
 }
 
 func runPRWithPicker(args []string, picker func([]string, string) (string, error)) error {

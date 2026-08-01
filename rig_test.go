@@ -65,7 +65,7 @@ func TestKickoffID(t *testing.T) {
 }
 
 func TestKickoffPromptEditing(t *testing.T) {
-	m := newKickoffPromptModel()
+	m := newKickoffPromptModel(nil)
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("discard this")})
 	m = updated.(kickoffPromptModel)
@@ -85,7 +85,7 @@ func TestKickoffPromptEditing(t *testing.T) {
 }
 
 func TestKickoffPromptEscapeCancels(t *testing.T) {
-	m := newKickoffPromptModel()
+	m := newKickoffPromptModel(nil)
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	m = updated.(kickoffPromptModel)
 
@@ -97,7 +97,7 @@ func TestKickoffPromptEscapeCancels(t *testing.T) {
 // The context step is a textarea, so enter has to stay a newline and ctrl-d
 // has to mean "done" — including the empty case, which is the common one.
 func TestContextPromptAcceptsMultiline(t *testing.T) {
-	m := newContextPromptModel("investigate the flake")
+	m := newContextPromptModel("investigate the flake", nil)
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("first line")})
 	m = updated.(contextPromptModel)
@@ -119,7 +119,7 @@ func TestContextPromptAcceptsMultiline(t *testing.T) {
 // A paste arrives as one key message whose runes carry the line breaks; CRLF
 // content must not come out double-spaced.
 func TestContextPromptPasteNormalizesCRLF(t *testing.T) {
-	m := newContextPromptModel("investigate the flake")
+	m := newContextPromptModel("investigate the flake", nil)
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Paste: true, Runes: []rune("one\r\ntwo\r\n\r\nthree")})
 	m = updated.(contextPromptModel)
@@ -134,14 +134,38 @@ func TestContextPromptPasteNormalizesCRLF(t *testing.T) {
 // Escape skips the step (an empty blob), ctrl-c abandons `rig new` outright.
 // The difference matters: one goes on to build the rig, the other doesn't.
 func TestContextPromptSkipVersusCancel(t *testing.T) {
-	skipped, _ := newContextPromptModel("k").Update(tea.KeyMsg{Type: tea.KeyEsc})
+	skipped, _ := newContextPromptModel("k", nil).Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if m := skipped.(contextPromptModel); m.context != "" || m.cancelled || !m.done {
 		t.Errorf("escape left prompt in state %#v", m)
 	}
 
-	cancelled, _ := newContextPromptModel("k").Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	cancelled, _ := newContextPromptModel("k", nil).Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	if m := cancelled.(contextPromptModel); !m.cancelled || !m.done {
 		t.Errorf("ctrl-c left prompt in state %#v", m)
+	}
+}
+
+// Both `rig new` prompts carry the agent bar, and the cycle key has to be intercepted
+// before the text component sees it: in the textarea it would otherwise land as
+// a stray rune in the blob you're pasting into.
+func TestNewPromptsCycleAgent(t *testing.T) {
+	cycle := tea.KeyMsg{Type: tea.KeyCtrlO}
+
+	kickoff, _ := newKickoffPromptModel(&agentPick{kind: agentClaude}).Update(cycle)
+	if m := kickoff.(kickoffPromptModel); m.agent != agentCodex {
+		t.Errorf("kickoff prompt agent = %q, want codex", m.agent)
+	} else if !strings.Contains(m.View(), "[cdx]") {
+		t.Errorf("kickoff view = %q, want the bar to show the new choice", m.View())
+	}
+
+	ctx, _ := newContextPromptModel("k", &agentPick{kind: agentClaude}).Update(cycle)
+	m := ctx.(contextPromptModel)
+	if m.agent != agentCodex {
+		t.Errorf("context prompt agent = %q, want codex", m.agent)
+	}
+	done, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
+	if got := done.(contextPromptModel).context; got != "" {
+		t.Errorf("%s leaked into the context blob: %q", agentCycleKey, got)
 	}
 }
 
@@ -161,7 +185,7 @@ func TestKickoffPromptMentionsPastedContext(t *testing.T) {
 }
 
 func TestResolveKickoffInline(t *testing.T) {
-	got, err := resolveKickoff([]string{" investigate", "the flake "})
+	got, err := resolveKickoff([]string{" investigate", "the flake "}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
