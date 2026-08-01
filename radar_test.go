@@ -356,6 +356,49 @@ func TestRankByAgentContext(t *testing.T) {
 	}
 }
 
+// A rig is findable by the repo it works in, not just its ticket id and title —
+// the basedir is flat, so the repo is otherwise nowhere on the row. Every repo of
+// a multi-repo rig counts, the owner half matches too, and the repo composes with
+// a title term the way any two query terms do.
+func TestRadarMatchByRepo(t *testing.T) {
+	s := rigStatus{
+		ID:    "MIR-1484",
+		Title: "download metrics: add per-replica label",
+		Repos: []string{"mirendev/cloud", "mirendev/infra", "mirendev/rfd"},
+	}
+	for _, q := range []string{"cloud", "infra", "rfd", "mirendev", "rfd label"} {
+		if !fuzzyMatch(q, radarHaystack(s)) {
+			t.Errorf("query %q should match a rig in %v", q, s.Repos)
+		}
+	}
+	if fuzzyMatch("runtime", radarHaystack(s)) {
+		t.Error("a repo the rig doesn't touch should not match")
+	}
+
+	// Repos are match-only: surfacing the row is the whole job, and there's no
+	// repo column for a hit to light up.
+	idHits, titleHits := radarMatchFields("cloud", s)
+	if len(idHits) != 0 || len(titleHits) != 0 {
+		t.Errorf("repo-only match lit a cell: id=%v title=%v", idHits, titleHits)
+	}
+}
+
+// A repo match ranks a rig honestly against the field: typing a repo name puts
+// the rigs actually in that repo above one that merely spells it out in prose.
+func TestRankByRepo(t *testing.T) {
+	inRepo := rigStatus{Slug: "a", ID: "MIR-1", Title: "fix the deploy blip", Repos: []string{"mirendev/runtime"}}
+	decoy := rigStatus{Slug: "b", ID: "MIR-2", Title: "document the runtime upgrade path"}
+	m := radarModel{inflight: []rigStatus{decoy, inRepo}}
+	m.setFilter("runtime")
+	rows := m.rows()
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want both (decoy matches on its title)", len(rows))
+	}
+	if rows[0].Slug != inRepo.Slug {
+		t.Errorf("best match = %q, want the rig in mirendev/runtime", rows[0].Slug)
+	}
+}
+
 // A bare session renders as a neutral row: the open-ring glyph, no PR tail, and
 // its haystack matches on both the path-title and the raw session name.
 func TestRadarBareSession(t *testing.T) {

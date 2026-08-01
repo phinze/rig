@@ -179,6 +179,7 @@ type rigStatus struct {
 	Agent       string     `json:"agent"`                 // working | idle | "" (no session)
 	Parked      bool       `json:"parked"`                // dormant, awaiting review
 	LastActive  *time.Time `json:"last_active,omitempty"` // newest agent turn, if any
+	Repos       []string   `json:"repos,omitempty"`       // "owner/repo" per repo in the rig
 	PRs         []rigPR    `json:"prs,omitempty"`         // populated only under --full
 
 	// Notifications are the inbox entries pinned to this rig. Loose entries
@@ -232,6 +233,7 @@ func rigStatuses(rigs []rigInfo, home string, now time.Time) []rigStatus {
 			Path:        r.Path,
 			Created:     r.Created,
 			Parked:      !r.Parked.IsZero(),
+			Repos:       r.Repos,
 			SessionLive: tmuxHasSession(tmuxSessionName(r.Path)),
 		}
 		if ts := activity[r.Path]; ts > 0 {
@@ -409,6 +411,27 @@ type rigInfo struct {
 	Path    string // absolute basedir path
 	Created time.Time
 	Parked  time.Time // non-zero once `rig park` marked it dormant
+	Repos   []string  // "owner/repo" per repo in the rig, subdir-sorted
+}
+
+// manifestRepos flattens a manifest's repo table to its "owner/repo" slugs,
+// ordered by subdir so a multi-repo rig reads the same way twice running. The
+// subdir keys are dropped: they're the repo name already in every rig we've
+// ever written, so carrying both would only double the haystack.
+func manifestRepos(m manifest) []string {
+	if len(m.Repos) == 0 {
+		return nil
+	}
+	dirs := make([]string, 0, len(m.Repos))
+	for dir := range m.Repos {
+		dirs = append(dirs, dir)
+	}
+	sort.Strings(dirs)
+	repos := make([]string, 0, len(dirs))
+	for _, dir := range dirs {
+		repos = append(repos, m.Repos[dir])
+	}
+	return repos
 }
 
 // listRigs scans ~/workspaces for directories carrying a rig manifest.
@@ -446,7 +469,7 @@ func listRigs() ([]rigInfo, error) {
 		if created.IsZero() {
 			created = fi.ModTime()
 		}
-		rigs = append(rigs, rigInfo{ID: m.ID, Slug: e.Name(), Title: m.Title, Path: base, Created: created, Parked: m.Parked})
+		rigs = append(rigs, rigInfo{ID: m.ID, Slug: e.Name(), Title: m.Title, Path: base, Created: created, Parked: m.Parked, Repos: manifestRepos(m)})
 	}
 	sort.Slice(rigs, func(i, j int) bool { return rigs[i].Created.Before(rigs[j].Created) })
 	return rigs, nil

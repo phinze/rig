@@ -946,12 +946,22 @@ type hayField struct {
 // the text the board actually shows on its dangled children — "Evaluate UPS
 // options", not just the repo path. Those are match-only (no column of their
 // own): the hit lights up on the child row that carries the words, not up here.
+//
+// A rig's repos ride along the same way, because which repo you're working in is
+// half of how you remember a task ("the runtime one") and a rig's flat basedir
+// says nothing about it — unlike a bare session, whose path-title carries the
+// repo already. They're the full owner/repo: the slash is a boundary the scorer
+// rewards, so "runtime" still lands cleanly on mirendev/runtime, and the owner
+// costs nothing but buys "phinze" as a way to sweep up personal work.
 func radarHayFields(s rigStatus) []hayField {
 	var fields []hayField
 	if s.bare {
 		fields = []hayField{{s.Title, "title"}, {s.session, ""}}
 	} else {
 		fields = []hayField{{s.ID, "id"}, {s.Title, "title"}}
+	}
+	for _, repo := range s.Repos {
+		fields = append(fields, hayField{repo, ""})
 	}
 	for _, c := range s.agents {
 		if ctx := strings.TrimSpace(c.Context); ctx != "" {
