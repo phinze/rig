@@ -28,13 +28,13 @@ import (
 // wakes. The popup inherits $TMUX, so switch-client from inside it moves the
 // underlying client, and the -E popup tears down as we exit.
 //
-// It doubles as the universal picker that replaces tmux-session-wizard: rigs and
-// every non-rig tmux session share one flat list, most-recently-touched first,
-// each dangling its live claude windows as a HUD of what's in flight. You just
-// type to fuzzy-filter — the list ranks best-match-first and the matched runes
-// bold in place — with the verbs on modifier keys so they never fight the query:
-// ctrl+n opens the same new-rig wizard as `rig new`, ctrl+r refreshes, and esc
-// clears a live query then quits.
+// It doubles as the universal picker that replaces tmux-session-wizard: live
+// rigs and non-rig tmux sessions share an MRU section, with review-priority
+// parked rigs below. Each parent dangles its live agent windows as a HUD of
+// what's in flight. You just type to fuzzy-filter, with verbs on modifier keys
+// so they never fight the query: ctrl+n opens the shared new-rig wizard, ctrl+p
+// parks or wakes the selected rig, ctrl+r refreshes, and esc clears a live query
+// then quits.
 func runRadar(args []string) error {
 	if len(args) != 0 {
 		return fmt.Errorf("usage: rig radar")
@@ -106,7 +106,11 @@ func radarAct(s rigStatus) error {
 	// already attached to this rig (which holds the lock across the whole
 	// attach) and you Enter it again from the radar. Report the contention and
 	// bail instead of freezing.
-	lock, err := acquireRigMutationLockMode(s.Path, true)
+	err := setRigParked(s.Path, false, true, func(m manifest) {
+		if s.Parked {
+			fmt.Fprintf(os.Stderr, "rig: woke %s\n", m.ID)
+		}
+	})
 	if err != nil {
 		if errors.Is(err, errRigBusy) {
 			label := s.Title
@@ -117,31 +121,7 @@ func radarAct(s rigStatus) error {
 		}
 		return err
 	}
-	if s.Parked {
-		m, err := readManifest(s.Path)
-		if err != nil {
-			_ = lock.Close()
-			return fmt.Errorf("reading manifest: %w", err)
-		}
-		m.Parked = time.Time{}
-		if err := writeManifest(s.Path, m); err != nil {
-			_ = lock.Close()
-			return err
-		}
-		fmt.Fprintf(os.Stderr, "rig: woke %s\n", m.ID)
-	}
 	session := tmuxSessionName(s.Path)
-	if !tmuxHasSession(session) {
-		if err := tmuxNewSession(session, s.Path); err != nil {
-			_ = lock.Close()
-			return fmt.Errorf("tmux new-session: %w", err)
-		}
-	}
-	// Release before attaching: the manifest write and session standup are done,
-	// and the attach blocks for the whole time you sit in the session. Holding
-	// the mutation lock across that would pin it against every other rig command
-	// (park, track, down, a second radar Enter) for the life of the attach.
-	_ = lock.Close()
 	return attachOrReport(session)
 }
 
@@ -153,26 +133,28 @@ type radarModel struct {
 	home    string
 	current string // tmux session under the popup; dropped from in-flight
 
-	inflight  []rigStatus
-	parked    []rigStatus
-	sessions  []rigStatus      // bare (non-rig) tmux sessions, MRU order
-	attached  map[string]int64 // session → last-attached, for in-flight order
-	prs       map[string][]rigPR
-	fetchedAt map[string]time.Time // slug → when its PRs were fetched
-	pending   map[string]bool      // slug → PR fetch in flight
+	inflight    []rigStatus
+	parked      []rigStatus
+	sessions    []rigStatus      // bare (non-rig) tmux sessions, MRU order
+	attached    map[string]int64 // session → last-attached, for in-flight order
+	prs         map[string][]rigPR
+	fetchedAt   map[string]time.Time // slug → when its PRs were fetched
+	pending     map[string]bool      // slug → PR fetch in flight
+	parkPending map[string]bool      // basedir → park/wake transition in flight
 
 	// Loose inbox entries, rendered as one summary line above the board. The
 	// radar lives in a tmux popup where every row costs, so it says how many and
 	// how loud rather than reprinting each — `rig notify list` is the detail view.
 	inbox []notification
 
-	newRig  *newRigModel // shared `rig new` wizard, embedded without leaving radar
-	filter  string       // fuzzy query; empty = show everything
-	cursor  int
-	chosen  *rigStatus // set on Enter or successful creation; acted on after exit
-	width   int
-	height  int
-	scanErr error
+	newRig    *newRigModel // shared `rig new` wizard, embedded without leaving radar
+	filter    string       // fuzzy query; empty = show everything
+	cursor    int
+	chosen    *rigStatus // set on Enter or successful creation; acted on after exit
+	width     int
+	height    int
+	scanErr   error
+	actionErr error
 }
 
 type radarScanMsg struct {
@@ -186,6 +168,13 @@ type radarScanMsg struct {
 type radarPRsMsg struct {
 	slug string
 	prs  []rigPR
+}
+
+type radarParkMsg struct {
+	path   string
+	label  string
+	parked bool
+	err    error
 }
 
 type radarTickMsg time.Time
@@ -234,6 +223,17 @@ func radarFetchCmd(s rigStatus) tea.Cmd {
 		one := []rigStatus{s}
 		enrichWithPRs(one)
 		return radarPRsMsg{s.Slug, one[0].PRs}
+	}
+}
+
+func radarParkCmd(s rigStatus, parked bool) tea.Cmd {
+	return func() tea.Msg {
+		err := setRigParked(s.Path, parked, true, nil)
+		label := s.Title
+		if s.ID != "" {
+			label = s.ID
+		}
+		return radarParkMsg{path: s.Path, label: label, parked: parked, err: err}
 	}
 }
 
@@ -425,11 +425,32 @@ func (m radarModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case radarPRsMsg:
 		m.prs[msg.slug] = msg.prs
+		for _, section := range []*[]rigStatus{&m.inflight, &m.parked} {
+			for i := range *section {
+				if (*section)[i].Slug == msg.slug {
+					(*section)[i].PRs = msg.prs
+				}
+			}
+		}
 		m.fetchedAt[msg.slug] = time.Now()
 		delete(m.pending, msg.slug)
 		saveRadarCache(m.prs, m.fetchedAt)
 		m.resort()
 		return m, nil
+
+	case radarParkMsg:
+		delete(m.parkPending, msg.path)
+		if msg.err != nil {
+			if errors.Is(msg.err, errRigBusy) {
+				m.actionErr = fmt.Errorf("%q is busy; try again shortly", msg.label)
+			} else {
+				m.actionErr = msg.err
+			}
+			return m, nil
+		}
+		m.actionErr = nil
+		m.applyParked(msg.path, msg.parked)
+		return m, radarScanCmd(m.home)
 	}
 	return m, nil
 }
@@ -496,6 +517,25 @@ func (m radarModel) handleBoardKey(key string) (radarModel, tea.Cmd) {
 		}
 		m.newRig = &wizard
 		return m, wizard.Init()
+	case "ctrl+p":
+		rows := m.rows()
+		if len(rows) == 0 || m.cursor >= len(rows) {
+			return m, nil
+		}
+		s := rows[m.cursor]
+		if s.bare || s.Path == "" {
+			m.actionErr = fmt.Errorf("plain tmux sessions cannot be parked")
+			return m, nil
+		}
+		if m.parkPending == nil {
+			m.parkPending = map[string]bool{}
+		}
+		if m.parkPending[s.Path] {
+			return m, nil
+		}
+		m.actionErr = nil
+		m.parkPending[s.Path] = true
+		return m, radarParkCmd(s, !s.Parked)
 	case "ctrl+r":
 		// Refetch every rig's PRs; stale cells keep showing until the fresh
 		// answer lands rather than flashing back to "…".
@@ -588,6 +628,40 @@ func (m *radarModel) apply(scan radarScanMsg) {
 
 	m.inflight, m.parked, m.sessions = inflight, parked, sessions
 	m.resortKeeping(selected)
+}
+
+// applyParked reflects a completed toggle immediately instead of making the
+// user wait for the next two-second scan. The follow-up scan remains the source
+// of truth for session and agent details; this local move only updates the
+// stable state needed to redraw the two sections now.
+func (m *radarModel) applyParked(path string, parked bool) {
+	var found rigStatus
+	foundIndex := -1
+	from := &m.inflight
+	if !parked {
+		from = &m.parked
+	}
+	for i, s := range *from {
+		if s.Path == path {
+			found, foundIndex = s, i
+			break
+		}
+	}
+	if foundIndex < 0 {
+		return
+	}
+	*from = append((*from)[:foundIndex], (*from)[foundIndex+1:]...)
+	found.Parked = parked
+	found.SessionLive = !parked
+	found.Agent = ""
+	found.agents = nil
+	delete(m.attached, tmuxSessionName(path))
+	if parked {
+		m.parked = append(m.parked, found)
+	} else {
+		m.inflight = append(m.inflight, found)
+	}
+	m.resortKeeping("slug:" + found.Slug)
 }
 
 // bareSession turns a plain tmux session into a radar row: its working
@@ -699,11 +773,10 @@ func (l radarLine) selectableRow() (rigStatus, bool) {
 	return l.row, true
 }
 
-// displayItems is the single ordered list both the cursor and the renderer read,
-// so the two never drift. In board mode it's one flat list — rigs and sessions
-// together, most-recently-touched first, or fuzzy-ranked best-match-first once a
-// filter is typed — with each surviving parent's live claude windows dangled
-// beneath it either way, so the HUD holds through a search.
+// displayItems is the single ordered list both the cursor and renderer read, so
+// the two never drift. Live rigs and plain sessions share an MRU section;
+// parked rigs live in their own review-priority section. Filtering ranks within
+// each section rather than flattening the state boundary away.
 func (m radarModel) displayItems() []radarLine {
 	var items []radarLine
 	parent := func(p rigStatus) {
@@ -744,43 +817,81 @@ func (m radarModel) displayItems() []radarLine {
 			if c.Working {
 				agent = "working"
 			}
+			display := rigStatus{child: true, session: c.Target, Title: c.Context, childKey: key, Agent: agent}
+			action := p
+			action.child = true
+			action.session = c.Target
+			action.Title = c.Context
+			action.childKey = key
+			action.Agent = agent
 			items = append(items, radarLine{
-				row:   rigStatus{child: true, session: c.Target, Title: c.Context, childKey: key, Agent: agent},
-				child: true,
-				last:  i == len(p.agents)-1,
+				row:    display,
+				child:  true,
+				last:   i == len(p.agents)-1,
+				action: &action,
 			})
 		}
 	}
-	for _, p := range m.orderedParents() {
-		parent(p)
+	for _, section := range m.parentSections() {
+		if len(section.rows) == 0 {
+			continue
+		}
+		items = append(items, radarLine{header: section.header})
+		for _, p := range section.rows {
+			parent(p)
+		}
 	}
 	return items
 }
 
-// boardRows is the flat MRU board: every rig and session in one list, most-
-// recently-touched first. Sections turned out not to earn their keep — a rig and
-// a plain session read the same way, and what you want is "what did I last touch"
-// across all of them.
-func (m radarModel) boardRows() []rigStatus {
-	all := make([]rigStatus, 0, len(m.inflight)+len(m.parked)+len(m.sessions))
-	all = append(all, m.inflight...)
-	all = append(all, m.parked...)
-	all = append(all, m.sessions...)
-	sort.SliceStable(all, func(i, j int) bool {
-		return m.recency(all[i]) > m.recency(all[j])
-	})
-	return all
+type radarSection struct {
+	header string
+	rows   []rigStatus
 }
 
-// orderedParents is the board's parent rows in display order: most-recently-
-// touched when the query is empty, fuzzy-ranked best-match-first once it isn't.
-// Children dangle under whichever parents survive, so typing narrows the board
-// without flattening the HUD.
-func (m radarModel) orderedParents() []rigStatus {
-	if m.filter == "" {
-		return m.boardRows()
+// boardRows flattens the section parents for callers that care about selection
+// order but not headers: in-flight MRU rows first, parked review-priority rows
+// second.
+func (m radarModel) boardRows() []rigStatus {
+	sections := m.parentSections()
+	var rows []rigStatus
+	for _, section := range sections {
+		rows = append(rows, section.rows...)
 	}
-	return m.rankRows(m.inflight, m.parked, m.sessions)
+	return rows
+}
+
+func (m radarModel) parentSections() []radarSection {
+	live := make([]rigStatus, 0, len(m.inflight)+len(m.sessions))
+	live = append(live, m.inflight...)
+	live = append(live, m.sessions...)
+	sort.SliceStable(live, func(i, j int) bool {
+		return m.recency(live[i]) > m.recency(live[j])
+	})
+
+	parked := append([]rigStatus(nil), m.parked...)
+	sort.SliceStable(parked, func(i, j int) bool {
+		di, dj := "…", "…"
+		if prs, ok := m.prs[parked[i].Slug]; ok {
+			di = parkedDisposition(prs)
+		}
+		if prs, ok := m.prs[parked[j].Slug]; ok {
+			dj = parkedDisposition(prs)
+		}
+		if dispRank(di) != dispRank(dj) {
+			return dispRank(di) < dispRank(dj)
+		}
+		return parked[i].Created.Before(parked[j].Created)
+	})
+
+	if m.filter != "" {
+		live = m.rankRows(live)
+		parked = m.rankRows(parked)
+	}
+	return []radarSection{
+		{header: "IN FLIGHT", rows: live},
+		{header: "PARKED / AWAITING REVIEW", rows: parked},
+	}
 }
 
 // recency is a row's most-recent-touch stamp: when its tmux session was last
@@ -1455,11 +1566,22 @@ func (m radarModel) View() string {
 	prompt = m.inboxLine() + prompt
 
 	var footer string
+	toggle := "park/wake"
+	if rows := m.rows(); len(rows) > 0 && m.cursor < len(rows) {
+		s := rows[m.cursor]
+		if !s.bare && s.Path != "" {
+			if s.Parked {
+				toggle = "wake"
+			} else {
+				toggle = "park"
+			}
+		}
+	}
 	switch {
 	case m.filter != "":
-		footer = radarFaintStyle.Render("type to filter · enter go · esc clear")
+		footer = radarFaintStyle.Render("type to filter · enter go · ^p " + toggle + " · esc clear")
 	default:
-		footer = radarFaintStyle.Render("type filter · enter go · ^n new · ^r refresh · esc quit")
+		footer = radarFaintStyle.Render("type filter · enter go · ^n new · ^p " + toggle + " · ^r refresh · esc quit")
 	}
 
 	items := m.displayItems()
@@ -1475,7 +1597,7 @@ func (m radarModel) View() string {
 		case m.filter != "":
 			msg = radarFaintStyle.Render("  no matches")
 		}
-		return "\n" + prompt + msg + "\n\n" + footer + "\n"
+		return "\n" + prompt + msg + "\n\n" + footer + m.radarErrorLines() + "\n"
 	}
 
 	// Resolve the column layout for this frame: cell widths, and where the title
@@ -1665,10 +1787,22 @@ func (m radarModel) View() string {
 	}
 
 	out := prompt + strings.Join(body, "\n") + "\n\n" + footer
-	if m.scanErr != nil {
-		out += "\n" + radarErrStyle.Render("scan: "+m.scanErr.Error())
-	}
+	out += m.radarErrorLines()
 	return out
+}
+
+func (m radarModel) radarErrorLines() string {
+	var lines []string
+	if m.actionErr != nil {
+		lines = append(lines, radarErrStyle.Render(m.actionErr.Error()))
+	}
+	if m.scanErr != nil {
+		lines = append(lines, radarErrStyle.Render("scan: "+m.scanErr.Error()))
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "\n" + strings.Join(lines, "\n")
 }
 
 // inboxLine is the radar's whole notification surface: one line naming the
@@ -1712,6 +1846,9 @@ func (m radarModel) viewportChrome() (promptRows, budget int) {
 		chrome += promptRows
 	}
 	if m.scanErr != nil {
+		chrome++
+	}
+	if m.actionErr != nil {
 		chrome++
 	}
 	return promptRows, max(1, m.height-chrome)

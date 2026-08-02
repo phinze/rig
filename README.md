@@ -10,7 +10,9 @@ a [jj](https://github.com/jj-vcs/jj) workspace for the repo inside it, writes a
 in. `rig new` starts that same shape from a free-form kickoff when there is no
 ticket yet, with a second step for pasting in whatever context the one-liner
 leaves out. The same wizard opens inside `rig radar` on ctrl-n, without leaving
-the radar TUI. `rig review <pr-url>` does it for reviewing a pull request.
+the radar TUI. Radar separates in-flight and parked work, and ctrl-p toggles the
+selected rig between them. `rig review <pr-url>` does it for reviewing a pull
+request.
 `rig add owner/repo` brings more repos under the same rig, `rig ls` / `rig cd`
 move between rigs in flight, and `rig down` breaks it all back down.
 

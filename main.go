@@ -146,7 +146,8 @@ usage:
                             first (fzf if ambiguous; aliased as rig cd)
   rig radar                 live TUI board over every rig, meant for a tmux
                             popup: in-flight rigs to switch to, parked rigs
-                            ranked by review status; enter switches or wakes
+                            ranked by review status; enter switches or wakes,
+                            ctrl-p toggles the selected rig's parked state
   rig park                  park the current rig: mark it awaiting-review,
                             kill its session, drop it from switch (dir kept)
   rig wake [query|PR-URL]   resume a rig, waking it first when parked

@@ -22,6 +22,9 @@ contents, because the launch prompt travels by `tmux send-keys` into a shell.
 The kickoff, context, repo, and agent controls are one Bubble Tea wizard shared
 with the radar; ctrl-n opens it there without leaving the radar's alternate
 screen or tmux popup.
+Radar keeps live rigs and plain sessions in one MRU section, with parked rigs in
+a separate review-priority section. ctrl-p toggles the selected rig between
+them without leaving the board; Enter on a parked rig still wakes and enters it.
 `rig add owner/repo` brings additional repos under the same rig. `rig down`
 breaks it back down.
 

@@ -26,30 +26,59 @@ func runPark(args []string) error {
 	if err != nil {
 		return err
 	}
-	lock, err := acquireRigMutationLock(basedir)
+	return setRigParked(basedir, true, false, func(m manifest) {
+		// Announce before killing the session: when park runs from inside the rig,
+		// that final tmux operation also closes the command's own terminal.
+		fmt.Fprintf(os.Stderr, "rig: parked %s — waiting for review; `rig wake %s` brings it back\n", m.ID, m.ID)
+	})
+}
+
+// setRigParked owns the state transition and its matching session lifecycle.
+// Parking stamps the manifest and kills the session; waking clears the stamp
+// and ensures a session exists at the basedir. Radar uses a nonblocking lock so
+// its TUI can report contention instead of freezing, while the CLI lifecycle
+// commands retain their ordinary blocking behavior. afterWrite runs after the
+// durable manifest change and before the session operation.
+func setRigParked(basedir string, parked, nonblocking bool, afterWrite func(manifest)) error {
+	lock, err := acquireRigMutationLockMode(basedir, nonblocking)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = lock.Close() }()
+
 	m, err := readManifest(basedir)
 	if err != nil {
 		return fmt.Errorf("reading manifest: %w", err)
 	}
-
-	if m.Parked.IsZero() {
-		m.Parked = time.Now()
+	currentlyParked := !m.Parked.IsZero()
+	if parked != currentlyParked {
+		if parked {
+			m.Parked = time.Now()
+		} else {
+			m.Parked = time.Time{}
+		}
 		if err := writeManifest(basedir, m); err != nil {
 			return err
 		}
 	}
-	fmt.Fprintf(os.Stderr, "rig: parked %s — waiting for review; `rig wake %s` brings it back\n", m.ID, m.ID)
+	if afterWrite != nil {
+		afterWrite(m)
+	}
 
-	// Kill the session last: if we're running inside it, the manifest is already
-	// written by the time the SIGHUP closes our terminal.
 	session := tmuxSessionName(basedir)
-	if tmuxHasSession(session) {
-		if err := tmuxKillSession(session); err != nil {
-			return fmt.Errorf("tmux kill-session %s: %w", session, err)
+	if parked {
+		// Kill last so a caller running inside this session gets the manifest and
+		// any announcement safely onto disk/the terminal first.
+		if tmuxHasSession(session) {
+			if err := tmuxKillSession(session); err != nil {
+				return fmt.Errorf("tmux kill-session %s: %w", session, err)
+			}
+		}
+		return nil
+	}
+	if !tmuxHasSession(session) {
+		if err := tmuxNewSession(session, basedir); err != nil {
+			return fmt.Errorf("tmux new-session: %w", err)
 		}
 	}
 	return nil

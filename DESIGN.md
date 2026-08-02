@@ -382,6 +382,12 @@ ilmari uses. The popup inherits `$TMUX`, so `tmux switch-client` from inside
 it moves the underlying client, and the `-E` popup tears down as the program
 exits, landing you in the target.
 
+ctrl-p is the explicit state toggle. On an in-flight rig it parks and kills the
+session; on a parked rig it wakes and rebuilds the session. The transition runs
+inside the TUI and moves the row between sections immediately. It uses a
+nonblocking mutation lock, so contention shows as an inline error instead of
+wedging the popup.
+
 The review column is where the live TUI earns itself. Switch stays instant
 by never touching the network; waiting pays the gh cost because it's an
 explicit command. The radar gets both: it renders immediately from local

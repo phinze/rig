@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -22,9 +23,8 @@ func TestDispRank(t *testing.T) {
 	}
 }
 
-// The board is one flat MRU list mixing rigs and sessions, ranked by recency:
-// tmux last-attached, or the newest claude turn / creation time for a rig with
-// no live session. Newest first; never-touched rows sink.
+// In-flight rigs and plain sessions share one MRU section. Parked rigs follow
+// in their own section regardless of recency.
 func TestBoardRowsMRU(t *testing.T) {
 	at := func(u int64) *time.Time { tm := time.Unix(u, 0); return &tm }
 	m := radarModel{
@@ -52,11 +52,35 @@ func TestBoardRowsMRU(t *testing.T) {
 			got = append(got, s.Slug)
 		}
 	}
-	want := []string{"live", "agent", "parked", "sess-old"}
+	want := []string{"live", "agent", "sess-old", "parked"}
 	for i, w := range want {
 		if got[i] != w {
 			t.Fatalf("MRU order = %v, want %v", got, want)
 		}
+	}
+}
+
+func TestRadarParentSections(t *testing.T) {
+	m := radarModel{
+		prs: map[string][]rigPR{
+			"waiting":  {{prInfo: prInfo{State: "OPEN"}}},
+			"approved": {{prInfo: prInfo{State: "OPEN", Review: "APPROVED"}}},
+			"changes":  {{prInfo: prInfo{State: "OPEN", Review: "CHANGES_REQUESTED"}}},
+		},
+		inflight: []rigStatus{{Slug: "live", Title: "live"}},
+		sessions: []rigStatus{{bare: true, session: "shell", Title: "shell"}},
+		parked: []rigStatus{
+			{Slug: "waiting", Parked: true, Created: time.Unix(1, 0), PRs: []rigPR{{prInfo: prInfo{State: "OPEN"}}}},
+			{Slug: "approved", Parked: true, Created: time.Unix(2, 0), PRs: []rigPR{{prInfo: prInfo{State: "OPEN", Review: "APPROVED"}}}},
+			{Slug: "changes", Parked: true, Created: time.Unix(3, 0), PRs: []rigPR{{prInfo: prInfo{State: "OPEN", Review: "CHANGES_REQUESTED"}}}},
+		},
+	}
+	sections := m.parentSections()
+	if len(sections) != 2 || sections[0].header != "IN FLIGHT" || sections[1].header != "PARKED / AWAITING REVIEW" {
+		t.Fatalf("sections = %+v", sections)
+	}
+	if got := []string{sections[1].rows[0].Slug, sections[1].rows[1].Slug, sections[1].rows[2].Slug}; !slices.Equal(got, []string{"changes", "approved", "waiting"}) {
+		t.Fatalf("parked order = %v", got)
 	}
 }
 
@@ -492,7 +516,7 @@ func TestWindowBody(t *testing.T) {
 // checks the selected row survives into the visible window.
 func TestViewFitsHeight(t *testing.T) {
 	m := radarModel{
-		width: 120,
+		width: 120, actionErr: errRigBusy,
 		inflight: []rigStatus{
 			{Slug: "a", ID: "MIR-1", Title: "one", agents: []agentChild{
 				{Window: "runtime", Target: "a:0", Context: "doing runtime work"},
@@ -581,6 +605,68 @@ func TestRadarNewRigSuccessBecomesDestination(t *testing.T) {
 	}
 }
 
+func TestRadarParkWakeToggle(t *testing.T) {
+	m := radarModel{
+		attached: map[string]int64{},
+		inflight: []rigStatus{{Slug: "a", ID: "MIR-1", Title: "build it", Path: "/work/a"}},
+	}
+	m, cmd := m.handleKey("ctrl+p")
+	if cmd == nil || !m.parkPending["/work/a"] {
+		t.Fatalf("ctrl-p did not start park: pending=%v cmd=%v", m.parkPending, cmd != nil)
+	}
+
+	updated, scan := m.Update(radarParkMsg{path: "/work/a", label: "MIR-1", parked: true})
+	m = updated.(radarModel)
+	if scan == nil || len(m.inflight) != 0 || len(m.parked) != 1 || !m.parked[0].Parked {
+		t.Fatalf("park result = inflight:%+v parked:%+v scan:%v", m.inflight, m.parked, scan != nil)
+	}
+	if m.rows()[0].Slug != "a" {
+		t.Fatalf("selection did not follow rig into parked section: %+v", m.rows())
+	}
+
+	m, cmd = m.handleKey("ctrl+p")
+	if cmd == nil || !m.parkPending["/work/a"] {
+		t.Fatalf("ctrl-p did not start wake: pending=%v cmd=%v", m.parkPending, cmd != nil)
+	}
+	updated, _ = m.Update(radarParkMsg{path: "/work/a", label: "MIR-1", parked: false})
+	m = updated.(radarModel)
+	if len(m.parked) != 0 || len(m.inflight) != 1 || m.inflight[0].Parked {
+		t.Fatalf("wake result = inflight:%+v parked:%+v", m.inflight, m.parked)
+	}
+}
+
+func TestRadarParkToggleUsesChildRigIdentity(t *testing.T) {
+	m := radarModel{inflight: []rigStatus{{
+		Slug: "a", ID: "MIR-1", Title: "build it", Path: "/work/a",
+		agents: []agentChild{{Target: "s:0", Context: "one"}, {Target: "s:1", Context: "two"}},
+	}}}
+	rows := m.rows()
+	if len(rows) != 2 || rows[0].Path != "/work/a" || rows[0].Slug != "a" {
+		t.Fatalf("agent child lost parent identity: %+v", rows)
+	}
+	m, cmd := m.handleKey("ctrl+p")
+	if cmd == nil || !m.parkPending["/work/a"] {
+		t.Fatalf("ctrl-p on child did not target parent rig: %+v", m.parkPending)
+	}
+}
+
+func TestRadarParkToggleRejectsBareSession(t *testing.T) {
+	m := radarModel{sessions: []rigStatus{{bare: true, session: "shell", Title: "shell"}}}
+	m, cmd := m.handleKey("ctrl+p")
+	if cmd != nil || m.actionErr == nil || !strings.Contains(m.actionErr.Error(), "cannot be parked") {
+		t.Fatalf("bare-session toggle = err:%v cmd:%v", m.actionErr, cmd != nil)
+	}
+}
+
+func TestRadarParkToggleReportsBusy(t *testing.T) {
+	m := radarModel{parkPending: map[string]bool{"/work/a": true}}
+	updated, _ := m.Update(radarParkMsg{path: "/work/a", label: "MIR-1", parked: true, err: errRigBusy})
+	m = updated.(radarModel)
+	if m.parkPending["/work/a"] || m.actionErr == nil || !strings.Contains(m.actionErr.Error(), "MIR-1") {
+		t.Fatalf("busy result = pending:%v err:%v", m.parkPending, m.actionErr)
+	}
+}
+
 // stripAgentGlyph peels Claude Code's leading state glyph — the ✳ star or a
 // braille spinner frame — leaving the task text; a title with no glyph (a plain
 // shell) is returned unchanged so callers can tell agent panes apart.
@@ -610,11 +696,11 @@ func TestDisplayItemsSingleRigAgent(t *testing.T) {
 	}}}
 
 	items := m.displayItems()
-	if len(items) != 1 {
-		t.Fatalf("items = %d, want one collapsed row", len(items))
+	if len(items) != 2 || items[0].header != "IN FLIGHT" {
+		t.Fatalf("items = %+v, want header plus one collapsed row", items)
 	}
-	if items[0].child || items[0].label || items[0].row.Title != "Plan the saga" {
-		t.Errorf("display row = %+v, want selectable rig-shaped row with live context", items[0])
+	if items[1].child || items[1].label || items[1].row.Title != "Plan the saga" {
+		t.Errorf("display row = %+v, want selectable rig-shaped row with live context", items[1])
 	}
 	rows := m.rows()
 	if len(rows) != 1 || !rows[0].child || rows[0].session != "s:0.1" || rows[0].Slug != "a" {
@@ -628,7 +714,7 @@ func TestDisplayItemsSingleRigAgent(t *testing.T) {
 
 	m.inflight[0].agents[0].Context = ""
 	m.filter = ""
-	if got := m.displayItems()[0].row.Title; got != "build the thing" {
+	if got := m.displayItems()[1].row.Title; got != "build the thing" {
 		t.Errorf("empty live context title = %q, want stable rig title", got)
 	}
 }
@@ -638,7 +724,7 @@ func TestDisplayItemsSingleRigAgent(t *testing.T) {
 // lone child because that row is their visible identity.
 func TestDisplayItemsChildren(t *testing.T) {
 	m := radarModel{
-		inflight: []rigStatus{{Slug: "a", ID: "mir-1", Title: "build the thing", agents: []agentChild{
+		inflight: []rigStatus{{Slug: "a", ID: "mir-1", Title: "build the thing", Path: "/work/a", agents: []agentChild{
 			{Window: "runtime", Target: "s:0", Context: "Plan the saga"},
 			{Window: "rfd", Target: "s:1", Context: "Draft the RFD"},
 		}}},
@@ -648,21 +734,21 @@ func TestDisplayItemsChildren(t *testing.T) {
 	}
 
 	items := m.displayItems()
-	// Flat, no section headers: parent, child, child, parent, child.
-	if len(items) != 5 {
-		t.Fatalf("items = %d, want 5", len(items))
+	// One in-flight header, then parent, child, child, parent, child.
+	if len(items) != 6 {
+		t.Fatalf("items = %d, want 6", len(items))
 	}
-	if items[0].header != "" || items[3].header != "" {
-		t.Fatalf("unexpected header in flat board: %q ... %q", items[0].header, items[3].header)
+	if items[0].header != "IN FLIGHT" {
+		t.Fatalf("header = %q, want IN FLIGHT", items[0].header)
 	}
-	if !items[0].label {
+	if !items[1].label {
 		t.Error("multi-agent rig parent is selectable; want group label")
 	}
-	if items[3].label {
+	if items[4].label {
 		t.Error("bare session parent became a group label")
 	}
 	// The rig's two children carry their window labels and the second closes.
-	c1, c2 := items[1], items[2]
+	c1, c2 := items[2], items[3]
 	if !c1.child || c1.row.childKey != "runtime" || c1.last {
 		t.Errorf("child 1 = %+v, want runtime non-last", c1)
 	}
@@ -670,7 +756,7 @@ func TestDisplayItemsChildren(t *testing.T) {
 		t.Errorf("child 2 = %+v, want rfd last", c2)
 	}
 	// The session's lone child drops the label (nothing to disambiguate).
-	c3 := items[4]
+	c3 := items[5]
 	if !c3.child || c3.row.childKey != "" || c3.row.Title != "Replace emoji" || !c3.last {
 		t.Errorf("session child = %+v, want unlabeled last 'Replace emoji'", c3)
 	}
@@ -686,6 +772,9 @@ func TestDisplayItemsChildren(t *testing.T) {
 	}
 	if rows[0].session != "s:0" {
 		t.Errorf("child switch target = %q, want s:0", rows[0].session)
+	}
+	if rows[0].Slug != "a" {
+		t.Errorf("child lost parent rig identity: %+v", rows[0])
 	}
 	if !rows[2].bare || rows[2].session != "meet" || !rows[3].child {
 		t.Errorf("bare session choices = %+v, want parent then lone child", rows[2:])
@@ -726,8 +815,8 @@ func mouseBoard() radarModel {
 
 func TestBoardLinesAndHitTest(t *testing.T) {
 	m := mouseBoard()
-	// Flat MRU list (all recency 0 → append order): collapsed A(0), B(1), S(2).
-	want := []int{0, 1, 2}
+	// Header, then collapsed A(0), B(1), S(2).
+	want := []int{-1, 0, 1, 2}
 	lines := m.boardLines()
 	if len(lines) != len(want) {
 		t.Fatalf("lines = %d, want %d", len(lines), len(want))
@@ -737,15 +826,18 @@ func TestBoardLinesAndHitTest(t *testing.T) {
 			t.Errorf("line %d cursor = %d, want %d", i, lines[i].cursor, w)
 		}
 	}
-	// rowAtY maps each screen row directly (no prompt, no windowing at height 40).
-	for y, wantCur := range map[int]int{0: 0, 1: 1, 2: 2} {
+	if _, ok := m.rowAtY(0); ok {
+		t.Error("section header was mouse-selectable")
+	}
+	// rowAtY maps the three rows below the header.
+	for y, wantCur := range map[int]int{1: 0, 2: 1, 3: 2} {
 		if got, ok := m.rowAtY(y); !ok || got != wantCur {
 			t.Errorf("rowAtY(%d) = (%d,%v), want (%d,true)", y, got, ok, wantCur)
 		}
 	}
 	// A click past the last row lands nowhere.
-	if _, ok := m.rowAtY(3); ok {
-		t.Error("rowAtY(3) hit a row past the end")
+	if _, ok := m.rowAtY(4); ok {
+		t.Error("rowAtY(4) hit a row past the end")
 	}
 }
 
@@ -762,7 +854,7 @@ func TestBoardLinesSkipMultiAgentParent(t *testing.T) {
 	}
 
 	lines := m.boardLines()
-	want := []int{-1, 0, 1, 2}
+	want := []int{-1, -1, 0, 1, 2}
 	if len(lines) != len(want) {
 		t.Fatalf("lines = %d, want %d", len(lines), len(want))
 	}
@@ -772,9 +864,12 @@ func TestBoardLinesSkipMultiAgentParent(t *testing.T) {
 		}
 	}
 	if _, ok := m.rowAtY(0); ok {
+		t.Error("section header was mouse-selectable")
+	}
+	if _, ok := m.rowAtY(1); ok {
 		t.Error("multi-agent parent label was mouse-selectable")
 	}
-	for y, wantCur := range map[int]int{1: 0, 2: 1, 3: 2} {
+	for y, wantCur := range map[int]int{2: 0, 3: 1, 4: 2} {
 		if got, ok := m.rowAtY(y); !ok || got != wantCur {
 			t.Errorf("rowAtY(%d) = (%d,%v), want (%d,true)", y, got, ok, wantCur)
 		}
@@ -792,15 +887,15 @@ func TestRadarMouse(t *testing.T) {
 		t.Fatalf("wheel down: cursor = %d, want 1", m.cursor)
 	}
 
-	// Click the session row (screen line 2 → cursor 2): selects, doesn't act.
-	nm, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Y: 2})
+	// Click the session row (screen line 3 → cursor 2): selects, doesn't act.
+	nm, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Y: 3})
 	m = nm.(radarModel)
 	if m.cursor != 2 || m.chosen != nil {
 		t.Fatalf("first click: cursor=%d chosen=%v, want select to 2, no activate", m.cursor, m.chosen)
 	}
 
 	// Click the same row again: activates it.
-	nm, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Y: 2})
+	nm, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Y: 3})
 	m = nm.(radarModel)
 	if m.chosen == nil || m.chosen.session != "s" {
 		t.Fatalf("second click: chosen = %v, want the session", m.chosen)
