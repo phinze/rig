@@ -643,9 +643,43 @@ func TestStripAgentGlyph(t *testing.T) {
 	}
 }
 
-// The board dangles each parent's claude windows as selectable child rows: in
-// order, right under the parent, with the window label shown only when there's
-// more than one to disambiguate, and the last child closing the tree.
+// A rig with one agent collapses to one rig-shaped choice: the live context wins
+// as its title, but Enter still carries the rig metadata and jumps to the exact
+// pane. The stable rig title remains in the parent's fuzzy haystack, so filtering
+// by it still surfaces the synthesized row.
+func TestDisplayItemsSingleRigAgent(t *testing.T) {
+	m := radarModel{inflight: []rigStatus{{
+		Slug: "a", ID: "mir-1", Title: "build the thing", Path: "/work/a",
+		agents: []agentChild{{Window: "runtime", Target: "s:0.1", Context: "Plan the saga"}},
+	}}}
+
+	items := m.displayItems()
+	if len(items) != 1 {
+		t.Fatalf("items = %d, want one collapsed row", len(items))
+	}
+	if items[0].child || items[0].label || items[0].row.Title != "Plan the saga" {
+		t.Errorf("display row = %+v, want selectable rig-shaped row with live context", items[0])
+	}
+	rows := m.rows()
+	if len(rows) != 1 || !rows[0].child || rows[0].session != "s:0.1" || rows[0].Slug != "a" {
+		t.Fatalf("selectable row = %+v, want exact child target with rig metadata", rows)
+	}
+
+	m.filter = "build"
+	if rows := m.rows(); len(rows) != 1 || rows[0].Title != "Plan the saga" {
+		t.Fatalf("rows filtered by stable rig title = %+v, want collapsed live-context row", rows)
+	}
+
+	m.inflight[0].agents[0].Context = ""
+	m.filter = ""
+	if got := m.displayItems()[0].row.Title; got != "build the thing" {
+		t.Errorf("empty live context title = %q, want stable rig title", got)
+	}
+}
+
+// With several agents the rig is a non-selectable group label and its children
+// are the choices, in order. Bare sessions retain their path parent even with a
+// lone child because that row is their visible identity.
 func TestDisplayItemsChildren(t *testing.T) {
 	m := radarModel{
 		inflight: []rigStatus{{Slug: "a", ID: "mir-1", Title: "build the thing", agents: []agentChild{
@@ -665,6 +699,12 @@ func TestDisplayItemsChildren(t *testing.T) {
 	if items[0].header != "" || items[3].header != "" {
 		t.Fatalf("unexpected header in flat board: %q ... %q", items[0].header, items[3].header)
 	}
+	if !items[0].label {
+		t.Error("multi-agent rig parent is selectable; want group label")
+	}
+	if items[3].label {
+		t.Error("bare session parent became a group label")
+	}
 	// The rig's two children carry their window labels and the second closes.
 	c1, c2 := items[1], items[2]
 	if !c1.child || c1.row.childKey != "runtime" || c1.last {
@@ -679,24 +719,28 @@ func TestDisplayItemsChildren(t *testing.T) {
 		t.Errorf("session child = %+v, want unlabeled last 'Replace emoji'", c3)
 	}
 
-	// Children are selectable rows with distinct keys, and switch to their window.
+	// The rig label is skipped; its children remain distinct exact-window choices.
+	// The bare session and its lone child retain their existing separate choices.
 	rows := m.rows()
-	if len(rows) != 5 { // 2 parents + 3 children
-		t.Fatalf("selectable rows = %d, want 5", len(rows))
+	if len(rows) != 4 { // 2 rig children + bare parent + bare child
+		t.Fatalf("selectable rows = %d, want 4", len(rows))
 	}
-	if rowKey(rows[1]) == rowKey(rows[2]) {
+	if rowKey(rows[0]) == rowKey(rows[1]) {
 		t.Error("sibling children share a rowKey")
 	}
-	if rows[1].session != "s:0" {
-		t.Errorf("child switch target = %q, want s:0", rows[1].session)
+	if rows[0].session != "s:0" {
+		t.Errorf("child switch target = %q, want s:0", rows[0].session)
+	}
+	if !rows[2].bare || rows[2].session != "meet" || !rows[3].child {
+		t.Errorf("bare session choices = %+v, want parent then lone child", rows[2:])
 	}
 
 	// Under a filter the HUD holds: a matched parent still dangles its children,
 	// and rows that miss drop out entirely.
 	m.filter = "build" // matches the rig "build the thing", not the meet session
 	frows := m.rows()
-	if len(frows) != 3 { // matched parent + its two children
-		t.Fatalf("filtered rows = %d, want 3 (matched parent keeps its HUD)", len(frows))
+	if len(frows) != 2 { // matched rig label is skipped; its children remain
+		t.Fatalf("filtered rows = %d, want 2 agent choices", len(frows))
 	}
 	kids := 0
 	for _, r := range frows {
@@ -709,9 +753,8 @@ func TestDisplayItemsChildren(t *testing.T) {
 	}
 }
 
-// A board's screen lines number the selectable rows — parents and dangled
-// children — the same layout the mouse handler hit-tests, so a click maps to the
-// row drawn under it. With sections gone the list is flat: no headers, no blanks.
+// A board's screen lines number selectable destinations, the same layout the
+// mouse handler hit-tests. A single-agent rig occupies one synthesized line.
 func mouseBoard() radarModel {
 	return radarModel{
 		height: 40, width: 100,
@@ -727,8 +770,8 @@ func mouseBoard() radarModel {
 
 func TestBoardLinesAndHitTest(t *testing.T) {
 	m := mouseBoard()
-	// Flat MRU list (all recency 0 → append order): A(0), child(1), B(2), S(3).
-	want := []int{0, 1, 2, 3}
+	// Flat MRU list (all recency 0 → append order): collapsed A(0), B(1), S(2).
+	want := []int{0, 1, 2}
 	lines := m.boardLines()
 	if len(lines) != len(want) {
 		t.Fatalf("lines = %d, want %d", len(lines), len(want))
@@ -739,14 +782,46 @@ func TestBoardLinesAndHitTest(t *testing.T) {
 		}
 	}
 	// rowAtY maps each screen row directly (no prompt, no windowing at height 40).
-	for y, wantCur := range map[int]int{0: 0, 1: 1, 2: 2, 3: 3} {
+	for y, wantCur := range map[int]int{0: 0, 1: 1, 2: 2} {
 		if got, ok := m.rowAtY(y); !ok || got != wantCur {
 			t.Errorf("rowAtY(%d) = (%d,%v), want (%d,true)", y, got, ok, wantCur)
 		}
 	}
 	// A click past the last row lands nowhere.
-	if _, ok := m.rowAtY(4); ok {
-		t.Error("rowAtY(4) hit a row past the end")
+	if _, ok := m.rowAtY(3); ok {
+		t.Error("rowAtY(3) hit a row past the end")
+	}
+}
+
+// A multi-agent rig still renders its parent, but the label has no cursor index
+// and mouse hit-testing lands only on concrete children.
+func TestBoardLinesSkipMultiAgentParent(t *testing.T) {
+	m := radarModel{
+		height: 40, width: 100, prs: map[string][]rigPR{}, fetchedAt: map[string]time.Time{},
+		inflight: []rigStatus{{Slug: "a", ID: "A", Title: "aa", agents: []agentChild{
+			{Target: "a:0.0", Context: "one"},
+			{Target: "a:1.0", Context: "two"},
+		}}},
+		sessions: []rigStatus{{bare: true, session: "s", Title: "~/s"}},
+	}
+
+	lines := m.boardLines()
+	want := []int{-1, 0, 1, 2}
+	if len(lines) != len(want) {
+		t.Fatalf("lines = %d, want %d", len(lines), len(want))
+	}
+	for i, w := range want {
+		if lines[i].cursor != w {
+			t.Errorf("line %d cursor = %d, want %d", i, lines[i].cursor, w)
+		}
+	}
+	if _, ok := m.rowAtY(0); ok {
+		t.Error("multi-agent parent label was mouse-selectable")
+	}
+	for y, wantCur := range map[int]int{1: 0, 2: 1, 3: 2} {
+		if got, ok := m.rowAtY(y); !ok || got != wantCur {
+			t.Errorf("rowAtY(%d) = (%d,%v), want (%d,true)", y, got, ok, wantCur)
+		}
 	}
 }
 
@@ -761,15 +836,15 @@ func TestRadarMouse(t *testing.T) {
 		t.Fatalf("wheel down: cursor = %d, want 1", m.cursor)
 	}
 
-	// Click the session row (screen line 3 → cursor 3): selects, doesn't act.
-	nm, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Y: 3})
+	// Click the session row (screen line 2 → cursor 2): selects, doesn't act.
+	nm, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Y: 2})
 	m = nm.(radarModel)
-	if m.cursor != 3 || m.chosen != nil {
-		t.Fatalf("first click: cursor=%d chosen=%v, want select to 3, no activate", m.cursor, m.chosen)
+	if m.cursor != 2 || m.chosen != nil {
+		t.Fatalf("first click: cursor=%d chosen=%v, want select to 2, no activate", m.cursor, m.chosen)
 	}
 
 	// Click the same row again: activates it.
-	nm, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Y: 3})
+	nm, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Y: 2})
 	m = nm.(radarModel)
 	if m.chosen == nil || m.chosen.session != "s" {
 		t.Fatalf("second click: chosen = %v, want the session", m.chosen)

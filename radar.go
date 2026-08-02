@@ -688,14 +688,28 @@ func (m radarModel) rigRows() []rigStatus {
 	return out
 }
 
-// radarLine is one line the board draws: a section header (not selectable) or a
-// row. A row can be a parent or a dangled child; last marks the final child of a
-// parent so the tree closes with └ instead of ├.
+// radarLine is one line the board draws: a section header, a non-selectable
+// parent label, or a row. A row can be a parent or a dangled child; last marks
+// the final child of a parent so the tree closes with └ instead of ├.
+// action overrides the row returned on Enter. A rig with one child uses that to
+// keep the rig-shaped display while jumping straight to its only agent pane.
 type radarLine struct {
 	header string
 	row    rigStatus
 	child  bool
 	last   bool
+	label  bool
+	action *rigStatus
+}
+
+func (l radarLine) selectableRow() (rigStatus, bool) {
+	if l.header != "" || l.label {
+		return rigStatus{}, false
+	}
+	if l.action != nil {
+		return *l.action, true
+	}
+	return l.row, true
 }
 
 // displayItems is the single ordered list both the cursor and the renderer read,
@@ -707,7 +721,26 @@ type radarLine struct {
 func (m radarModel) displayItems() []radarLine {
 	var items []radarLine
 	parent := func(p rigStatus) {
-		items = append(items, radarLine{row: p})
+		// A rig with one live agent has one meaningful destination. Fold the
+		// agent's fresher context into the rig row and make Enter target that pane
+		// exactly. With several agents the rig becomes a group label: only the
+		// children are choices, so the cursor doesn't stop on an ambiguous parent.
+		// Bare tmux sessions keep their path row because it is their only visible
+		// identity; this folding is specifically about a rig and its agents.
+		if !p.bare && len(p.agents) == 1 {
+			c := p.agents[0]
+			display := p
+			if context := strings.TrimSpace(c.Context); context != "" {
+				display.Title = context
+			}
+			action := display
+			action.child = true
+			action.session = c.Target
+			items = append(items, radarLine{row: display, action: &action})
+			return
+		}
+
+		items = append(items, radarLine{row: p, label: !p.bare && len(p.agents) > 1})
 		// Label children by window only when they span more than one — a repo
 		// name places the runtime agent vs the rfd agent, but two agents in one
 		// window are told apart by their context, so the repeated name is noise.
@@ -794,8 +827,9 @@ func (m radarModel) recency(s rigStatus) int64 {
 
 // screenLine is one rendered row of the board: a blank separator, a section
 // header, or a display item, tagged with the selectable cursor index it maps to
-// (-1 when it can't be landed on). View renders from this and the mouse handler
-// hit-tests against it, so the two share one notion of what sits on each line.
+// (-1 for headers and non-selectable parent labels). View renders from this and
+// the mouse handler hit-tests against it, so the two share one notion of what
+// sits on each line.
 type screenLine struct {
 	item   radarLine
 	blank  bool
@@ -816,20 +850,25 @@ func (m radarModel) boardLines() []screenLine {
 			lines = append(lines, screenLine{item: it, cursor: -1})
 			continue
 		}
+		if _, ok := it.selectableRow(); !ok {
+			lines = append(lines, screenLine{item: it, cursor: -1})
+			continue
+		}
 		lines = append(lines, screenLine{item: it, cursor: sel})
 		sel++
 	}
 	return lines
 }
 
-// rows is the selectable list the cursor walks: every display item that isn't a
-// header, parents and dangled children alike.
+// rows is the selectable list the cursor walks. A lone child is folded into its
+// rig row; a parent with several children is only a label, leaving one cursor
+// stop per concrete agent destination.
 func (m radarModel) rows() []rigStatus {
 	items := m.displayItems()
 	out := make([]rigStatus, 0, len(items))
 	for _, it := range items {
-		if it.header == "" {
-			out = append(out, it.row)
+		if row, ok := it.selectableRow(); ok {
+			out = append(out, row)
 		}
 	}
 	return out
@@ -1489,7 +1528,7 @@ func (m radarModel) View() string {
 	items := m.displayItems()
 	selectable := 0
 	for _, it := range items {
-		if it.header == "" {
+		if _, ok := it.selectableRow(); ok {
 			selectable++
 		}
 	}
