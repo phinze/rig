@@ -14,7 +14,7 @@ import (
 // textinput, and its textarea all bind ctrl-a to beginning-of-line, so that one
 // would cost readline muscle memory in a field you're typing into; between them
 // they also claim b, c, d, e, f, g, h, j, k, l, m, n, p, q, t, u, v, w, and y.
-// Of what's left, ctrl-t and ctrl-r already mean new-session and refresh in the
+// Of what's left, ctrl-n and ctrl-r already mean new-rig and refresh in the
 // radar, and ctrl-x reads as an emacs prefix waiting for a second key. ctrl-o
 // is free everywhere and means nothing else in rig.
 const agentCycleKey = "ctrl-o"

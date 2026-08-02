@@ -70,10 +70,12 @@ job (climbing rig, fishing rig, sound rig):
   shape.
 - `rig new [kickoff]`: start your own work before it has a tracker identity.
   With no argument it asks for a one-line kickoff, then offers a textarea for
-  whatever context the title only gestures at, then runs the same primary repo
-  picker as `up`. The kickoff becomes the title and a readable local id; the
-  workspace starts at `trunk()` with no branch recorded until the work grows
-  one. Pasted context is written to `KICKOFF.md` at the rig root rather than
+  whatever context the title only gestures at, then offers the primary repo
+  picker. This is one Bubble Tea wizard shared with radar, where ctrl-n opens it
+  in place without dropping the popup's alternate screen. The kickoff becomes
+  the title and a readable local id; the workspace starts at `trunk()` with no
+  branch recorded until the work grows one. Pasted context is written to
+  `KICKOFF.md` at the rig root rather than
   inlined in the launch prompt, which is typed into the agent's shell and would
   make a poor courier for a Slack thread. Being a file is the better half of the
   bargain anyway: the brief outlives the context window, a resumed session, and
@@ -120,7 +122,7 @@ keystroke. The key fell out of elimination rather than mnemonics. ctrl-a is
 beginning-of-line in all three surfaces the bar rides on (fzf, bubbles'
 textinput, its textarea) and the tmux prefix besides; between them those three
 also claim b, c, d, e, f, g, h, j, k, l, m, n, p, q, t, u, v, w, and y. Of
-what's left, ctrl-t and ctrl-r already mean something in the radar, and ctrl-x
+what's left, ctrl-n and ctrl-r already mean something in the radar, and ctrl-x
 reads as an emacs prefix waiting for a second key. fzf can't
 return the cycled value through its exit status, so it binds `transform-header`
 to a hidden `rig __agent cycle` — the same shell-back-into-rig idiom the live

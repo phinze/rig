@@ -187,16 +187,11 @@ type rigStatus struct {
 	Notifications []notification `json:"notifications,omitempty"`
 
 	// radar-only, never serialized: a row that's a bare tmux session (not a
-	// rig) carries bare=true and the raw session name to attach to. A row in the
-	// NEW picker that stands up a fresh session at a zoxide dir carries
-	// create=true (Path is the dir). A child row dangled under a parent carries
-	// child=true, session set to the window's session:index switch target, and
-	// childKey holding the window label. agents are the parent's agent windows,
-	// expanded into child rows at render. Everything PR- and agent-shaped is
-	// skipped for these; they exist so the radar can be a universal HUD, not just
-	// a board over rigs.
+	// rig) carries bare=true and the raw session name to attach to. A child row
+	// dangled under a parent carries child=true, session set to the window's
+	// session:index switch target, and childKey holding the window label. agents
+	// are the parent's agent windows, expanded into child rows at render.
 	bare     bool
-	create   bool
 	child    bool
 	session  string
 	childKey string

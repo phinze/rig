@@ -6,10 +6,8 @@ import (
 )
 
 // zoxideDirs returns the directories zoxide knows about, most-frecent first —
-// the same frecency-ranked list session-wizard's fzf front-end appended so you
-// could stand up a session in a dir you'd visited but didn't currently have
-// open. Degrades to nil when zoxide isn't installed or has no history, so the
-// NEW picker just shows nothing rather than erroring.
+// the same frecency-ranked list used to order repo choices. Degrades to nil
+// when zoxide isn't installed or has no history.
 func zoxideDirs() []string {
 	out, err := exec.Command("zoxide", "query", "-l").Output()
 	if err != nil {
@@ -22,11 +20,4 @@ func zoxideDirs() []string {
 		}
 	}
 	return dirs
-}
-
-// zoxideAdd bumps a directory's frecency rank, the way session-wizard did when
-// you picked a dir. Best-effort: a missing zoxide or a failed add never blocks
-// standing the session up.
-func zoxideAdd(dir string) {
-	_ = exec.Command("zoxide", "add", dir).Run()
 }

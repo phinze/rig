@@ -19,6 +19,9 @@ no ticket yet, followed by an optional textarea for pasted context that lands in
 `KICKOFF.md` at the rig root (esc skips it; piped stdin fills it non-
 interactively). The agent is pointed at that file rather than handed its
 contents, because the launch prompt travels by `tmux send-keys` into a shell.
+The kickoff, context, repo, and agent controls are one Bubble Tea wizard shared
+with the radar; ctrl-n opens it there without leaving the radar's alternate
+screen or tmux popup.
 `rig add owner/repo` brings additional repos under the same rig. `rig down`
 breaks it back down.
 
@@ -75,8 +78,8 @@ Every prompt `up`, `new`, and `review` already show carries an agent bar that
 ctrl-o cycles, so the choice never costs a screen of its own. Two things there
 are load-bearing. The key is ctrl-o by elimination, not preference: fzf,
 textinput, and textarea between them claim most of the ctrl row (including
-ctrl-a for beginning-of-line), the radar already means new-session and refresh
-by ctrl-t and ctrl-r, and ctrl-a is the tmux prefix besides. The fzf half works
+ctrl-a for beginning-of-line), the radar already means new-rig and refresh by
+ctrl-n and ctrl-r, and ctrl-a is the tmux prefix besides. The fzf half works
 by binding `transform-header` to a hidden `rig __agent cycle` — fzf can only
 hand state back through a file, so the choice round-trips through a temp file
 that `pick.sync()` reads after the picker exits. And `ensurePicked` is not the

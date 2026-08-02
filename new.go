@@ -6,10 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 // runNew starts work that does not have a tracker identity yet. The kickoff is
@@ -25,87 +21,137 @@ func runNew(args []string) error {
 	defer pick.cleanup()
 	repoFlag, args := extractRepoFlag(args)
 
-	kickoff, err := resolveKickoff(args, pick)
+	// A pipe is the scriptable shape: the positional kickoff and stdin context
+	// already answer every text prompt, and an explicit repo or cwd supplies the
+	// last choice. Interactive invocations all use the same Bubble Tea wizard
+	// the radar embeds, so the two entry points cannot grow different controls.
+	if !stdinIsTTY() {
+		kickoff, err := resolveKickoff(args)
+		if err != nil {
+			return err
+		}
+		target, err := prepareNewRig(kickoff)
+		if err != nil {
+			return err
+		}
+		context, err := resolveKickoffContext()
+		if err != nil {
+			return err
+		}
+		repo, err := resolveRepo(repoFlag, pick)
+		if err != nil {
+			return err
+		}
+		result, err := createNewRig(target, context, repo, pick.kind)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "rig: new %s — %s\n", result.ID, result.Basedir)
+		return attachOrReport(result.Session)
+	}
+
+	kickoff := strings.TrimSpace(strings.Join(args, " "))
+	m, err := newRigWizardModel(kickoff, repoFlag, pick.kind)
 	if err != nil {
 		return err
 	}
-	if kickoff == "" {
-		return nil // empty interactive prompt means never mind
+	final, err := runNewRigTUI(m)
+	if err != nil {
+		return err
 	}
+	if final.cancelled || final.result.Session == "" {
+		if final.err != nil {
+			return final.err
+		}
+		return nil
+	}
+	fmt.Fprintf(os.Stderr, "rig: new %s — %s\n", final.result.ID, final.result.Basedir)
+	return attachOrReport(final.result.Session)
+}
 
+// newRigTarget is the stable identity derived from the kickoff. Preparing it
+// before the context step preserves an important bit of the CLI flow: a large
+// blob you just pasted is never discarded by a collision discovered afterward.
+type newRigTarget struct {
+	ID      string
+	Kickoff string
+	Basedir string
+}
+
+type newRigResult struct {
+	ID      string
+	Basedir string
+	Session string
+}
+
+func prepareNewRig(kickoff string) (newRigTarget, error) {
+	kickoff = strings.TrimSpace(kickoff)
 	rigID := kickoffID(kickoff)
 	if rigID == "" {
-		return fmt.Errorf("kickoff does not produce a usable local name")
+		return newRigTarget{}, fmt.Errorf("kickoff does not produce a usable local name")
 	}
 	basedir, err := basedirPath(rigID)
 	if err != nil {
-		return err
+		return newRigTarget{}, err
 	}
 	if _, err := os.Stat(basedir); err == nil {
 		if _, manifestErr := os.Stat(filepath.Join(basedir, manifestName)); manifestErr == nil {
-			return fmt.Errorf("rig %q already exists; run `rig switch %s` (or `rig wake %s` if parked), or use a different kickoff", rigID, rigID, rigID)
+			return newRigTarget{}, fmt.Errorf("rig %q already exists; run `rig switch %s` (or `rig wake %s` if parked), or use a different kickoff", rigID, rigID, rigID)
 		}
-		return fmt.Errorf("basedir already exists: %s", basedir)
+		return newRigTarget{}, fmt.Errorf("basedir already exists: %s", basedir)
 	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("checking basedir: %w", err)
+		return newRigTarget{}, fmt.Errorf("checking basedir: %w", err)
 	}
+	return newRigTarget{ID: rigID, Kickoff: kickoff, Basedir: basedir}, nil
+}
 
-	// The context step comes after the collision checks so a blob you just
-	// pasted is never thrown away by an "already exists", and before the repo
-	// picker so the two things you type stay adjacent.
-	context, ok, err := resolveKickoffContext(kickoff, pick)
+// createNewRig is the non-UI transaction shared by the standalone wizard, the
+// radar-embedded wizard, and piped invocations. It deliberately stops at a
+// ready session; the caller owns the final attach or switch once its UI has
+// released the terminal.
+func createNewRig(target newRigTarget, context string, repo repoRef, agent agentKind) (newRigResult, error) {
+	// Check again at commit time. The wizard may have sat open for minutes after
+	// its first preflight, and a second process could have claimed the slug.
+	fresh, err := prepareNewRig(target.Kickoff)
 	if err != nil {
-		return err
+		return newRigResult{}, err
 	}
-	if !ok {
-		return nil // cancelled at the context step
-	}
+	target = fresh
 
-	repo, err := resolveRepo(repoFlag, pick)
-	if err != nil {
-		return err
-	}
-	if repo.Path == "" {
-		return nil // repo picker cancelled
-	}
-	if ok, err := pick.ensurePicked(); err != nil || !ok {
-		return err
-	}
 	if err := ensureJJColocated(repo.Path); err != nil {
-		return fmt.Errorf("colocating jj on %s: %w", repo.Path, err)
+		return newRigResult{}, fmt.Errorf("colocating jj on %s: %w", repo.Path, err)
 	}
 
-	m := manifest{ID: rigID, Title: kickoff, Agent: string(pick.kind)}
-	if err := createBasedir(basedir, m); err != nil {
-		return err
+	m := manifest{ID: target.ID, Title: target.Kickoff, Agent: string(agent)}
+	if err := createBasedir(target.Basedir, m); err != nil {
+		return newRigResult{}, err
 	}
 
 	// Before addRepoWorkspace, which regenerates the agent instructions: they
 	// grow a pointer bullet when the kickoff file is on disk.
+	context = strings.TrimSpace(context)
 	if context != "" {
-		if err := writeRigKickoff(basedir, kickoff, context); err != nil {
-			return fmt.Errorf("writing %s: %w", rigKickoffName, err)
+		if err := writeRigKickoff(target.Basedir, target.Kickoff, context); err != nil {
+			return newRigResult{}, fmt.Errorf("writing %s: %w", rigKickoffName, err)
 		}
 	}
 
-	repoDest, err := addRepoWorkspace(basedir, rigID, repo, "trunk()", "")
+	repoDest, err := addRepoWorkspace(target.Basedir, target.ID, repo, "trunk()", "")
 	if err != nil {
-		return err
+		return newRigResult{}, err
 	}
 
 	sess := sessionSpec{
 		rectoCmd: rectoCommand(),
 		repo:     repo.Name,
-		agent:    pick.kind,
-		prompt:   kickoffPrompt(kickoff, context != ""),
+		agent:    agent,
+		prompt:   kickoffPrompt(target.Kickoff, context != ""),
 	}
-	session, err := spawnSession(basedir, repoDest, sess)
+	session, err := spawnSession(target.Basedir, repoDest, sess)
 	if err != nil {
-		return err
+		return newRigResult{}, err
 	}
-
-	fmt.Fprintf(os.Stderr, "rig: new %s — %s\n", rigID, basedir)
-	return attachOrReport(session)
+	return newRigResult{ID: target.ID, Basedir: target.Basedir, Session: session}, nil
 }
 
 // kickoffPrompt is the opening message the agent wakes up to. Pasted context
@@ -124,178 +170,24 @@ func kickoffPrompt(kickoff string, hasContext bool) string {
 	)
 }
 
-// resolveKickoffContext gathers the optional blob that follows the kickoff
-// line — the Slack thread, the stack trace, the half-written note that explains
-// what the title only gestures at. Interactively it's a textarea you can skip
-// with a keystroke; piped (`pbpaste | rig new fix the flake`) it's all of
-// stdin, which is also how an agent shell can hand a brief over without a TTY.
-// The bool reports whether to keep going: false means you cancelled.
-func resolveKickoffContext(kickoff string, pick *agentPick) (string, bool, error) {
-	if !stdinIsTTY() {
-		blob, err := io.ReadAll(os.Stdin)
-		if err != nil {
-			return "", false, fmt.Errorf("reading kickoff context from stdin: %w", err)
-		}
-		return strings.TrimSpace(string(blob)), true, nil
-	}
-
-	m := newContextPromptModel(kickoff, pick)
-	result, err := tea.NewProgram(m, tea.WithInput(os.Stdin), tea.WithOutput(os.Stderr)).Run()
+// resolveKickoffContext is the non-interactive half of context collection.
+// Interactive callers use newRigModel; a pipe supplies all of stdin here.
+func resolveKickoffContext() (string, error) {
+	blob, err := io.ReadAll(os.Stdin)
 	if err != nil {
-		return "", false, fmt.Errorf("reading kickoff context: %w", err)
+		return "", fmt.Errorf("reading kickoff context from stdin: %w", err)
 	}
-	final := result.(contextPromptModel)
-	if pick != nil {
-		pick.kind = final.agent
-	}
-	return strings.TrimSpace(final.context), !final.cancelled, nil
+	return strings.TrimSpace(string(blob)), nil
 }
 
-type contextPromptModel struct {
-	kickoff   string
-	area      textarea.Model
-	agent     agentKind
-	context   string
-	cancelled bool
-	done      bool
-}
-
-func newContextPromptModel(kickoff string, pick *agentPick) contextPromptModel {
-	area := textarea.New()
-	area.Placeholder = "Paste anything else worth knowing…"
-	area.ShowLineNumbers = false
-	// MaxHeight is a line ceiling as much as a display one — leaving the default
-	// 99 in place would quietly refuse the hundredth line of a long paste.
-	area.MaxHeight = 0
-	area.SetWidth(76)
-	area.SetHeight(10)
-	area.Focus()
-	return contextPromptModel{kickoff: kickoff, area: area, agent: pick.offered()}
-}
-
-func (m contextPromptModel) Init() tea.Cmd { return textarea.Blink }
-
-func (m contextPromptModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		// Bracketed paste, normalized before the textarea's sanitizer sees it:
-		// it maps '\r' and '\n' to a newline each, so CRLF content would arrive
-		// double-spaced.
-		if msg.Paste {
-			m.area.InsertString(strings.ReplaceAll(string(msg.Runes), "\r\n", "\n"))
-			return m, nil
-		}
-		// Before the textarea sees it: the cycle key is ours, and letting it fall
-		// through would act on the blob you're pasting into.
-		if isAgentCycleKey(msg) {
-			m.agent = m.agent.next()
-			return m, nil
-		}
-		switch msg.Type {
-		case tea.KeyCtrlD:
-			// Enter is a newline here, so accepting needs its own key. Empty is
-			// a legitimate answer: most kickoffs don't come with a blob.
-			m.context = m.area.Value()
-			m.done = true
-			return m, tea.Quit
-		case tea.KeyEsc:
-			m.done = true
-			return m, tea.Quit
-		case tea.KeyCtrlC:
-			m.cancelled = true
-			m.done = true
-			return m, tea.Quit
-		}
-	case tea.WindowSizeMsg:
-		m.area.SetWidth(max(20, msg.Width-2))
-		m.area.SetHeight(min(max(msg.Height-6, 6), 20))
-	}
-
-	var cmd tea.Cmd
-	m.area, cmd = m.area.Update(msg)
-	return m, cmd
-}
-
-func (m contextPromptModel) View() string {
-	if m.done {
-		return ""
-	}
-	return fmt.Sprintf("Kickoff: %s\nContext (optional):\n%s\n%s\nctrl-d done · esc skip · ctrl-c cancel\n",
-		m.kickoff, m.area.View(), agentBar(m.agent))
-}
-
-// resolveKickoff accepts an inline kickoff (`rig new investigate the flake`)
-// or asks for one when run interactively with no positional arguments. The
-// inline form keeps scripts and agent shells usable without pretending a pipe
-// can answer a terminal prompt.
-func resolveKickoff(args []string, pick *agentPick) (string, error) {
+// resolveKickoff reads the positional kickoff used by piped invocations such as
+// `pbpaste | rig new investigate the flake`. Interactive callers use
+// newRigModel instead.
+func resolveKickoff(args []string) (string, error) {
 	if len(args) > 0 {
 		return strings.TrimSpace(strings.Join(args, " ")), nil
 	}
-	if !stdinIsTTY() {
-		return "", fmt.Errorf("Kickoff prompt needs an interactive terminal; pass it inline, e.g. `rig new investigate the flake`")
-	}
-
-	m := newKickoffPromptModel(pick)
-	result, err := tea.NewProgram(m, tea.WithInput(os.Stdin), tea.WithOutput(os.Stderr)).Run()
-	if err != nil {
-		return "", fmt.Errorf("reading kickoff: %w", err)
-	}
-	final := result.(kickoffPromptModel)
-	if pick != nil {
-		pick.kind = final.agent
-	}
-	return final.kickoff, nil
-}
-
-type kickoffPromptModel struct {
-	input   textinput.Model
-	agent   agentKind
-	kickoff string
-	done    bool
-}
-
-func newKickoffPromptModel(pick *agentPick) kickoffPromptModel {
-	input := textinput.New()
-	input.Prompt = "Kickoff: "
-	input.Placeholder = "What are we working on?"
-	input.Width = 72
-	input.Focus()
-	return kickoffPromptModel{input: input, agent: pick.offered()}
-}
-
-func (m kickoffPromptModel) Init() tea.Cmd { return textinput.Blink }
-
-func (m kickoffPromptModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		if isAgentCycleKey(msg) {
-			m.agent = m.agent.next()
-			return m, nil
-		}
-		switch msg.Type {
-		case tea.KeyEnter:
-			m.kickoff = strings.TrimSpace(m.input.Value())
-			m.done = true
-			return m, tea.Quit
-		case tea.KeyEsc, tea.KeyCtrlC:
-			m.done = true
-			return m, tea.Quit
-		}
-	case tea.WindowSizeMsg:
-		m.input.Width = max(20, msg.Width-len(m.input.Prompt))
-	}
-
-	var cmd tea.Cmd
-	m.input, cmd = m.input.Update(msg)
-	return m, cmd
-}
-
-func (m kickoffPromptModel) View() string {
-	if m.done {
-		return ""
-	}
-	return m.input.View() + "\n\n" + agentBar(m.agent) + "\n"
+	return "", fmt.Errorf("Kickoff prompt needs an interactive terminal; pass it inline, e.g. `rig new investigate the flake`")
 }
 
 // kickoffID turns the free-form kickoff into the stable identity used by the

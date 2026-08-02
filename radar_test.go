@@ -453,44 +453,6 @@ func TestRadarFilterRows(t *testing.T) {
 	}
 }
 
-// The NEW picker lists zoxide dirs as create-rows, skipping any dir that
-// already has a session (rig, bare session, or the current one), and stands up
-// a session at the dir on Enter.
-func TestRadarNewRows(t *testing.T) {
-	m := radarModel{
-		home:     "/home/me",
-		current:  tmuxSessionName("/home/me/here"),
-		inflight: []rigStatus{{Slug: "rig", Path: "/home/me/work/rig"}},
-		sessions: []rigStatus{bareSession(tmuxSession{Name: tmuxSessionName("/home/me/open"), Path: "/home/me/open"}, "/home/me")},
-		newDirs: []string{
-			"/home/me/work/rig", // has a rig session — skip
-			"/home/me/open",     // has a bare session — skip
-			"/home/me/here",     // the current session — skip
-			"/home/me/fresh",    // no session — keep
-			"/home/me/notes",    // no session — keep
-		},
-	}
-	rows := m.newRows()
-	if len(rows) != 2 {
-		t.Fatalf("newRows = %d (%+v), want 2", len(rows), rows)
-	}
-	for _, r := range rows {
-		if !r.create {
-			t.Errorf("row %q not marked create", r.Title)
-		}
-	}
-	if rows[0].Title != "~/fresh" || rows[1].Title != "~/notes" {
-		t.Errorf("titles = %q, %q; want ~/fresh, ~/notes", rows[0].Title, rows[1].Title)
-	}
-	// A create-row reads as a fresh session: plus glyph, no PR tail.
-	if g, _ := radarGlyph(rows[0], false); g != "+" {
-		t.Errorf("create glyph = %q, want +", g)
-	}
-	if segs := radarTailSegs(rows[0], false); segs != nil {
-		t.Errorf("create tail = %v, want nil", segs)
-	}
-}
-
 // windowBody keeps the cursor's line on screen: the list holds at the top until
 // the cursor would drop off the bottom, then scrolls just enough to follow it,
 // and never returns more than the budget.
@@ -525,8 +487,8 @@ func TestWindowBody(t *testing.T) {
 	}
 }
 
-// The board must never render taller than the popup, whatever the mode or how
-// far the cursor has scrolled — that's the whole point of the viewport. Also
+// The board must never render taller than the popup, however far the cursor has
+// scrolled. That's the whole point of the viewport. Also
 // checks the selected row survives into the visible window.
 func TestViewFitsHeight(t *testing.T) {
 	m := radarModel{
@@ -564,42 +526,20 @@ func TestViewFitsHeight(t *testing.T) {
 	}
 }
 
-// The NEW picker no longer caps its list — windowing handles overflow — so every
-// session-less zoxide dir is reachable by scrolling.
-func TestRadarNewPickerNoCap(t *testing.T) {
-	m := radarModel{mode: modeNew}
-	for i := range 200 {
-		m.newDirs = append(m.newDirs, "/home/me/dir"+string(rune('a'+i%26))+string(rune('0'+i/26)))
-	}
-	if got := len(m.rows()); got != 200 {
-		t.Errorf("new rows = %d, want all 200", got)
-	}
-}
-
-// Switching modes wipes the query and snaps the cursor to the top, so each mode
-// opens clean on its first row.
-func TestRadarEnterMode(t *testing.T) {
-	m := radarModel{mode: modeBoard, filter: "stale", cursor: 4}
-	m.enter(modeNew)
-	if m.mode != modeNew || m.filter != "" || m.cursor != 0 {
-		t.Errorf("enter(modeNew) = {mode:%d filter:%q cursor:%d}, want {new empty 0}", m.mode, m.filter, m.cursor)
-	}
-}
-
 // Drive the input state machine through keystrokes: the board is always a fuzzy
 // filter (printable keys narrow it), backspace trims, esc clears a live query
-// before it would quit, and ctrl+t opens the NEW picker. Guards the wiring the
-// UI depends on.
+// before it would quit, and ctrl+n embeds the shared new-rig wizard. Guards the
+// wiring the UI depends on.
 func TestRadarKeyFlow(t *testing.T) {
 	m := radarModel{
 		inflight: []rigStatus{{Slug: "a", ID: "PROJ-1", Title: "add radar"}},
 	}
 
-	// Bare letters land straight in the filter — no mode to enter first.
+	// Bare letters land straight in the filter.
 	m, _ = m.handleKey("r")
 	m, _ = m.handleKey("a")
-	if m.mode != modeBoard || m.filter != "ra" {
-		t.Fatalf("typing did not filter the board: mode=%d filter=%q", m.mode, m.filter)
+	if m.filter != "ra" {
+		t.Fatalf("typing did not filter the board: filter=%q", m.filter)
 	}
 
 	// Backspace trims the query a rune at a time.
@@ -610,18 +550,34 @@ func TestRadarKeyFlow(t *testing.T) {
 
 	// esc with a live query clears it but stays on the board.
 	m, _ = m.handleKey("esc")
-	if m.mode != modeBoard || m.filter != "" {
-		t.Fatalf("esc did not clear to a clean board: mode=%d filter=%q", m.mode, m.filter)
+	if m.filter != "" {
+		t.Fatalf("esc did not clear to a clean board: filter=%q", m.filter)
 	}
 
-	// ctrl+t opens the NEW picker; esc walks back out.
-	m, _ = m.handleKey("ctrl+t")
-	if m.mode != modeNew {
-		t.Fatalf("ctrl+t did not open NEW picker: mode=%d", m.mode)
+	// ctrl+n opens the shared wizard inside the radar; esc returns to the board.
+	m, _ = m.handleKey("ctrl+n")
+	if m.newRig == nil || m.newRig.phase != newRigKickoff {
+		t.Fatalf("ctrl+n did not open new-rig wizard: %#v", m.newRig)
 	}
-	m, _ = m.handleKey("esc")
-	if m.mode != modeBoard {
-		t.Fatalf("esc did not leave NEW picker: mode=%d", m.mode)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(radarModel)
+	if m.newRig != nil {
+		t.Fatal("esc did not return from new-rig wizard to board")
+	}
+}
+
+func TestRadarNewRigSuccessBecomesDestination(t *testing.T) {
+	m := radarModel{}
+	m, _ = m.handleKey("ctrl+n")
+	updated, cmd := m.Update(newRigCreatedMsg{result: newRigResult{
+		ID: "new-rig", Basedir: "/work/new-rig", Session: "~/workspaces/new-rig",
+	}})
+	m = updated.(radarModel)
+	if cmd == nil || m.newRig != nil || m.chosen == nil {
+		t.Fatalf("creation did not finish radar: wizard=%v chosen=%+v cmd=%v", m.newRig != nil, m.chosen, cmd != nil)
+	}
+	if !m.chosen.bare || m.chosen.session != "~/workspaces/new-rig" {
+		t.Fatalf("created destination = %+v", *m.chosen)
 	}
 }
 

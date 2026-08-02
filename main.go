@@ -115,10 +115,10 @@ usage:
   rig new [kickoff] [--repo owner/repo] [--agent AGENT]
                             start unticketed work in a normal authoring rig
                             (prompts for the kickoff when omitted, then for a
-                            blob of context to paste — esc skips it, and piped
-                            stdin supplies it without a prompt — then uses the
-                            same repo picker as up; starts at trunk with no
-                            branch recorded yet)
+                            blob of context to paste (esc skips it, and piped
+                            stdin supplies it without a prompt), then picks the
+                            repo; the same TUI opens inside radar on ctrl-n;
+                            starts at trunk with no branch recorded yet)
   rig review [pr-url] [--agent AGENT]
                             pitch a review rig for someone else's PR
                             (url, or fzf picker over review-requested PRs;

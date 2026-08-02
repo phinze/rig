@@ -33,9 +33,8 @@ import (
 // each dangling its live claude windows as a HUD of what's in flight. You just
 // type to fuzzy-filter — the list ranks best-match-first and the matched runes
 // bold in place — with the verbs on modifier keys so they never fight the query:
-// ctrl+t opens a NEW picker that stands up a session at a zoxide dir, ctrl+r
-// refreshes, esc clears a live query then quits. The NEW picker is where `rig up`
-// and `rig review` will grow their own sources.
+// ctrl+n opens the same new-rig wizard as `rig new`, ctrl+r refreshes, and esc
+// clears a live query then quits.
 func runRadar(args []string) error {
 	if len(args) != 0 {
 		return fmt.Errorf("usage: rig radar")
@@ -100,11 +99,6 @@ func radarAct(s rigStatus) error {
 	// stand up, no PR to wake.
 	if s.bare || s.child {
 		return attachOrReport(s.session)
-	}
-	// A create-row stands up a fresh session at a zoxide dir; promoting its
-	// frecency first keeps the picker's order honest next time.
-	if s.create {
-		zoxideAdd(s.Path)
 	}
 	// Nonblocking: radarAct runs after the picker's TUI has torn down, so a
 	// blocking flock here would hang a bare terminal with no output while some
@@ -172,26 +166,14 @@ type radarModel struct {
 	// how loud rather than reprinting each — `rig notify list` is the detail view.
 	inbox []notification
 
-	mode    radarMode
-	newDirs []string // zoxide frecency list, fetched when the NEW picker opens
-	filter  string   // fuzzy query; empty = show everything
+	newRig  *newRigModel // shared `rig new` wizard, embedded without leaving radar
+	filter  string       // fuzzy query; empty = show everything
 	cursor  int
-	chosen  *rigStatus // set on Enter; acted on after the program exits
+	chosen  *rigStatus // set on Enter or successful creation; acted on after exit
 	width   int
 	height  int
 	scanErr error
 }
-
-// radarMode is the picker's input mode. The board is always type-to-filter:
-// printable keys narrow the list live and the verbs ride modifier keys so they
-// don't collide with the query. ctrl+t opens the NEW picker, a create-a-session
-// view that's likewise type-to-find.
-type radarMode int
-
-const (
-	modeBoard radarMode = iota // the board: type to filter, verbs on modifiers
-	modeNew                    // NEW picker: zoxide dirs → fresh session
-)
 
 type radarScanMsg struct {
 	statuses []rigStatus
@@ -350,6 +332,31 @@ func saveRadarCache(prs map[string][]rigPR, fetchedAt map[string]time.Time) {
 }
 
 func (m radarModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// The new-rig wizard is a model inside this model, not a second Bubble Tea
+	// program. That keeps radar's alternate screen and tmux popup intact through
+	// every prompt. Background scans may still land while it is open; only input,
+	// sizing, and wizard-owned async results are delegated here.
+	if m.newRig != nil {
+		switch msg.(type) {
+		case tea.KeyMsg, tea.WindowSizeMsg, newRigReposMsg, newRigCreatedMsg:
+			wizard, cmd := m.newRig.update(msg)
+			if size, ok := msg.(tea.WindowSizeMsg); ok {
+				m.width, m.height = size.Width, size.Height
+			}
+			if wizard.done {
+				m.newRig = nil
+				if wizard.result.Session != "" {
+					dest := rigStatus{bare: true, session: wizard.result.Session}
+					m.chosen = &dest
+					return m, tea.Quit
+				}
+				return m, nil
+			}
+			m.newRig = &wizard
+			return m, cmd
+		}
+	}
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -430,18 +437,18 @@ func (m radarModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // handleKey drives the picker as an always-on fuzzy filter, the way session-
 // wizard's fzf did: printable keys narrow the list, the cursor rides the best
 // match, and the verbs live on modifier keys so they never collide with the
-// query. The NEW picker is the same grammar over zoxide dirs.
+// query. ctrl+n hands input to the embedded new-rig wizard instead.
 func (m radarModel) handleKey(key string) (radarModel, tea.Cmd) {
-	// Keys shared by every mode: move, select, hard-quit.
+	// Board-global keys: move, select, hard-quit.
 	switch key {
 	case "ctrl+c":
 		return m, tea.Quit
-	case "down", "ctrl+n":
+	case "down":
 		if m.cursor < len(m.rows())-1 {
 			m.cursor++
 		}
 		return m, nil
-	case "up", "ctrl+p":
+	case "up":
 		if m.cursor > 0 {
 			m.cursor--
 		}
@@ -455,14 +462,11 @@ func (m radarModel) handleKey(key string) (radarModel, tea.Cmd) {
 		m.chosen = &s
 		return m, tea.Quit
 	}
-	if m.mode == modeNew {
-		return m.handleNewKey(key)
-	}
 	return m.handleBoardKey(key)
 }
 
 // handleBoardKey runs the board: printable runes narrow the filter, the verbs
-// hang off modifiers (ctrl+t new, ctrl+r refresh), and esc clears a live query
+// hang off modifiers (ctrl+n new, ctrl+r refresh), and esc clears a live query
 // before it quits so a search is never one keystroke from dropping the popup.
 func (m radarModel) handleBoardKey(key string) (radarModel, tea.Cmd) {
 	switch key {
@@ -478,11 +482,20 @@ func (m radarModel) handleBoardKey(key string) (radarModel, tea.Cmd) {
 		if r := []rune(m.filter); len(r) > 0 {
 			m.setFilter(string(r[:len(r)-1]))
 		}
-	case "ctrl+t":
-		// Fetch the frecency list once, when the picker opens, so the board's
-		// 2s tick never pays for it.
-		m.newDirs = zoxideDirs()
-		m.enter(modeNew)
+	case "ctrl+n":
+		agent, err := parseAgent("")
+		if err != nil {
+			agent = agentClaude
+		}
+		wizard, err := newRigWizardModel("", "", agent)
+		if err != nil {
+			return m, nil // an empty kickoff has no preflight error
+		}
+		if m.width > 0 || m.height > 0 {
+			wizard, _ = wizard.update(tea.WindowSizeMsg{Width: m.width, Height: m.height})
+		}
+		m.newRig = &wizard
+		return m, wizard.Init()
 	case "ctrl+r":
 		// Refetch every rig's PRs; stale cells keep showing until the fresh
 		// answer lands rather than flashing back to "…".
@@ -501,24 +514,6 @@ func (m radarModel) handleBoardKey(key string) (radarModel, tea.Cmd) {
 	return m, nil
 }
 
-// handleNewKey runs the NEW picker: printable runes narrow the dir list, esc
-// walks back to the board.
-func (m radarModel) handleNewKey(key string) (radarModel, tea.Cmd) {
-	switch key {
-	case "esc":
-		m.enter(modeBoard)
-	case "ctrl+u":
-		m.setFilter("")
-	case "backspace":
-		if r := []rune(m.filter); len(r) > 0 {
-			m.setFilter(string(r[:len(r)-1]))
-		}
-	default:
-		m = m.typeInto(key)
-	}
-	return m, nil
-}
-
 // typeInto appends a lone printable rune to the filter. Named keys (tab, f-keys,
 // arrows) arrive as multi-rune strings and are left untouched.
 func (m radarModel) typeInto(key string) radarModel {
@@ -526,14 +521,6 @@ func (m radarModel) typeInto(key string) radarModel {
 		m.setFilter(m.filter + key)
 	}
 	return m
-}
-
-// enter switches modes with a clean slate: the query resets and the cursor
-// snaps to the top so each mode opens on its best/first row.
-func (m *radarModel) enter(mode radarMode) {
-	m.mode = mode
-	m.filter = ""
-	m.cursor = 0
 }
 
 // setFilter changes the query and snaps the cursor to the top row, which under
@@ -716,8 +703,7 @@ func (l radarLine) selectableRow() (rigStatus, bool) {
 // so the two never drift. In board mode it's one flat list — rigs and sessions
 // together, most-recently-touched first, or fuzzy-ranked best-match-first once a
 // filter is typed — with each surviving parent's live claude windows dangled
-// beneath it either way, so the HUD holds through a search. The NEW picker is its
-// own header plus create-rows.
+// beneath it either way, so the HUD holds through a search.
 func (m radarModel) displayItems() []radarLine {
 	var items []radarLine
 	parent := func(p rigStatus) {
@@ -765,16 +751,8 @@ func (m radarModel) displayItems() []radarLine {
 			})
 		}
 	}
-	switch m.mode {
-	case modeNew:
-		items = append(items, radarLine{header: "NEW SESSION"})
-		for _, s := range m.rankRows(m.newRows()) {
-			items = append(items, radarLine{row: s})
-		}
-	default: // modeBoard
-		for _, p := range m.orderedParents() {
-			parent(p)
-		}
+	for _, p := range m.orderedParents() {
+		parent(p)
 	}
 	return items
 }
@@ -906,43 +884,6 @@ func (m radarModel) rankRows(sections ...[]rigStatus) []rigStatus {
 		out[i] = x.s
 	}
 	return out
-}
-
-// newRows builds the NEW picker's create-rows from the zoxide frecency list:
-// one row per dir that doesn't already have a session (rig, bare session, or
-// the current one), since a dir you're already in belongs on the board, not
-// here. Enter on one stands up a session at that dir.
-func (m radarModel) newRows() []rigStatus {
-	open := m.openSessions()
-	var out []rigStatus
-	for _, dir := range m.newDirs {
-		if open[tmuxSessionName(dir)] {
-			continue
-		}
-		out = append(out, rigStatus{
-			create: true,
-			Path:   dir,
-			Title:  tildePath(dir, m.home),
-		})
-	}
-	return out
-}
-
-// openSessions is the set of tmux session names already represented on the
-// board — every rig's computed name, every bare session, and the current one —
-// so the NEW picker can skip dirs you can already reach.
-func (m radarModel) openSessions() map[string]bool {
-	open := make(map[string]bool)
-	for _, s := range m.rigRows() {
-		open[tmuxSessionName(s.Path)] = true
-	}
-	for _, s := range m.sessions {
-		open[s.session] = true
-	}
-	if m.current != "" {
-		open[m.current] = true
-	}
-	return open
 }
 
 // agentPlaceholder is Claude Code's default title before a task is named — the
@@ -1294,10 +1235,6 @@ func radarGlyph(s rigStatus, fetched bool) (string, lipgloss.Style) {
 		// as "just a place to land" without competing with the rigs' dots.
 		return "○", radarFaintStyle
 	}
-	if s.create {
-		// A NEW-picker row is a session that doesn't exist yet; the plus says so.
-		return "+", radarGoodStyle
-	}
 	if s.Parked {
 		if !fetched {
 			return "…", radarFaintStyle
@@ -1385,7 +1322,7 @@ type tailSeg struct {
 // parked ones. Loading reads as a bare "…"; an in-flight rig with no PR trails
 // nothing at all.
 func radarTailSegs(s rigStatus, fetched bool) []tailSeg {
-	if s.bare || s.create {
+	if s.bare {
 		return nil
 	}
 	if !fetched {
@@ -1504,11 +1441,13 @@ func (m radarModel) columns(items []radarLine) radarColumns {
 }
 
 func (m radarModel) View() string {
-	// A prompt rides at the top whenever there's a query to show (or the NEW
-	// picker, which is a search from the moment it opens), so the text lands
-	// where fzf trained the eye and stays put while the list below narrows. The
-	// resting board shows no prompt — it reads as a clean HUD until you type.
-	typing := m.mode == modeNew || m.filter != ""
+	if m.newRig != nil {
+		return m.newRig.View()
+	}
+	// A prompt rides at the top whenever there's a query to show, so the text
+	// lands where fzf trained the eye and stays put while the list below narrows.
+	// The resting board shows no prompt: it reads as a clean HUD until you type.
+	typing := m.filter != ""
 	prompt := ""
 	if typing {
 		prompt = radarFaintStyle.Render("/ ") + m.filter + radarFaintStyle.Render("▌") + "\n\n"
@@ -1517,12 +1456,10 @@ func (m radarModel) View() string {
 
 	var footer string
 	switch {
-	case m.mode == modeNew:
-		footer = radarFaintStyle.Render("type to find · enter start session · esc back")
 	case m.filter != "":
 		footer = radarFaintStyle.Render("type to filter · enter go · esc clear")
 	default:
-		footer = radarFaintStyle.Render("type filter · enter go · ^t new · ^r refresh · esc quit")
+		footer = radarFaintStyle.Render("type filter · enter go · ^n new · ^r refresh · esc quit")
 	}
 
 	items := m.displayItems()
@@ -1535,12 +1472,6 @@ func (m radarModel) View() string {
 	if selectable == 0 {
 		msg := "  nothing to pick"
 		switch {
-		case m.mode == modeNew:
-			if len(m.newDirs) == 0 {
-				msg = radarFaintStyle.Render("  no zoxide history")
-			} else {
-				msg = radarFaintStyle.Render("  no matches")
-			}
 		case m.filter != "":
 			msg = radarFaintStyle.Render("  no matches")
 		}
@@ -1769,7 +1700,7 @@ func (m radarModel) inboxLine() string {
 // height isn't known yet (no windowing). The mouse handler subtracts the same so
 // a click lines up with the row drawn under it.
 func (m radarModel) viewportChrome() (promptRows, budget int) {
-	typing := m.mode == modeNew || m.filter != ""
+	typing := m.filter != ""
 	if typing {
 		promptRows = 2 // prompt line + blank
 	}
