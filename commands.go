@@ -196,6 +196,12 @@ type rigStatus struct {
 	session  string
 	childKey string
 	agents   []agentChild
+	// stone marks a row that isn't a rig at all any more: it's a tombstone from
+	// the history section, and Enter on it resurrects rather than switches.
+	// Nil on every live row. Rows carrying one have no Path worth locking, no
+	// session to attach, and no PRs to fetch, so the pipelines that do those
+	// things skip them.
+	stone *tombstone
 }
 
 // rigPR is one of a rig's pull requests, tagged with the repo and branch it

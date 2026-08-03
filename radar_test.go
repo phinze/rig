@@ -994,3 +994,204 @@ func TestRadarTruncate(t *testing.T) {
 		}
 	}
 }
+
+// TestRadarHistorySection covers the regret window's place on the board. It is
+// hidden at rest so live work keeps the popup, revealed by a filter (the moment
+// this feature exists for is searching for a rig you don't yet know is dead),
+// and forced open by ctrl+t. When shown it keeps the store's newest-death-first
+// order rather than being re-sorted by urgency like the live sections.
+func TestRadarHistorySection(t *testing.T) {
+	older := &tombstone{ID: "old-rig", Title: "older", Died: time.Unix(100, 0)}
+	newer := &tombstone{ID: "new-rig", Title: "newer", Died: time.Unix(200, 0)}
+	base := func() radarModel {
+		return radarModel{
+			inflight: []rigStatus{{Slug: "live", Title: "live"}},
+			history: []rigStatus{
+				{ID: newer.ID, Slug: "new-rig", Title: newer.Title, Created: newer.Died, stone: newer},
+				{ID: older.ID, Slug: "old-rig", Title: older.Title, Created: older.Died, stone: older},
+			},
+		}
+	}
+
+	// At rest: no history, no header, no rows spent.
+	if got := base().parentSections(); len(got) != 2 {
+		t.Fatalf("history should be hidden with no filter, got %d sections: %+v", len(got), got)
+	}
+
+	// ctrl+t opens it deliberately, newest death first.
+	shown := base()
+	shown.showHistory = true
+	sections := shown.parentSections()
+	if len(sections) != 3 || sections[2].header != "RECENTLY TORN DOWN" {
+		t.Fatalf("ctrl+t sections = %+v", sections)
+	}
+	if got := []string{sections[2].rows[0].ID, sections[2].rows[1].ID}; !slices.Equal(got, []string{"new-rig", "old-rig"}) {
+		t.Fatalf("history order = %v, want newest death first", got)
+	}
+
+	// A filter reveals it without the toggle, ranked like any other section, so
+	// searching for a rig you didn't know was dead finds it instead of nothing.
+	filtered := base()
+	filtered.setFilter("old")
+	var found bool
+	for _, s := range filtered.parentSections() {
+		if s.header != "RECENTLY TORN DOWN" {
+			continue
+		}
+		found = true
+		if len(s.rows) != 1 || s.rows[0].ID != "old-rig" {
+			t.Errorf("filtered history = %+v, want just old-rig", s.rows)
+		}
+	}
+	if !found {
+		t.Error("a filter matching a dead rig should surface the history section")
+	}
+
+	// A filter matching nothing dead still spends no rows on history.
+	miss := base()
+	miss.setFilter("live")
+	for _, s := range miss.parentSections() {
+		if s.header == "RECENTLY TORN DOWN" {
+			t.Errorf("history section shown for a query that matches no tombstone: %+v", s.rows)
+		}
+	}
+}
+
+// ctrl+t is the toggle, and it resets the cursor because the row set changes
+// shape underneath it. ctrl+h was rejected deliberately: it's ASCII 0x08, which
+// some terminals still send for backspace, and backspace edits the live filter.
+func TestRadarHistoryToggleKey(t *testing.T) {
+	m := radarModel{
+		inflight: []rigStatus{{Slug: "live"}},
+		history:  []rigStatus{{ID: "dead", stone: &tombstone{ID: "dead"}}},
+		cursor:   1,
+	}
+	m, _ = m.handleBoardKey("ctrl+t")
+	if !m.showHistory {
+		t.Fatal("ctrl+t did not open history")
+	}
+	if m.cursor != 0 {
+		t.Errorf("cursor = %d, want reset to 0 after the row set changed", m.cursor)
+	}
+	m, _ = m.handleBoardKey("ctrl+t")
+	if m.showHistory {
+		t.Error("ctrl+t did not close history again")
+	}
+}
+
+// TestRadarHistoryRowsAreNotLiveRigs pins the boundary that keeps a torn-down
+// rig from being treated as a live one: the PR fan-out and the parked-toggle
+// both walk the live sections, and a history row must not appear there. Fetching
+// PRs for a rig that no longer exists would be wasted gh calls at best.
+func TestRadarHistoryRowsAreNotLiveRigs(t *testing.T) {
+	m := radarModel{
+		inflight: []rigStatus{{Slug: "live"}},
+		history:  []rigStatus{{ID: "dead", Slug: "dead", stone: &tombstone{ID: "dead"}}},
+	}
+	for _, r := range m.rigRows() {
+		if r.stone != nil {
+			t.Errorf("history row %q leaked into the PR fan-out", r.Slug)
+		}
+	}
+	if len(m.rigRows()) != 1 {
+		t.Errorf("rigRows = %d, want just the live rig", len(m.rigRows()))
+	}
+}
+
+// TestTombstoneRowsCarryDeathAsCreated pins the one deliberate lie in the row
+// mapping: Created holds the death time, because every ordering and age path on
+// the board reads Created and the interesting age for a dead rig is how long
+// ago you lost it.
+func TestTombstoneRowsCarryDeathAsCreated(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	now := time.Now()
+	died := now.Add(-3 * time.Hour)
+	if err := writeTombstone(&tombstone{
+		Version: tombstoneVersion,
+		ID:      "gone",
+		Title:   "a thing we lost",
+		Basedir: "/home/x/workspaces/gone",
+		Died:    died,
+		Session: &sessionRef{Agent: "codex", ID: "sid"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rows := tombstoneRows(now)
+	if len(rows) != 1 {
+		t.Fatalf("want 1 row, got %d", len(rows))
+	}
+	if !rows[0].Created.Equal(died) {
+		t.Errorf("Created = %s, want the death time %s", rows[0].Created, died)
+	}
+	if rows[0].Title != "a thing we lost" || rows[0].Slug != "gone" {
+		t.Errorf("row = %+v", rows[0])
+	}
+	if rows[0].stone == nil || !rows[0].stone.resurrectable() {
+		t.Error("row lost its tombstone, so Enter would have nothing to resurrect")
+	}
+}
+
+// A history row's state cell answers "can I get it back", not "what is it
+// doing" — the live vocabulary is meaningless for a rig that no longer exists.
+func TestRadarStateCellForHistoryRows(t *testing.T) {
+	withSession := rigStatus{stone: &tombstone{ID: "a", Session: &sessionRef{Agent: "codex", ID: "sid"}}}
+	if got := radarStateCell(withSession, false); got != "↺ codex" {
+		t.Errorf("recoverable row = %q, want the resume marker and agent", got)
+	}
+	without := rigStatus{stone: &tombstone{ID: "b"}}
+	if got := radarStateCell(without, true); got != "no session" {
+		t.Errorf("unrecoverable row = %q", got)
+	}
+	// And it must not fall through to the live agent vocabulary.
+	if got := radarStateCell(without, false); got == "-" {
+		t.Error("history row rendered as a live rig with no session")
+	}
+}
+
+// The glyph and tail columns both have to know about history rows. Neither can
+// fall through to the live paths: the glyph would read as an idle agent, and
+// the tail's "not fetched yet" ellipsis would be permanent, since history rows
+// are deliberately excluded from the PR fan-out and never get enriched.
+func TestRadarHistoryRowRendering(t *testing.T) {
+	live := rigStatus{stone: &tombstone{ID: "a", Session: &sessionRef{Agent: "codex", ID: "sid"}}}
+	dead := rigStatus{stone: &tombstone{ID: "b"}}
+
+	if g, _ := radarGlyph(live, false); g != "↺" {
+		t.Errorf("recoverable glyph = %q, want the restore arrow", g)
+	}
+	if g, _ := radarGlyph(dead, false); g != "·" {
+		t.Errorf("unrecoverable glyph = %q", g)
+	}
+
+	segs := radarTailSegs(live, false)
+	if len(segs) != 1 || segs[0].plain != "codex" {
+		t.Errorf("recoverable tail = %+v, want the agent name", segs)
+	}
+	if segs := radarTailSegs(dead, false); len(segs) != 1 || segs[0].plain != "no session" {
+		t.Errorf("unrecoverable tail = %+v", segs)
+	}
+	// The unfetched ellipsis is the specific wrong answer we're guarding.
+	if segs := radarTailSegs(live, false); segs[0].plain == "…" {
+		t.Error("history row showed a pending-PR ellipsis it will never resolve")
+	}
+}
+
+// A history row's rig is gone, so the park toggle has nothing to stamp. It
+// carries its old basedir in Path and would otherwise slip past the emptiness
+// guard that catches bare sessions.
+func TestRadarParkRefusesHistoryRows(t *testing.T) {
+	m := radarModel{
+		history:     []rigStatus{{ID: "dead", Path: "/home/x/workspaces/dead", stone: &tombstone{ID: "dead"}}},
+		showHistory: true,
+	}
+	m, cmd := m.handleBoardKey("ctrl+p")
+	if cmd != nil {
+		t.Error("ctrl+p issued a park command for a torn-down rig")
+	}
+	if m.actionErr == nil || !strings.Contains(m.actionErr.Error(), "torn down") {
+		t.Errorf("actionErr = %v, want an explanation naming the state", m.actionErr)
+	}
+	if len(m.parkPending) != 0 {
+		t.Errorf("park marked pending for a rig that doesn't exist: %v", m.parkPending)
+	}
+}

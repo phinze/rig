@@ -381,6 +381,70 @@ processes with it, but the legacy nightly's phase 3 (SIGTERM idle
 `claude-unwrapped` processes wherever they live) has no rig-aware
 replacement yet.
 
+## Tombstones (`rig history` / `rig resurrect`)
+
+Retiring reap's judgment fixed the unattended half of the problem, but it left
+the deliberate half untouched: `down` and `sweep` still destroy rigs, and the
+gates they consult still can't see the thing most worth keeping. A rig can be
+spotless by every VCS measure — nothing off trunk, no WIP, no PR — and still be
+the only place a long exploration exists. That's not a bug in the gates. It's a
+category error to ask them, because commits are the wrong unit for a
+conversation.
+
+Rather than make teardown timid, teardown records what it would take to undo
+itself. `prepareTeardownJob` writes a tombstone before anything is destroyed,
+which means `down` and `sweep` both get this without knowing the feature
+exists, and nothing can destroy a rig by a path that skips it.
+
+The load-bearing field is the agent session id. Every agent store keys on cwd
+or workspace, never on rig: Claude mangles the cwd into a project dir, Codex
+files rollouts by date and records cwd inside the transcript, Antigravity keys
+history by workspace. So the id is resolvable exactly once, while the basedir
+still exists, and after that no query finds it. Cheap to write, impossible to
+reconstruct — which is the entire justification for writing it eagerly on a
+path that mostly won't need it.
+
+Writing is best-effort at the call site, deliberately. A rig you asked to tear
+down has to go away even if the tombstone can't be written; the failure mode of
+the alternative is a rig that won't die, which is worse than the one this
+protects against.
+
+`rig history` lists what's inside the seven-day regret window; `rig resurrect
+<id>` rebuilds the basedir, re-adds each jj workspace at its recorded branch,
+and launches the agent resuming that conversation.
+
+The radar carries the same thing as a `RECENTLY TORN DOWN` section, but hidden
+at rest. The popup's rows belong to live work, and a busy week of teardowns
+would push it off the fold for rows that are by definition finished. A filter
+reveals it instead, which is the important half: the moment this feature exists
+for is the one where you type a rig's name into the radar *without knowing it's
+gone*. A separate pane would answer that search with nothing and teach you the
+rig never existed. Revealed by filter, the search answers "here it is, and it
+died nine hours ago, and the conversation is still there." ctrl+t opens the
+whole window for the deliberate case.
+
+ctrl+h was the obvious key and is wrong: it's ASCII 0x08, which a fair number
+of terminals still send for backspace, and backspace edits the radar's live
+filter. Being wrong about that would break typing, not just the feature.
+
+Enter on a history row resurrects instead of switching, which is the only verb
+that means anything on something already gone. ctrl+p explicitly refuses them:
+a history row keeps its old basedir in `Path`, so it slips past the emptiness
+check that catches bare sessions, and parking one would stamp a manifest that
+isn't there.
+
+Two honest limits. What comes back is the shape, not the contents: workspaces
+return at their recorded branches, so uncommitted scratch is still gone, and
+the command says so rather than implying a restore. And the window is a regret
+window, not a backup — seven days covers a weekend plus the Monday you notice,
+and nothing here holds file content, so the whole store stays kilobytes.
+
+The resume invocations are per-agent and were verified against the installed
+CLIs rather than assumed (codex takes a subcommand and its bypass flag is
+global, so it precedes it; claude and antigravity take flags). They're pinned by
+test because a resume that silently degrades into a fresh session looks exactly
+like success while losing precisely what this exists to protect.
+
 ## The radar (`rig radar`)
 
 `rig switch` and `rig waiting` answer two halves of the same question,

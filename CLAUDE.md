@@ -46,6 +46,30 @@ stranded teardown jobs and stops orphaned tmux/iso scopes, nothing more, and
 find yourself adding a policy gate to reap, that's the signal the decision
 belongs in sweep instead. See DESIGN.md §"Reaping".
 
+Teardown is reversible for a week. `prepareTeardownJob` writes a tombstone
+before it destroys anything, so `down` and `sweep` both get it without knowing
+it exists and nothing can kill a rig by a path that skips it. The field that
+matters is the agent session id: every agent store keys on cwd or workspace,
+never on rig, so it's resolvable exactly once — while the basedir still exists.
+That asymmetry is the whole design, and it's why the write is eager on a path
+that usually won't need it. `rig history` lists the window, `rig resurrect <id>`
+rebuilds the rig and resumes the conversation, and the radar shows the same
+thing as a `RECENTLY TORN DOWN` section whose rows carry a `stone` and
+resurrect on Enter.
+
+That section is hidden at rest and revealed by a filter, which is the load-
+bearing half: you search for a rig not knowing it's gone, and an empty result
+would teach you it never existed. ctrl+t forces it open (not ctrl+h — that's
+0x08, which some terminals send for backspace, and backspace edits the filter).
+Those rows live outside `rigRows`, which is what already scopes the PR fan-out
+and the parked toggle to live rigs, so don't reach for them there — and note
+that exclusion is *why* `radarGlyph` and `radarTailSegs` need their own `stone`
+branches, since the tail's unfetched "…" would otherwise never resolve. ctrl+p
+refuses them explicitly, because a history row keeps its old basedir in `Path`
+and would slip past the check that catches bare sessions. Recording is best-effort on
+purpose: a rig you asked to tear down must go away even if we couldn't write
+its tombstone. See DESIGN.md §"Tombstones".
+
 Two things there are easy to get wrong. Merges never arrive pre-checked and `a`
 skips them, because merging is the only irreversible act in the pass. And
 "pre-checked" is a separate judgment from "safe": `sweepCollectable` asks whether

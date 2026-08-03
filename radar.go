@@ -94,6 +94,12 @@ func radarPick(home string) (*rigStatus, error) {
 // up if it lacks one, and land in it. This is the tail of switch and wake,
 // executed after the TUI has released the terminal.
 func radarAct(s rigStatus) error {
+	// A history row's rig no longer exists, so there's nothing to unpark or
+	// attach to. Rebuild it instead, which is the only verb that makes sense on
+	// something already gone.
+	if s.stone != nil {
+		return runResurrect([]string{s.stone.ID})
+	}
 	// A bare session is nothing but a name to land in; a child is the same, its
 	// session field a session:index window target. No manifest, no session to
 	// stand up, no PR to wake.
@@ -136,6 +142,8 @@ type radarModel struct {
 	inflight    []rigStatus
 	parked      []rigStatus
 	sessions    []rigStatus      // bare (non-rig) tmux sessions, MRU order
+	history     []rigStatus      // tombstones inside the regret window, newest death first
+	showHistory bool             // ctrl+t: show history even with no filter active
 	attached    map[string]int64 // session → last-attached, for in-flight order
 	prs         map[string][]rigPR
 	fetchedAt   map[string]time.Time // slug → when its PRs were fetched
@@ -162,6 +170,7 @@ type radarScanMsg struct {
 	sessions []tmuxSession
 	attached map[string]int64
 	agents   map[string][]agentChild // session name → its claude windows
+	stones   []rigStatus             // torn-down rigs still inside the regret window
 	err      error
 }
 
@@ -208,7 +217,34 @@ func radarScanNow(home string) radarScanMsg {
 		sessions: sessions,
 		attached: attached,
 		agents:   tmuxAgentChildren(),
+		stones:   tombstoneRows(time.Now()),
 	}
+}
+
+// tombstoneRows renders the regret window as board rows. A failure to read the
+// store costs the history section and nothing else — the radar's job is the
+// live board, and it should still draw if the tombstone directory is
+// unreadable.
+func tombstoneRows(now time.Time) []rigStatus {
+	stones, err := listTombstones(now)
+	if err != nil {
+		return nil
+	}
+	rows := make([]rigStatus, 0, len(stones))
+	for _, t := range stones {
+		// Created carries the death time, not the birth time: every ordering and
+		// age-rendering path on the board reads Created, and on a history row the
+		// interesting age is how long ago you lost it.
+		rows = append(rows, rigStatus{
+			ID:      t.ID,
+			Slug:    filepath.Base(t.Basedir),
+			Title:   t.subject(),
+			Path:    t.Basedir,
+			Created: t.Died,
+			stone:   t,
+		})
+	}
+	return rows
 }
 
 func radarScanCmd(home string) tea.Cmd {
@@ -497,6 +533,11 @@ func (m radarModel) handleBoardKey(key string) (radarModel, tea.Cmd) {
 			return m, nil
 		}
 		return m, tea.Quit
+	case "ctrl+t":
+		// Deliberate "what have I lost lately". Reset the cursor because the
+		// row set just changed shape under it, same as setFilter does.
+		m.showHistory = !m.showHistory
+		m.cursor = 0
 	case "ctrl+u":
 		m.setFilter("")
 	case "backspace":
@@ -523,6 +564,13 @@ func (m radarModel) handleBoardKey(key string) (radarModel, tea.Cmd) {
 			return m, nil
 		}
 		s := rows[m.cursor]
+		// A history row keeps its old basedir in Path, so it slips past the
+		// emptiness check below; park it and you'd be stamping a manifest that
+		// no longer exists. Enter is the only verb it has.
+		if s.stone != nil {
+			m.actionErr = fmt.Errorf("%s is torn down — enter resurrects it", s.stone.ID)
+			return m, nil
+		}
 		if s.bare || s.Path == "" {
 			m.actionErr = fmt.Errorf("plain tmux sessions cannot be parked")
 			return m, nil
@@ -627,6 +675,7 @@ func (m *radarModel) apply(scan radarScanMsg) {
 	attachAgents(sessions, func(s rigStatus) string { return s.session })
 
 	m.inflight, m.parked, m.sessions = inflight, parked, sessions
+	m.history = scan.stones
 	m.resortKeeping(selected)
 }
 
@@ -884,14 +933,36 @@ func (m radarModel) parentSections() []radarSection {
 		return parked[i].Created.Before(parked[j].Created)
 	})
 
+	// History is hidden at rest. The popup's rows belong to live work, and a
+	// busy week of teardowns would push it off the fold for rows that are, by
+	// definition, finished. A filter reveals it instead, because the moment
+	// this exists for is the one where you search for a rig without knowing
+	// it's gone: coming back empty would teach you it never existed. ctrl+t
+	// opens the whole window deliberately.
+	//
+	// It arrives newest-death-first from the store and stays that way; it's the
+	// one section whose order isn't a judgment about what needs you.
+	var history []rigStatus
+	if m.filter != "" || m.showHistory {
+		history = append(history, m.history...)
+	}
+
 	if m.filter != "" {
 		live = m.rankRows(live)
 		parked = m.rankRows(parked)
+		history = m.rankRows(history)
 	}
-	return []radarSection{
+	sections := []radarSection{
 		{header: "IN FLIGHT", rows: live},
 		{header: "PARKED / AWAITING REVIEW", rows: parked},
 	}
+	// Only when there's something to show. The radar lives in a popup where
+	// rows are expensive, and a permanent empty header would cost a line on
+	// every board for the rare occasion it has content.
+	if len(history) > 0 {
+		sections = append(sections, radarSection{header: "RECENTLY TORN DOWN", rows: history})
+	}
+	return sections
 }
 
 // recency is a row's most-recent-touch stamp: when its tmux session was last
@@ -1299,6 +1370,14 @@ func prsFetched(prs map[string][]rigPR, slug string) bool {
 // radarStateCell is the state column: live agent state for an in-flight rig,
 // review disposition for a parked one ("…" while the fetch is still out).
 func radarStateCell(s rigStatus, fetched bool) string {
+	// A history row's state isn't "what is it doing" but "can I get it back",
+	// which is the only question you'd have about a rig that no longer exists.
+	if s.stone != nil {
+		if s.stone.resurrectable() {
+			return "↺ " + s.stone.Session.Agent
+		}
+		return "no session"
+	}
 	if s.Parked {
 		if !fetched {
 			return "…"
@@ -1341,6 +1420,15 @@ func radarStateStyle(state string) lipgloss.Style {
 // In-flight rigs read agent attention; parked rigs read review disposition.
 // Glyphs are conservative nerd-font codepoints (classic FA + octicons).
 func radarGlyph(s rigStatus, fetched bool) (string, lipgloss.Style) {
+	// A history row is gone; the only state worth a glyph is whether it can
+	// come back. The recycle arrow reads as "restore" without borrowing any of
+	// the live vocabulary, and an unrecoverable one stays a faint dot.
+	if s.stone != nil {
+		if s.stone.resurrectable() {
+			return "↺", radarWarnStyle
+		}
+		return "·", radarFaintStyle
+	}
 	if s.bare {
 		// A plain session carries no rig state to read; an open ring marks it
 		// as "just a place to land" without competing with the rigs' dots.
@@ -1435,6 +1523,15 @@ type tailSeg struct {
 func radarTailSegs(s rigStatus, fetched bool) []tailSeg {
 	if s.bare {
 		return nil
+	}
+	// History rows are never enriched (rigRows excludes them), so the "not
+	// fetched yet" ellipsis below would be a permanent lie. Their tail says how
+	// to get the rig back instead, which is the only live question about it.
+	if s.stone != nil {
+		if s.stone.resurrectable() {
+			return []tailSeg{{s.stone.Session.Agent, radarFaintStyle.Render(s.stone.Session.Agent)}}
+		}
+		return []tailSeg{{"no session", radarFaintStyle.Render("no session")}}
 	}
 	if !fetched {
 		return []tailSeg{{"…", radarFaintStyle.Render("…")}}
@@ -1567,9 +1664,15 @@ func (m radarModel) View() string {
 
 	var footer string
 	toggle := "park/wake"
+	// A selected history row has no park verb at all, so the footer advertises
+	// what Enter will actually do instead of offering an action that errors.
+	onStone := false
 	if rows := m.rows(); len(rows) > 0 && m.cursor < len(rows) {
 		s := rows[m.cursor]
-		if !s.bare && s.Path != "" {
+		switch {
+		case s.stone != nil:
+			onStone = true
+		case !s.bare && s.Path != "":
 			if s.Parked {
 				toggle = "wake"
 			} else {
@@ -1578,10 +1681,18 @@ func (m radarModel) View() string {
 		}
 	}
 	switch {
+	case m.filter != "" && onStone:
+		footer = radarFaintStyle.Render("type to filter · enter resurrect · esc clear")
 	case m.filter != "":
 		footer = radarFaintStyle.Render("type to filter · enter go · ^p " + toggle + " · esc clear")
 	default:
-		footer = radarFaintStyle.Render("type filter · enter go · ^n new · ^p " + toggle + " · ^r refresh · esc quit")
+		// The history hint carries its own state, because a hidden section is
+		// otherwise undiscoverable and a shown one needs a way back.
+		hist := "^t history"
+		if m.showHistory {
+			hist = "^t hide history"
+		}
+		footer = radarFaintStyle.Render("type filter · enter go · ^n new · ^p " + toggle + " · ^r refresh · " + hist + " · esc quit")
 	}
 
 	items := m.displayItems()
