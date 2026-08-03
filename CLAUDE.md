@@ -32,14 +32,26 @@ breaks it back down.
 plan-then-stream: a Bubble Tea board of checkable actions, then the TUI exits and
 the real gh and teardown output streams. It reuses `parkedDisposition` for state
 and `rigTeardownBlocker`/`teardownRig` for teardown, so it can't disagree with
-`waiting`, `radar`, or `reap` about what a rig's state is — only about what to do
+`waiting` or `radar` about what a rig's state is — only about what to do
 about it. See DESIGN.md §"Sweeping".
+
+Sweep is also the *only* thing that decides a rig's fate. `rig reap` used to
+collect merged, WIP-free, idle rigs unattended from a nightly timer, and that
+authority has been removed: `rigTeardownBlocker` reasons in commits, branches,
+and PR states, so a rig whose whole value is its agent conversation reads
+exactly like one whose work already shipped, and the nightly pass could not tell
+them apart. It ate a real one on 2026-08-03. Reap is now a janitor that retries
+stranded teardown jobs and stops orphaned tmux/iso scopes, nothing more, and
+`--runtime-only` survives only as a no-op so deployed units don't break. If you
+find yourself adding a policy gate to reap, that's the signal the decision
+belongs in sweep instead. See DESIGN.md §"Reaping".
 
 Two things there are easy to get wrong. Merges never arrive pre-checked and `a`
 skips them, because merging is the only irreversible act in the pass. And
 "pre-checked" is a separate judgment from "safe": `sweepCollectable` asks whether
-losing the rig would annoy you, gating on `sweepStaleAfter` (reap's 24h window)
-for rigs with no PR on record. Don't reach for `agentActiveWindow` there — it's
+losing the rig would annoy you, gating on `sweepStaleAfter` (24h, formerly
+reap's idle window and now its only home) for rigs with no PR on record.
+Don't reach for `agentActiveWindow` there — it's
 three minutes and exists for the working/idle dot.
 
 Each row is subject + why, not one blurred column: `sweepSubject` says what the

@@ -5,44 +5,38 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
-	"time"
 )
 
-// runReap implements `rig reap`: walk the rigs in flight and break down the
-// ones whose work is merged, whose workspaces hold no WIP, and whose tmux
-// sessions have gone idle. This is the rig-shaped replacement for the
-// nightly dev-session-cleanup's workspace phase: every rig has a manifest
-// and one teardown code path, so cleanup is enumeration plus policy instead
-// of path archaeology. Fail-closed throughout — a jj error keeps the rig,
-// never guesses.
+// runReap implements `rig reap`: the unattended janitor for rig's runtime
+// state. It retries teardown jobs a previous `down` or `sweep` left stranded,
+// then stops the tmux and iso scopes of rigs that are already gone.
+//
+// It deliberately does not decide which rigs should stop existing. That
+// judgment used to live here behind a 24h idle window, and it could not work:
+// rigTeardownBlocker reasons entirely in commits, branches, and PR states, so
+// a rig that produced none of those — a long exploration, a planning session,
+// anything whose whole value is the agent conversation it carries — was
+// indistinguishable from one whose work had shipped and merged. Both read as
+// "no PR, clean tree", and the nightly pass silently collected them at 3am
+// with nobody looking. `rig sweep` asks the same question with the row in
+// front of a human, which is the only way it can be asked safely; see
+// sweepCollectable, which already refuses to pre-check exactly this case.
 func runReap(args []string) error {
 	dryRun := false
-	runtimeOnly := false
-	maxIdle := 24 * time.Hour
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
+	for _, arg := range args {
+		switch arg {
 		case "--dry-run", "-n":
 			dryRun = true
 		case "--runtime-only":
-			runtimeOnly = true
-		case "--max-idle":
-			i++
-			if i >= len(args) {
-				return fmt.Errorf("--max-idle needs a value (seconds)")
-			}
-			secs, err := strconv.Atoi(args[i])
-			if err != nil {
-				return fmt.Errorf("--max-idle: %w", err)
-			}
-			maxIdle = time.Duration(secs) * time.Second
+			// Accepted as a no-op: runtime cleanup is now all reap does. The
+			// deployed systemd units still pass this flag, and a unit and a
+			// binary that update out of step shouldn't fail hourly over it.
 		default:
-			return fmt.Errorf("usage: rig reap [--dry-run|-n] [--max-idle SECONDS] [--runtime-only]")
+			return fmt.Errorf("usage: rig reap [--dry-run|-n]")
 		}
 	}
 
-	pending := map[string]bool{}
 	jobs, err := pendingTeardownJobs()
 	if err != nil {
 		return err
@@ -53,7 +47,6 @@ func runReap(args []string) error {
 			fmt.Fprintf(os.Stderr, "rig: warning: unreadable teardown job %s: %v\n", path, err)
 			continue
 		}
-		pending[job.Basedir] = true
 		if dryRun {
 			fmt.Fprintf(os.Stderr, "rig: would retry teardown %s — %s\n", job.ID, path)
 			continue
@@ -63,144 +56,46 @@ func runReap(args []string) error {
 			fmt.Fprintf(os.Stderr, "rig: retry teardown %s failed: %v\n", job.ID, err)
 			continue
 		}
-		delete(pending, job.Basedir)
 		fmt.Fprintf(os.Stderr, "rig: completed pending teardown %s\n", job.ID)
 	}
-	if runtimeOnly {
-		rigs, err := listRigs()
-		if err != nil {
-			return err
-		}
-		active := make(map[string]bool, len(rigs))
-		for _, rig := range rigs {
-			active[rig.ID] = true
-		}
-		tearingDown := map[string]bool{}
-		remainingJobs, err := pendingTeardownJobs()
-		if err != nil {
-			return err
-		}
-		for _, path := range remainingJobs {
-			if job, err := readTeardownJob(path); err == nil {
-				tearingDown[job.ID] = true
-			}
-		}
-		cleaned, err := cleanupOrphanedRigRuntime(active, tearingDown, dryRun)
-		if err != nil {
-			return err
-		}
-		verb := "cleaned"
-		if dryRun {
-			verb = "would clean"
-		}
-		fmt.Fprintf(os.Stderr, "rig: runtime cleanup complete — %s %d orphan scopes\n", verb, cleaned)
-		return nil
-	}
-
 	rigs, err := listRigs()
 	if err != nil {
 		return err
 	}
-	if len(rigs) == 0 {
-		fmt.Fprintln(os.Stderr, "rig: no rigs in flight")
-		return nil
+	active := make(map[string]bool, len(rigs))
+	for _, rig := range rigs {
+		active[rig.ID] = true
 	}
-	home, err := os.UserHomeDir()
+	tearingDown := map[string]bool{}
+	remainingJobs, err := pendingTeardownJobs()
 	if err != nil {
 		return err
 	}
-	fetched := map[string]bool{} // source repo path → already fetched this run
-	reaped := 0
-	for _, r := range rigs {
-		if pending[r.Path] {
-			fmt.Fprintf(os.Stderr, "rig: keep %s — teardown pending retry\n", r.ID)
-			continue
+	for _, path := range remainingJobs {
+		if job, err := readTeardownJob(path); err == nil {
+			tearingDown[job.ID] = true
 		}
-		lock, err := acquireRigLock(r.Path, true)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "rig: keep %s — %v\n", r.ID, err)
-			continue
-		}
-		m, err := readManifest(r.Path)
-		if err != nil {
-			_ = lock.Close()
-			fmt.Fprintf(os.Stderr, "rig: keep %s — reading manifest: %v\n", r.ID, err)
-			continue
-		}
-		now := time.Now()
-		activity := agentSessionActivity(home, r.Path)
-		if reason := reapBlocker(r, activity, now, maxIdle, fetched); reason != "" {
-			_ = lock.Close()
-			fmt.Fprintf(os.Stderr, "rig: keep %s — %s\n", r.ID, reason)
-			continue
-		}
-		// The policy checks above may fetch and query GitHub. Snapshot attention
-		// and VCS state once more under the rig lock immediately before writing
-		// the teardown job, closing the old check-then-act window for rig
-		// commands and making direct agent activity fail closed too.
-		if latest := agentSessionActivity(home, r.Path); latest > activity {
-			_ = lock.Close()
-			fmt.Fprintf(os.Stderr, "rig: keep %s — activity changed during reap check\n", r.ID)
-			continue
-		}
-		if reason := rigTeardownBlocker(r.Path, fetched); reason != "" {
-			_ = lock.Close()
-			fmt.Fprintf(os.Stderr, "rig: keep %s — state changed during reap check: %s\n", r.ID, reason)
-			continue
-		}
-		if dryRun {
-			_ = lock.Close()
-			fmt.Fprintf(os.Stderr, "rig: would reap %s — %s\n", r.ID, r.Path)
-			reaped++
-			continue
-		}
-		if err := teardownRig(r.Path, m); err != nil {
-			_ = lock.Close()
-			fmt.Fprintf(os.Stderr, "rig: reap %s failed: %v\n", r.ID, err)
-			continue
-		}
-		_ = lock.Close()
-		fmt.Fprintf(os.Stderr, "rig: reaped %s — %s gone\n", r.ID, r.Path)
-		reaped++
 	}
-	verb := "reaped"
+	cleaned, err := cleanupOrphanedRigRuntime(active, tearingDown, dryRun)
+	if err != nil {
+		return err
+	}
+	verb := "cleaned"
 	if dryRun {
-		verb = "would reap"
+		verb = "would clean"
 	}
-	fmt.Fprintf(os.Stderr, "rig: reap complete — %s %d of %d rigs\n", verb, reaped, len(rigs))
+	fmt.Fprintf(os.Stderr, "rig: runtime cleanup complete — %s %d orphan scopes\n", verb, cleaned)
 	return nil
-}
-
-// reapBlocker decides whether a rig is safe to reap, returning the first
-// reason it isn't ("" means reapable).
-func reapBlocker(r rigInfo, activity int64, now time.Time, maxIdle time.Duration, fetched map[string]bool) string {
-	// Attention gate first: recent attention means the rig is mid-thought
-	// regardless of merge state. Two signals, both persistent and neither
-	// resettable by accident: agent session activity (a turn appends
-	// whether human-driven or autonomous; repaint doesn't) and the rig's
-	// own age (a rig younger than the idle window can't be idle). File
-	// changes are deliberately the VCS gates' job below — jj sees any
-	// non-ignored modification as WIP; losing gitignored scratch is the
-	// accepted cost of not mtime-crawling every workspace nightly. tmux
-	// signals all failed here: output-based ones are pinned by claude's
-	// at-rest TUI repaint, and attach-based ones reset on a mere peek, so
-	// checking whether a rig was dead would keep it alive another day.
-	last := r.Created.Unix()
-	if activity > last {
-		last = activity
-	}
-	if idle := now.Sub(time.Unix(last, 0)); idle < maxIdle {
-		return fmt.Sprintf("recently active (idle %s)", idle.Round(time.Second))
-	}
-
-	return rigTeardownBlocker(r.Path, fetched)
 }
 
 // rigTeardownBlocker reports why a rig's work isn't safe to delete yet, or ""
 // when every workspace is accounted for — merged, or holding no WIP. It's the
-// shared judgment behind both `reap` (which gates it behind an idle window) and
-// `down` (which runs it on an explicit teardown), so the two can't disagree
-// about what "done" means. Fail-closed throughout: any error reading the rig,
+// shared judgment behind both `down` (which runs it on an explicit teardown)
+// and `sweep` (which runs it per row before offering one), so the two can't
+// disagree about what "done" means. Note what it cannot see: a rig whose value
+// is a conversation rather than a commit reads as perfectly clean here, which
+// is why nothing unattended is allowed to act on it alone — see runReap.
+// Fail-closed throughout: any error reading the rig,
 // resolving a source repo, or asking jj/gh keeps the rig rather than guessing
 // it's disposable. fetched dedups the per-source-repo git fetch across a sweep;
 // pass a fresh map for a one-shot check.

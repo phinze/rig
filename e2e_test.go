@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -705,10 +706,12 @@ exit 1
 	})
 }
 
-// TestReap walks a rig through every reap gate: an active session keeps it,
-// WIP in a workspace keeps it, dry-run reports without acting, and a clean
-// idle rig finally gets torn down. Same fake-repo + dedicated-tmux-server
-// setup as TestUpDown.
+// TestReap pins reap's post-judge contract: it is a janitor, not an executioner.
+// The rig it builds is precisely the shape the old nightly pass used to collect
+// — nothing off trunk, no WIP, no PR on record — which is also precisely the
+// shape of a rig whose entire value is the agent conversation it carries. Reap
+// must leave it standing at any age, and the idle knob it used to be judged by
+// must be gone rather than merely defaulted to something safer.
 func TestReap(t *testing.T) {
 	realTmux, err := exec.LookPath("tmux")
 	if err != nil {
@@ -777,64 +780,55 @@ exit 1
 	}
 	basedir := filepath.Join(home, "workspaces", "fake-1-do-the-thing")
 
-	// Gate 1: recent attention keeps the rig. The manifest's created
-	// timestamp gives a just-pitched rig its grace period; plant a fresh
-	// claude session file too so the agent-attention signal rides through
-	// the binary at least once (claude_test.go covers its matching).
-	projDir := filepath.Join(home, ".claude", "projects",
-		claudeProjectDirName(filepath.Join(basedir, "fakerepo")))
-	mustMkdir(t, projDir)
-	if err := os.WriteFile(filepath.Join(projDir, "fake-session.jsonl"), []byte("{}\n"), 0o644); err != nil {
+	// Backdate the manifest well past the window the old judge used, so this
+	// asserts "reap does not collect rigs" rather than "the rig was too young".
+	manifestPath := filepath.Join(basedir, ".rig.toml")
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil {
 		t.Fatal(err)
 	}
+	old := time.Now().Add(-30 * 24 * time.Hour).Format(time.RFC3339)
+	rewritten := regexp.MustCompile(`(?m)^created = .*$`).ReplaceAllString(string(raw), `created = "`+old+`"`)
+	if rewritten == string(raw) {
+		t.Fatalf("could not backdate manifest, no created line in:\n%s", raw)
+	}
+	if err := os.WriteFile(manifestPath, []byte(rewritten), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// A month-old rig with a clean tree and no PR: the old pass took this one.
 	out := mustOutput(t, home, env, rigBin, "reap")
-	if !strings.Contains(out, "keep fake-1") || !strings.Contains(out, "recently active") {
-		t.Errorf("expected attention gate to keep the rig:\n%s", out)
+	if !strings.Contains(out, "runtime cleanup complete") {
+		t.Errorf("expected reap to report runtime cleanup:\n%s", out)
+	}
+	if strings.Contains(out, "reaped") || strings.Contains(out, "would reap") {
+		t.Errorf("reap still claims deletion authority:\n%s", out)
 	}
 	if _, err := os.Stat(basedir); err != nil {
-		t.Errorf("basedir gone after keep-by-attention reap: %v", err)
+		t.Errorf("reap deleted a rig it no longer has authority over: %v", err)
 	}
-
-	// Gate 2: WIP in the workspace blocks even an idle rig. jj snapshots
-	// the file into @ when reap's revset check runs.
-	wip := filepath.Join(basedir, "fakerepo", "wip.txt")
-	if err := os.WriteFile(wip, []byte("half-finished\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	out = mustOutput(t, home, env, rigBin, "reap", "--max-idle", "0")
-	if !strings.Contains(out, "keep fake-1") || !strings.Contains(out, "working-copy changes") {
-		t.Errorf("expected WIP gate to keep the rig:\n%s", out)
-	}
-	if _, err := os.Stat(basedir); err != nil {
-		t.Errorf("basedir gone after keep-by-wip reap: %v", err)
-	}
-
-	// Gate 3: clean again, but dry-run only reports.
-	if err := os.Remove(wip); err != nil {
-		t.Fatal(err)
-	}
-	out = mustOutput(t, home, env, rigBin, "reap", "--max-idle", "0", "--dry-run")
-	if !strings.Contains(out, "would reap fake-1") {
-		t.Errorf("expected dry-run to offer the rig:\n%s", out)
-	}
-	if _, err := os.Stat(basedir); err != nil {
-		t.Errorf("basedir gone after dry-run reap: %v", err)
-	}
-
-	// The real thing: merged (nothing off trunk), no WIP, idle past 0s.
-	out = mustOutput(t, home, env, rigBin, "reap", "--max-idle", "0")
-	if !strings.Contains(out, "reaped fake-1") {
-		t.Errorf("expected rig to be reaped:\n%s", out)
-	}
-	if _, err := os.Stat(basedir); err == nil {
-		t.Errorf("basedir still exists after reap")
-	}
-	if err := exec.Command(realTmux, "-L", "rig-e2e-reap", "has-session", "-t", "~/workspaces/fake-1-do-the-thing").Run(); err == nil {
-		t.Errorf("tmux session still exists after reap")
+	if err := exec.Command(realTmux, "-L", "rig-e2e-reap", "has-session", "-t", "~/workspaces/fake-1-do-the-thing").Run(); err != nil {
+		t.Errorf("reap killed a live rig's session")
 	}
 	wsList := mustOutput(t, repoDir, env, "jj", "workspace", "list")
-	if strings.Contains(wsList, "fake-1-fakerepo") {
-		t.Errorf("workspace not forgotten after reap:\n%s", wsList)
+	if !strings.Contains(wsList, "fake-1-fakerepo") {
+		t.Errorf("reap forgot a live rig's workspace:\n%s", wsList)
+	}
+
+	// The idle knob was the judge's only dial. It should be gone outright, not
+	// quietly defaulted, so a stale unit passing it fails loudly instead of
+	// looking like it still works.
+	stale := exec.Command(rigBin, "reap", "--max-idle", "0")
+	stale.Env = env
+	if out, err := stale.CombinedOutput(); err == nil {
+		t.Errorf("--max-idle still accepted:\n%s", out)
+	}
+
+	// --runtime-only survives as a no-op so deployed timers keep working
+	// across a binary that updates before its unit does.
+	out = mustOutput(t, home, env, rigBin, "reap", "--runtime-only")
+	if !strings.Contains(out, "runtime cleanup complete") {
+		t.Errorf("--runtime-only should still run the janitor:\n%s", out)
 	}
 }
 

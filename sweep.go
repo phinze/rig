@@ -140,9 +140,11 @@ type sweepPlan struct {
 }
 
 // sweepStaleAfter is how long a rig with nothing to show for itself must sit
-// untouched before its teardown arrives pre-checked. It's reap's idle window,
-// on purpose: reap already had to decide when a rig has stopped mattering, and
-// two different answers to that would be worse than either.
+// untouched before its teardown arrives pre-checked. It was reap's idle window
+// back when reap collected rigs unattended; reap has since been reduced to a
+// janitor precisely because that judgment cannot be made without a human, so
+// this is now the only place the 24h figure lives. It picks a checkbox default,
+// not a fate — which is the whole reason it's allowed to exist at all.
 const sweepStaleAfter = 24 * time.Hour
 
 // sweepCollectable decides whether a teardown starts checked. A rig that
@@ -162,8 +164,8 @@ func sweepCollectable(shipped bool, agent string, lastActive *time.Time, now tim
 	if shipped {
 		return true
 	}
-	// No recorded activity at all reads as cold, matching reap's treatment of a
-	// rig with no agent session to date.
+	// No recorded activity at all reads as cold. Note this only un-checks a
+	// box: an unshipped rig is never torn down without someone seeing the row.
 	return lastActive == nil || now.Sub(*lastActive) > sweepStaleAfter
 }
 

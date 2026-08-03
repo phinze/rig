@@ -37,7 +37,7 @@ and an invocation that prompts for nothing gets the bar on its own. `--agent`
 names one without being asked and `RIG_AGENT` moves the starting position. The
 choice is saved in `.rig.toml`; generated `CLAUDE.md`, `AGENTS.md`, and
 Antigravity workspace rules carry the same live task context, and `ls`, `radar`,
-and `reap` read all three agents' session activity.
+and `sweep` read all three agents' session activity.
 
 It exists to fold a pair of fish functions (`jpickup` / `jreview`) into one tool
 that composes things I already lean on (jj, gh, tmux, recto, linearis) instead

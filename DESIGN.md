@@ -102,8 +102,8 @@ job (climbing rig, fishing rig, sound rig):
   waiting reports which parked rig's review came back, wake stands it back
   up for the selected agent to resume.
 - `rig down` — break the rig down; refuses to drop unmerged work.
-- `rig reap` — bulk-collect merged, WIP-free, idle rigs through the same
-  teardown path as down.
+- `rig reap` — retry stranded teardown jobs and stop orphaned tmux/iso
+  scopes. Janitorial only; it does not decide which rigs live or die.
 - `rig env` — print the identity exports for the direnv stdlib to eval.
 
 ## Agent choice
@@ -142,7 +142,7 @@ files at the basedir so they do not become jj changes inside a repo workspace.
 Codex and Antigravity are explicitly pointed to `../AGENTS.md` in their opening
 prompt in case their instruction discovery stops at the repo cwd.
 
-Agent choice also reaches the lifecycle machinery. `rig ls`, radar, and reap
+Agent choice also reaches the lifecycle machinery. `rig ls`, radar, and sweep
 take the newest matching turn from Claude's project JSONL files, Codex's rollout
 JSONL files, or Antigravity's timestamped prompt history. Radar recognizes all
 three commands in tmux, including wrapped Codex command names.
@@ -269,10 +269,35 @@ merge detection against the main repo, and hand-rolled teardown that had
 to mirror what jpickup set up. Rig inverts that. Every workspace has a
 manifest, an id, and a single teardown code path (`rig down`), so
 cleanup stops being archaeology and becomes enumeration plus policy.
-The nightly's rig-shaped replacement is one line: `rig reap`.
+The nightly's rig-shaped replacement was one line: `rig reap`.
 
-Shape: walk `rig ls`, and for each rig decide reapability with the same
-fail-closed posture the shell script earned the hard way:
+That turned out to be the wrong ambition, and the retirement is worth
+recording because the reasoning generalizes. Reap ran unattended at 03:00 and
+had to answer "does this rig still matter?" entirely from commits, branches,
+and PR states, because that is all `rigTeardownBlocker` can see. A rig that
+produced none of those reads as perfectly clean. So does a rig whose work
+shipped and merged. They are the same row to reap, and one of them is a long
+exploration whose entire value is the agent conversation hanging off the
+basedir path.
+
+On 2026-08-03 the nightly collected `lets-go-1-27-upgrade-sweep-codebase`,
+whose jj working copy was empty and which had no PR, and which was carrying a
+finished four-PR plan for a Go 1.26 upgrade. Nothing in the VCS gates was
+wrong. The gates simply do not measure the thing that was worth keeping. Over
+the same twenty days that was the only rig reap collected at all, against four
+teardown jobs it retried and failed every single night, so the judgment half
+was not even paying for itself in reclaimed disk.
+
+Reap is therefore a janitor now, and only a janitor. It retries stranded
+teardown jobs and stops tmux and iso scopes whose rig is already gone, which is
+unattended work that nothing else does and that cannot destroy anything a human
+wanted. Every "should this rig stop existing" decision belongs to `rig sweep`,
+where the row is on screen and one keystroke from unchecked. The gates below
+still exist, unchanged, as the shared judgment behind `down` and `sweep`; what
+changed is that nothing acts on them alone at 3am.
+
+Shape of that shared judgment: for each rig, decide teardown safety with the
+same fail-closed posture the shell script earned the hard way:
 
 - **Accounted for**: every non-empty off-trunk commit reachable from `@`
   is covered by a merged PR's immutable GitHub head OID. This survives
@@ -284,7 +309,11 @@ fail-closed posture the shell script earned the hard way:
   still at `@` or parked under an empty `jj new` commit. A non-empty `@`
   that exactly matches a merged PR head is already accounted for and does
   not need a ceremonial `jj new` before teardown.
-- **Idle**: no recent attention. Two signals, both persistent and
+- **Idle**: no recent attention. This one is no longer a teardown gate at
+  all, since reap lost the authority it guarded; it survives as
+  `sweepStaleAfter`, which only decides whether sweep pre-checks a row.
+  The signal design is still worth keeping, because radar and sweep both
+  lean on it. Two signals, both persistent and
   neither resettable by accident: the newest claude session JSONL mtime
   under `~/.claude/projects` for cwds inside the basedir (a turn
   appends whether human-driven or autonomous; repaint doesn't), and the
@@ -305,7 +334,7 @@ Each source repo gets one best-effort `jj git fetch` per run so trunk()
 reflects what actually merged; a failed fetch just means checking
 against a stale trunk, which fails closed too.
 
-Reapable rigs go through the same code path as `rig down`
+Rigs cleared for teardown go through the same code path as `rig down`
 (`teardownRig`). Teardown also grew the tool cleanup `down` previously
 lacked: stop the rig's iso session *by exact name* (the same
 `dev-<id>-<repo>` rig env emits). Never `iso stop --all-sessions` from
@@ -313,9 +342,12 @@ a workspace dir — iso's project scope is basename-derived, so that
 would also stop the main checkout's container of a same-named repo.
 
 Division of labor stays the same as `rig env`: rig owns layout,
-manifest, and teardown knowledge; nix-config owns scheduling (the
-systemd timer invokes `rig reap` and keeps the legacy phase only until
-old-layout workspaces age out).
+manifest, and teardown knowledge; nix-config owns scheduling. The hourly
+`rig-runtime-cleanup` timer is what invokes reap now. The nightly
+`dev-session-cleanup` no longer calls it at all, because once the judgment
+half was gone the nightly pass had nothing left to do that the hourly janitor
+was not already doing, and it keeps the legacy phase only until old-layout
+workspaces age out.
 
 Teardown jobs are durable so a crash can't lose the inventory, but durability
 turned out to have a sharp edge: a job that outlives its rig is aimed at a
@@ -426,9 +458,11 @@ just never acts on it. `waiting` folds a rig's PRs into a disposition and
 prints a table with a next-step column you retype. `radar` renders the same
 dispositions live but its only verb is Enter, meaning "go there" — and half
 of Monday's pile doesn't want you to go anywhere, it wants one command run
-against it. `reap` does act, but only at the fully-resolved-and-cold end
+against it. `reap` used to act, but only at the fully-resolved-and-cold end
 (merged, WIP-free, 24h idle) and only ever to tear down. A ready-to-merge
-PR is precisely a rig reap must refuse.
+PR was precisely a rig reap had to refuse. It has since given up acting on
+rigs entirely, which only widens this gap: sweep is now the only thing that
+decides a rig's fate, and the only thing that can.
 
 So the gap isn't a view and it isn't a policy. It's the actionable middle:
 a pass over the rig set that proposes each rig's next step and then carries
@@ -496,9 +530,9 @@ nothing, and the copy says "no PR on record" rather than pretending to know.
 
 That feeds a checkbox default, not an eligibility rule: a rig that shipped is
 pre-checked the moment it's clean, because tearing it down is bookkeeping. A
-rig with nothing on record waits until it's been untouched for a day —
-reap's `maxIdle` window, reused deliberately so the two don't hold different
-opinions about when a rig has stopped mattering. An agent mid-turn is never
+rig with nothing on record waits until it's been untouched for a day. That
+was reap's `maxIdle` window originally; reap has since lost its teardown
+authority, so `sweepStaleAfter` is now the only home the figure has. An agent mid-turn is never
 pre-checked whatever else is true. The row is always visible and always one
 `a` away, so this only ever picks the default. Note that the "am I mid-turn"
 window and the "has this gone stale" window are different questions and must
@@ -664,7 +698,9 @@ That's the right order — the pass earns the policy, the board borrows it.
 - ~~**`rig down` destructiveness.**~~ Answered by the park/reap lifecycle
   rather than an archive dir: `down` tears the basedir down but refuses to
   drop unmerged work, `park` keeps a finished rig on disk while its review
-  is out, and `reap` bulk-collects the merged-and-idle. The safety gate
+  is out, and `sweep` collects the merged-and-idle with a human watching
+  (originally `reap`, unattended, which is the part that had to be undone).
+  The safety gate
   turned out to matter more than an archive would have. One wrinkle the gate
   had to grow: "done" means different things for authoring versus reviewing.
   An authoring rig is done when its work merges, so teardown guards its local

@@ -218,10 +218,6 @@ func updateAntigravityActivity(home string, basedirs []string, out map[string]in
 	}
 }
 
-func agentSessionActivity(home, basedir string) int64 {
-	return agentSessionActivities(home, []string{basedir})[basedir]
-}
-
 func agentSessionActivities(home string, basedirs []string) map[string]int64 {
 	out := make(map[string]int64, len(basedirs))
 	for _, basedir := range basedirs {

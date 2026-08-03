@@ -164,10 +164,9 @@ usage:
   rig down [--force]        break the current rig down
                             (refuses if it has WIP or an unmerged PR; --force
                             overrides)
-  rig reap [-n] [--max-idle SECONDS] [--runtime-only]
-                            break down every rig that is merged, WIP-free,
-                            and idle (default 24h); --runtime-only only retries
-                            pending jobs and kills escaped orphan scopes
+  rig reap [-n]             retry stranded teardown jobs and kill escaped
+                            orphan scopes. Deciding which rigs should stop
+                            existing is rig sweep's job, never reap's
   rig env                   print shell setup describing the current dir
                             (eval'd by the direnv stdlib; silent outside a rig)
 `)
