@@ -250,6 +250,7 @@ func prepareTeardownJob(basedir string, m manifest) (*teardownJob, error) {
 		ForgetGroups: map[string][]string{},
 		ScratchDirs:  claudeScratchDirs(basedir),
 	}
+	sources := map[string]string{}
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -268,7 +269,16 @@ func prepareTeardownJob(basedir string, m manifest) (*teardownJob, error) {
 		if err != nil {
 			return nil, fmt.Errorf("resolving source repo for %s: %w", p, err)
 		}
+		sources[e.Name()] = source
 		job.ForgetGroups[source] = append(job.ForgetGroups[source], jjWorkspaceName(m.ID, e.Name()))
+	}
+	// Leave a tombstone before anything is destroyed. This is the last moment
+	// the agent stores can still be queried for this rig's session, since they
+	// key on cwd and the basedir is about to stop existing. Best-effort on
+	// purpose: a rig the user asked to tear down must go away even if we can't
+	// record it, so a failure here warns and continues.
+	if err := recordTombstone(basedir, m, sources); err != nil {
+		fmt.Fprintf(os.Stderr, "rig: warning: could not record tombstone for %s: %v\n", m.ID, err)
 	}
 	for source := range job.ForgetGroups {
 		sort.Strings(job.ForgetGroups[source])

@@ -1002,3 +1002,126 @@ func mustOutput(t *testing.T, dir string, env []string, name string, args ...str
 	}
 	return string(out)
 }
+
+// TestDownLeavesRecoverableTombstone is the round trip that justifies the
+// tombstone existing at all: tear a rig down, then bring it back and land in
+// the same conversation. It plants a claude session file first, because the
+// agent stores key on cwd and the whole point is that teardown captures the
+// session id at the one moment it's still resolvable.
+func TestDownLeavesRecoverableTombstone(t *testing.T) {
+	realTmux, err := exec.LookPath("tmux")
+	if err != nil {
+		t.Skip("tmux not installed")
+	}
+
+	home := t.TempDir()
+	bin := filepath.Join(home, "bin")
+	repoDir := filepath.Join(home, "src", "github.com", "fakeowner", "fakerepo")
+	rigBin := filepath.Join(home, "rig")
+
+	mustMkdir(t, bin)
+	mustMkdir(t, repoDir)
+
+	if out, err := exec.Command("go", "build", "-o", rigBin, ".").CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+
+	env := append(os.Environ(),
+		"HOME="+home,
+		"PATH="+bin+":"+os.Getenv("PATH"),
+		"SHELL=/bin/sh",
+		"HISTFILE=/dev/null",
+		// Pin state explicitly so a set XDG_STATE_HOME in the developer's shell
+		// can never route test tombstones into the real store.
+		"XDG_STATE_HOME="+filepath.Join(home, "state"),
+	)
+	env = append(env, hermeticGitVars()...)
+
+	mustRun(t, repoDir, env, "git", "init", "-q", "-b", "main")
+	mustRun(t, repoDir, env, "git", "commit", "-q", "--allow-empty", "-m", "init")
+	mustRun(t, repoDir, env, "jj", "git", "init", "--colocate")
+	mustRun(t, repoDir, env, "jj", "config", "set", "--repo", `revset-aliases."trunk()"`, "main")
+
+	linearis := `#!/bin/sh
+if [ "$1" = "issues" ] && [ "$2" = "read" ]; then
+  cat <<JSON
+{"identifier":"FAKE-1","title":"do the thing","branchName":"fake/fake-1-do-the-thing"}
+JSON
+  exit 0
+fi
+exit 1
+`
+	mustWriteExec(t, filepath.Join(bin, "linearis"), linearis)
+	mustWriteExec(t, filepath.Join(bin, "gh"), "#!/bin/sh\n"+
+		"if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"view\" ]; then\n"+
+		"  echo 'no pull requests found for branch' >&2\n  exit 1\nfi\nexit 1\n")
+	mustWriteExec(t, filepath.Join(bin, "tmux"),
+		fmt.Sprintf("#!/bin/sh\nexec %s -L rig-e2e-tomb \"$@\"\n", realTmux))
+	sleeper := "#!/bin/sh\nexec sleep infinity\n"
+	mustWriteExec(t, filepath.Join(bin, "recto"), sleeper)
+	mustWriteExec(t, filepath.Join(bin, "claude"), sleeper)
+
+	t.Cleanup(func() {
+		_ = exec.Command(realTmux, "-L", "rig-e2e-tomb", "kill-server").Run()
+	})
+
+	upCmd := exec.Command(rigBin, "up", "FAKE-1")
+	upCmd.Dir = repoDir
+	upCmd.Env = env
+	if out, err := upCmd.CombinedOutput(); err != nil {
+		t.Fatalf("rig up: %v\n%s", err, out)
+	}
+	basedir := filepath.Join(home, "workspaces", "fake-1-do-the-thing")
+
+	// The conversation this rig is "carrying". Claude names session files by
+	// uuid, and that name is the id `--resume` takes.
+	const sessionID = "11111111-2222-3333-4444-555555555555"
+	projDir := filepath.Join(home, ".claude", "projects",
+		claudeProjectDirName(filepath.Join(basedir, "fakerepo")))
+	mustMkdir(t, projDir)
+	if err := os.WriteFile(filepath.Join(projDir, sessionID+".jsonl"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	downCmd := exec.Command(rigBin, "down")
+	downCmd.Dir = basedir
+	downCmd.Env = env
+	if out, err := downCmd.CombinedOutput(); err != nil {
+		t.Fatalf("rig down: %v\n%s", err, out)
+	}
+	waitFor(t, 10*time.Second, "rig down to finish", func() bool {
+		_, statErr := os.Stat(basedir)
+		return os.IsNotExist(statErr)
+	})
+
+	// History should offer it back, and mark it as having a live session.
+	hist := mustOutput(t, home, env, rigBin, "history")
+	if !strings.Contains(hist, "fake-1") {
+		t.Fatalf("torn-down rig missing from history:\n%s", hist)
+	}
+	if !strings.Contains(hist, "↺") {
+		t.Errorf("history should mark the rig recoverable:\n%s", hist)
+	}
+
+	res := exec.Command(rigBin, "resurrect", "fake-1")
+	res.Dir = home
+	res.Env = env
+	out, err := res.CombinedOutput()
+	if err != nil {
+		t.Fatalf("rig resurrect: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), sessionID) {
+		t.Errorf("resurrect should report the session it resumed:\n%s", out)
+	}
+
+	if _, err := os.Stat(filepath.Join(basedir, ".rig.toml")); err != nil {
+		t.Errorf("resurrected rig has no manifest: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(basedir, "fakerepo", ".jj")); err != nil {
+		t.Errorf("resurrected rig did not get its workspace back: %v", err)
+	}
+	wsList := mustOutput(t, repoDir, env, "jj", "workspace", "list")
+	if !strings.Contains(wsList, "fake-1-fakerepo") {
+		t.Errorf("workspace not re-registered after resurrect:\n%s", wsList)
+	}
+}

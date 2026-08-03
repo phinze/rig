@@ -134,6 +134,11 @@ type sessionSpec struct {
 	repo     string
 	prompt   string
 	agent    agentKind
+	// command overrides the agent invocation entirely. A fresh rig sends a
+	// prompt, but a resurrected one sends a resume, which is a different verb
+	// rather than a different prompt: the conversation it's reopening already
+	// contains everything a kickoff would have said.
+	command string
 }
 
 // spawnSession creates the rig's tmux session (recto right, agent left) if it
@@ -170,7 +175,10 @@ func spawnSession(basedir, paneCwd string, sess sessionSpec) (string, error) {
 	if err := tmuxSelectPane(agentPane); err != nil {
 		return "", fmt.Errorf("tmux select-pane: %w", err)
 	}
-	agentLine := sess.agent.launchCommand(sess.prompt)
+	agentLine := sess.command
+	if agentLine == "" {
+		agentLine = sess.agent.launchCommand(sess.prompt)
+	}
 	if err := tmuxSendKeys(agentPane, agentLine); err != nil {
 		return "", fmt.Errorf("tmux send-keys: %w", err)
 	}

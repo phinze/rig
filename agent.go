@@ -94,6 +94,25 @@ func extractAgentFlag(args []string) (*agentPick, []string, error) {
 	return newAgentPick(agent, name != ""), rest, nil
 }
 
+// resumeCommand reopens an existing conversation by id, which is how a
+// resurrected rig gets its context back rather than starting cold. It carries
+// the same permission flags launchCommand does, because a resumed session is
+// still working inside a rig and shouldn't suddenly start prompting. Each agent
+// spells this differently and the spellings were verified against the installed
+// CLIs: codex takes a subcommand (its bypass flag is global, so it precedes
+// it), claude and antigravity take flags.
+func (a agentKind) resumeCommand(sessionID string) string {
+	quoted := shellQuote(sessionID)
+	switch a {
+	case agentCodex:
+		return "codex --dangerously-bypass-approvals-and-sandbox resume " + quoted
+	case agentAntigravity:
+		return "agy --dangerously-skip-permissions --conversation " + quoted
+	default:
+		return "claude --dangerously-skip-permissions --resume " + quoted
+	}
+}
+
 func (a agentKind) launchCommand(prompt string) string {
 	if a != agentClaude {
 		prompt = "Read the rig instructions in ../AGENTS.md first. " + prompt

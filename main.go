@@ -51,6 +51,10 @@ func main() {
 		err = runDown(args)
 	case "reap":
 		err = runReap(args)
+	case "history":
+		err = runHistory(args)
+	case "resurrect":
+		err = runResurrect(args)
 	case "env":
 		err = runEnv(args)
 	case "__gh":
@@ -167,6 +171,10 @@ usage:
   rig reap [-n]             retry stranded teardown jobs and kill escaped
                             orphan scopes. Deciding which rigs should stop
                             existing is rig sweep's job, never reap's
+  rig history               rigs torn down recently and still recoverable
+  rig resurrect <id>        rebuild a torn-down rig and resume its agent
+                            session (workspaces come back at their recorded
+                            branches; uncommitted work does not)
   rig env                   print shell setup describing the current dir
                             (eval'd by the direnv stdlib; silent outside a rig)
 `)

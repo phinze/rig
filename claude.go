@@ -218,6 +218,120 @@ func updateAntigravityActivity(home string, basedirs []string, out map[string]in
 	}
 }
 
+// sessionRef is enough to reopen a conversation after its rig is gone: which
+// agent owned it, the id that agent resumes by, and the transcript path we
+// resolved it from. The path is recorded for diagnosis only — agents are asked
+// to resume by id, and the file may well have been rotated away by the time
+// anyone looks.
+type sessionRef struct {
+	Agent string `json:"agent"`
+	ID    string `json:"id"`
+	Path  string `json:"path,omitempty"`
+}
+
+// agentSessionRef resolves the newest conversation an agent held for this rig.
+// Every agent store is keyed by cwd or workspace rather than by rig, so this
+// only works while the basedir still exists, which is exactly why teardown
+// records the answer instead of leaving it to be recomputed later. Returns nil
+// when the rig never had a session with that agent.
+func agentSessionRef(home, basedir string, agent agentKind) *sessionRef {
+	switch agent {
+	case agentCodex:
+		if path, id := codexNewestSession(home, basedir); id != "" {
+			return &sessionRef{Agent: string(agentCodex), ID: id, Path: path}
+		}
+	case agentAntigravity:
+		if id := antigravityNewestConversation(home, basedir); id != "" {
+			return &sessionRef{Agent: string(agentAntigravity), ID: id}
+		}
+	default:
+		if path, _ := claudeNewestSession(home, basedir); path != "" {
+			id := strings.TrimSuffix(filepath.Base(path), ".jsonl")
+			return &sessionRef{Agent: string(agentClaude), ID: id, Path: path}
+		}
+	}
+	return nil
+}
+
+// codexNewestSession finds the most recently touched Codex rollout whose cwd
+// sits inside the rig, returning its path and the id `codex resume` takes.
+// Codex files rollouts by date rather than by cwd, so this is a walk, the same
+// one updateCodexActivity does.
+func codexNewestSession(home, basedir string) (string, string) {
+	root := filepath.Join(home, ".codex", "sessions")
+	var newestPath, newestID string
+	var latest int64
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(d.Name(), ".jsonl") {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil || info.ModTime().Unix() <= latest {
+			return nil
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			return nil
+		}
+		defer f.Close()
+		sc := bufio.NewScanner(f)
+		sc.Buffer(make([]byte, 64*1024), 1024*1024)
+		for i := 0; i < 20 && sc.Scan(); i++ {
+			var row struct {
+				Type    string `json:"type"`
+				Payload struct {
+					Cwd       string `json:"cwd"`
+					ID        string `json:"id"`
+					SessionID string `json:"session_id"`
+				} `json:"payload"`
+			}
+			if json.Unmarshal(sc.Bytes(), &row) != nil || row.Type != "session_meta" {
+				continue
+			}
+			if pathInside(basedir, row.Payload.Cwd) {
+				id := row.Payload.ID
+				if id == "" {
+					id = row.Payload.SessionID
+				}
+				if id != "" {
+					latest, newestPath, newestID = info.ModTime().Unix(), path, id
+				}
+			}
+			break
+		}
+		return nil
+	})
+	return newestPath, newestID
+}
+
+// antigravityNewestConversation returns the conversation id Antigravity's
+// --conversation flag reopens, taken from the newest history entry whose
+// workspace is inside the rig.
+func antigravityNewestConversation(home, basedir string) string {
+	f, err := os.Open(filepath.Join(home, ".gemini", "antigravity-cli", "history.jsonl"))
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	newest, latest := "", int64(0)
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 64*1024), 1024*1024)
+	for sc.Scan() {
+		var row struct {
+			Timestamp      int64  `json:"timestamp"`
+			Workspace      string `json:"workspace"`
+			ConversationID string `json:"conversationId"`
+		}
+		if json.Unmarshal(sc.Bytes(), &row) != nil || row.ConversationID == "" {
+			continue
+		}
+		if pathInside(basedir, row.Workspace) && row.Timestamp >= latest {
+			latest, newest = row.Timestamp, row.ConversationID
+		}
+	}
+	return newest
+}
+
 func agentSessionActivities(home string, basedirs []string) map[string]int64 {
 	out := make(map[string]int64, len(basedirs))
 	for _, basedir := range basedirs {
