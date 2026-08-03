@@ -486,10 +486,20 @@ func startTeardownWorker(job *teardownJob) error {
 	}
 	sum := sha256.Sum256([]byte(job.path + strconv.FormatInt(time.Now().UnixNano(), 10)))
 	unit := fmt.Sprintf("rig-teardown-%x", sum[:8])
-	cmd := exec.Command("systemd-run", "--user", "--collect", "--quiet",
-		"--service-type=exec", "--unit", unit,
+	args := []string{"--user", "--collect", "--quiet",
+		"--service-type=exec", "--unit", unit}
+	// The Go test harness redirects cgroup discovery away from the live user
+	// manager. systemd services inherit the manager's environment rather than
+	// the client's, so carry that private test seam across the worker boundary
+	// explicitly. Without it, an e2e `rig down` can mistake every real pane on
+	// the host for test-owned runtime and stop live agents.
+	if root := os.Getenv("RIG_CGROUP_ROOT"); root != "" {
+		args = append(args, "--setenv=RIG_CGROUP_ROOT="+root)
+	}
+	args = append(args,
 		"env", "-u", "RIG_ID", "-u", "RIG_BASEDIR", "-u", "RIG_WORKSPACE",
 		exe, "__teardown", job.path)
+	cmd := exec.Command("systemd-run", args...)
 	cmd.Dir = home
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	return cmd.Run()
@@ -749,6 +759,13 @@ func allRigProcessScopes() ([]rigProcessScope, error) {
 }
 
 func userManagerCgroupRoot() (string, error) {
+	// Private subprocess seam for tests that exercise the real systemd worker.
+	// HOME, tmux sockets, and fixture repos can all be isolated in a temp dir,
+	// but cgroups are host-global. Never let a test binary enumerate the live
+	// user manager's pane scopes.
+	if root := os.Getenv("RIG_CGROUP_ROOT"); root != "" {
+		return root, nil
+	}
 	// A caller reached over SSH lives in session-N.scope, outside the user
 	// manager subtree it needs to inspect. Prefer systemd's stable per-user
 	// manager path; the /proc fallback below covers nonstandard layouts.
