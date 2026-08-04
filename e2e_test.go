@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -87,6 +88,9 @@ func TestNew(t *testing.T) {
 	marker := filepath.Join(home, "codex.args")
 	mustMkdir(t, bin)
 	mustMkdir(t, repoDir)
+	// A ~/.codex is how rig knows codex is set up on this machine and worth
+	// seeding directory trust for.
+	mustMkdir(t, filepath.Join(home, ".codex"))
 
 	build := exec.Command("go", "build", "-o", rigBin, ".")
 	if out, err := build.CombinedOutput(); err != nil {
@@ -139,6 +143,15 @@ func TestNew(t *testing.T) {
 	}
 	if strings.Contains(raw, "[branches]") {
 		t.Errorf("ticketless rig should start with no recorded branch:\n%s", raw)
+	}
+
+	// Both directories an agent or ad hoc shell can start in are pre-trusted, so
+	// codex opens straight into the session instead of stopping to ask.
+	codexCfg := string(mustReadFile(t, filepath.Join(home, ".codex", "config.toml")))
+	for _, dir := range []string{basedir, filepath.Join(basedir, "fakerepo")} {
+		if !strings.Contains(codexCfg, "[projects."+strconv.Quote(dir)+"]") {
+			t.Errorf("codex config missing trust for %s:\n%s", dir, codexCfg)
+		}
 	}
 
 	desc := mustOutput(t, filepath.Join(basedir, "fakerepo"), env,

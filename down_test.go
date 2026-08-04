@@ -335,4 +335,33 @@ func TestTeardownQuarantinesBeforeRemoval(t *testing.T) {
 			t.Errorf("Claude scratch project still exists: %v", err)
 		}
 	})
+
+	// Trust is seeded when the rig's directories are made, so it comes back when
+	// they're destroyed — otherwise codex accumulates a stanza per rig you ever
+	// tore down.
+	t.Run("codex directory trust is dropped with the rig", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		if err := os.MkdirAll(filepath.Join(home, ".codex"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		basedir := filepath.Join(home, "workspaces", "mir-4-trust")
+		if err := os.MkdirAll(filepath.Join(basedir, "repo"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := seedCodexTrust(home, basedir, filepath.Join(basedir, "repo")); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := teardownRig(basedir, manifest{ID: "mir-4"}); err != nil {
+			t.Fatal(err)
+		}
+		got, err := os.ReadFile(filepath.Join(home, ".codex", "config.toml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(got), "[projects.") {
+			t.Errorf("codex config still trusts the torn-down rig:\n%s", got)
+		}
+	})
 }

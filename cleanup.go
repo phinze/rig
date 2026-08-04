@@ -339,6 +339,14 @@ func executeTeardownJobForPlatform(job *teardownJob, platform string) error {
 			return fmt.Errorf("removing agent scratch %s: %w", dir, err)
 		}
 	}
+	// Hand back the directory-trust entries rig seeded on the way up. Warn
+	// rather than fail: a leftover stanza names a directory that no longer
+	// exists, which is untidy but harmless, and teardown must not stall on it.
+	if home, err := os.UserHomeDir(); err == nil {
+		if err := dropCodexTrust(home, job.Basedir); err != nil {
+			fmt.Fprintf(os.Stderr, "rig: warning: could not drop codex trust for %s: %v\n", job.Basedir, err)
+		}
+	}
 
 	if len(job.ISOWorkspaces) > 0 {
 		if _, err := exec.LookPath("iso"); err != nil {

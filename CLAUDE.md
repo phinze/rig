@@ -113,6 +113,27 @@ for compatibility, and `RIG_AGENT` (which every rig exports) moves the starting
 position. Rig writes equivalent generated instructions and tracks session
 activity for all three.
 
+Codex additionally gates every unseen directory behind a trust prompt, which a
+rig trips by construction: a fresh basedir and a fresh workspace under it, every
+time. So rig seeds `[projects."…"] trust_level = "trusted"` into
+`~/.codex/config.toml` as it makes each directory, and takes the entries back at
+teardown. The other three exits were checked and are closed:
+`--dangerously-bypass-approvals-and-sandbox` doesn't cover the prompt, trusting
+an ancestor doesn't cover its children, and a `-c projects."…"` override is
+ignored because the gate reads the file rather than the merged config. Seeding
+is unconditional rather than codex-only, because trust belongs to the directory
+and not to whatever process opens it. See `codextrust.go` for why the append
+must check first (a duplicate TOML table breaks codex's config load outright)
+and why a missing `~/.codex` means skip rather than create. Claude and
+antigravity need none of this; both were verified to start clean in a directory
+they've never seen.
+
+Codex's *hook* trust is a separate, global thing keyed on the hooks file's path
+and content hash, so it isn't rig's to fix. If it starts asking on every launch,
+the cause is upstream: nix-managed `~/.codex/hooks.json` whose commands are
+absolute store paths, which change on every home-manager rebuild and invalidate
+every hash with them.
+
 Every prompt `up`, `new`, and `review` already show carries an agent bar that
 ctrl-o cycles, so the choice never costs a screen of its own. Two things there
 are load-bearing. The key is ctrl-o by elimination, not preference: fzf,
