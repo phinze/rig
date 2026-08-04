@@ -1945,17 +1945,18 @@ func (m radarModel) inboxLine() string {
 // height isn't known yet (no windowing). The mouse handler subtracts the same so
 // a click lines up with the row drawn under it.
 func (m radarModel) viewportChrome() (promptRows, budget int) {
-	typing := m.filter != ""
-	if typing {
+	if m.filter != "" {
 		promptRows = 2 // prompt line + blank
 	}
+	// The inbox banner rides above the prompt and pushes the whole board down
+	// with it, so it's prompt furniture too. Counting the newlines it actually
+	// rendered beats re-deriving the condition here, which is how this drifted
+	// in the first place: a notification silently sent every click two rows low.
+	promptRows += strings.Count(m.inboxLine(), "\n")
 	if m.height <= 0 {
 		return promptRows, -1
 	}
-	chrome := 3 // blank line + footer, plus a row of slack off the bottom cell
-	if typing {
-		chrome += promptRows
-	}
+	chrome := 3 + promptRows // blank line + footer + a row of slack, past the prompt
 	if m.scanErr != nil {
 		chrome++
 	}

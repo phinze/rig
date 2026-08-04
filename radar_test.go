@@ -841,6 +841,41 @@ func TestBoardLinesAndHitTest(t *testing.T) {
 	}
 }
 
+// The inbox banner takes two rows at the very top, so everything below it shifts
+// down and every click has to shift with it. It didn't: viewportChrome counted
+// the filter prompt but not the banner, so any notification sitting in the inbox
+// made a click land two rows low and open the wrong rig.
+func TestHitTestShiftsForInboxBanner(t *testing.T) {
+	m := mouseBoard()
+	m.inbox = []notification{{
+		Source: "nix-config-sync", Key: "bump-stalled",
+		Level: "error", Title: "input bump stalled",
+	}}
+
+	// Banner, blank, header, then A(0), B(1), S(2).
+	for _, y := range []int{0, 1, 2} {
+		if _, ok := m.rowAtY(y); ok {
+			t.Errorf("rowAtY(%d) was selectable; banner and header are not", y)
+		}
+	}
+	for y, wantCur := range map[int]int{3: 0, 4: 1, 5: 2} {
+		if got, ok := m.rowAtY(y); !ok || got != wantCur {
+			t.Errorf("rowAtY(%d) = (%d,%v), want (%d,true)", y, got, ok, wantCur)
+		}
+	}
+	if _, ok := m.rowAtY(6); ok {
+		t.Error("rowAtY(6) hit a row past the end")
+	}
+
+	// The banner also spends body budget. Without that, a full board overruns
+	// the popup and the last rows render under the footer.
+	noInbox := mouseBoard()
+	_, want := noInbox.viewportChrome()
+	if _, got := m.viewportChrome(); got != want-2 {
+		t.Errorf("budget with banner = %d, want %d", got, want-2)
+	}
+}
+
 // A multi-agent rig still renders its parent, but the label has no cursor index
 // and mouse hit-testing lands only on concrete children.
 func TestBoardLinesSkipMultiAgentParent(t *testing.T) {
