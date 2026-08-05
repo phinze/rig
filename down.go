@@ -74,9 +74,9 @@ func runDown(args []string) error {
 
 	// Interactive rescue: when down runs from inside the very session it's about
 	// to kill, pop the radar so you can pick where to land next instead of the
-	// kill dropping you to the outer shell. The teardown above already happened —
-	// the pick only chooses a destination, and escaping falls through to the
-	// plain detach. We only do this when we're actually in the doomed session:
+	// kill dropping you to the outer shell. Escaping means second thoughts and
+	// aborts the teardown before its durable job is prepared. We only do this
+	// when we're actually in the doomed session:
 	// run from elsewhere, the kill never touches your client, so a TUI would just
 	// hijack a terminal that was going to stay put anyway.
 	if inDoomed && stdinIsTTY() {
@@ -88,12 +88,12 @@ func runDown(args []string) error {
 		if err != nil {
 			return err
 		}
-		if dest != nil {
-			// switch-client onto the destination before the kill, so by the time
-			// this session dies our client is already looking elsewhere.
-			if err := radarAct(*dest); err != nil {
-				return err
-			}
+		proceed, err := handleDownDestination(dest, radarAct)
+		if err != nil {
+			return err
+		}
+		if !proceed {
+			return nil
 		}
 	}
 
@@ -122,6 +122,21 @@ func runDown(args []string) error {
 		fmt.Fprintf(os.Stderr, "rig: note: your shell's cwd was inside the basedir; run `cd` to recover.\n")
 	}
 	return nil
+}
+
+// handleDownDestination turns the rescue pick into permission to continue.
+// A nil destination is an explicit cancellation, not a request for the old
+// detach behavior.
+func handleDownDestination(dest *rigStatus, act func(rigStatus) error) (bool, error) {
+	if dest == nil {
+		return false, nil
+	}
+	// switch-client onto the destination before the kill, so by the time this
+	// session dies our client is already looking elsewhere.
+	if err := act(*dest); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // downRefusal wraps a blocker reason as the error `rig down` exits with, always

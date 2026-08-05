@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,6 +11,56 @@ import (
 	"testing"
 	"time"
 )
+
+func TestHandleDownDestination(t *testing.T) {
+	t.Run("escape aborts", func(t *testing.T) {
+		acted := false
+		proceed, err := handleDownDestination(nil, func(rigStatus) error {
+			acted = true
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if proceed {
+			t.Error("cancelled picker should abort teardown")
+		}
+		if acted {
+			t.Error("cancelled picker should not switch destinations")
+		}
+	})
+
+	t.Run("selection lands before teardown", func(t *testing.T) {
+		want := rigStatus{ID: "next-rig"}
+		var got rigStatus
+		proceed, err := handleDownDestination(&want, func(dest rigStatus) error {
+			got = dest
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !proceed {
+			t.Error("selected destination should continue teardown")
+		}
+		if got.ID != want.ID {
+			t.Errorf("acted on %q, want %q", got.ID, want.ID)
+		}
+	})
+
+	t.Run("switch failure aborts", func(t *testing.T) {
+		wantErr := errors.New("switch failed")
+		proceed, err := handleDownDestination(&rigStatus{}, func(rigStatus) error {
+			return wantErr
+		})
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("error = %v, want %v", err, wantErr)
+		}
+		if proceed {
+			t.Error("failed switch should abort teardown")
+		}
+	})
+}
 
 // unmergedPRsBlocker is `rig down`'s eager gate: every recorded branch's PR must
 // be merged (or absent). It's what refuses a teardown while a PR — primary or a
