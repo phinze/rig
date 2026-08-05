@@ -88,7 +88,8 @@ func TestManifestLegacyScalarBranch(t *testing.T) {
 func TestManifestParkedRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	parked := time.Now().UTC().Truncate(time.Second)
-	m := manifest{ID: "mir-5", Repos: map[string]string{"rig": "phinze/rig"}, Parked: parked}
+	touched := parked.Add(-time.Hour)
+	m := manifest{ID: "mir-5", Repos: map[string]string{"rig": "phinze/rig"}, Touched: touched, Parked: parked}
 	if err := writeManifest(dir, m); err != nil {
 		t.Fatalf("writeManifest: %v", err)
 	}
@@ -98,6 +99,9 @@ func TestManifestParkedRoundTrip(t *testing.T) {
 	}
 	if !got.Parked.Equal(parked) {
 		t.Errorf("parked = %v, want %v", got.Parked, parked)
+	}
+	if !got.Touched.Equal(touched) {
+		t.Errorf("touched = %v, want %v", got.Touched, touched)
 	}
 
 	// An unparked rig leaves no parked key behind.

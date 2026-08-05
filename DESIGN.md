@@ -45,13 +45,13 @@ sessions that predate the move, and those age out.
 
 ```
 ~/workspaces/proj-123-fix-auth/
-  .rig.toml          # id, title, created, agent, [parked], [repos], [branches]
+  .rig.toml          # id, title, created, touched, agent, [parked], [repos], [branches]
   .envrc             # exports RIG_BASEDIR, RIG_ID; rig env adds the rest
   api/               # jj workspace of phinze/api
   web/               # jj workspace of phinze/web
 ```
 
-The manifest is flat TOML: scalar `id` / `title` / `created` (plus `agent` for
+The manifest is flat TOML: scalar `id` / `title` / `created` / `touched` (plus `agent` for
 non-Claude rigs, and `parked` once dormant), a `[repos]` table mapping each subdir to its `owner/repo`,
 and a `[branches]` table mapping each subdir to the branches its work rides
 (primary first, `rig track` secondaries after). `GH_REPO`, `RIG_WORKSPACE`,
@@ -463,12 +463,13 @@ landed in the last few minutes (`agentState`), whether the rig is parked,
 and what its PRs' review decision is (`parkedDisposition`). The radar is
 that truth drawn as a board instead of re-derived from terminal scrollback.
 
-Layout is two sections. *In flight* is the switch view: unparked rigs,
-most-recently-attached first, the session you're in dropped, each row
-carrying its live agent state. *Parked / awaiting review* is the waiting
-view: dormant rigs ranked by how much they want you (changes-requested →
-approved → merged → still-waiting), the same ranking `rig waiting` prints.
-One glance covers both "where was I" and "what came back."
+Layout is two sections. *In flight* is the switch view: unparked rigs and plain
+sessions, the session you're in dropped, each row carrying its live agent
+state. *Parked / awaiting review* holds the dormant rigs below. Both sections
+are most-recently-touched first, using the same durable timestamp shown in the
+first column. Agent output and asynchronously fetched review state update the
+row without moving it. `rig waiting` retains its explicit review-priority sort
+for the times you are asking what came back rather than where you last were.
 
 Enter does the right thing per row so you never pick a verb: a live rig
 switches, an in-flight rig whose session was killed gets a bare one stood

@@ -103,7 +103,16 @@ func radarAct(s rigStatus) error {
 	// A bare session is nothing but a name to land in; a child is the same, its
 	// session field a session:index window target. No manifest, no session to
 	// stand up, no PR to wake.
-	if s.bare || s.child {
+	if s.bare {
+		return attachOrReport(s.session)
+	}
+	if s.child {
+		if err := touchRigMode(s.Path, true); err != nil {
+			if errors.Is(err, errRigBusy) {
+				return fmt.Errorf("%q is busy — another rig command is holding it (try again shortly)", s.Title)
+			}
+			return err
+		}
 		return attachOrReport(s.session)
 	}
 	// Nonblocking: radarAct runs after the picker's TUI has torn down, so a
@@ -701,6 +710,7 @@ func (m *radarModel) applyParked(path string, parked bool) {
 	}
 	*from = append((*from)[:foundIndex], (*from)[foundIndex+1:]...)
 	found.Parked = parked
+	found.LastTouched = time.Now()
 	found.SessionLive = !parked
 	found.Agent = ""
 	found.agents = nil
@@ -915,22 +925,12 @@ func (m radarModel) parentSections() []radarSection {
 	live = append(live, m.inflight...)
 	live = append(live, m.sessions...)
 	sort.SliceStable(live, func(i, j int) bool {
-		return m.recency(live[i]) > m.recency(live[j])
+		return m.moreRecentlyTouched(live[i], live[j])
 	})
 
 	parked := append([]rigStatus(nil), m.parked...)
 	sort.SliceStable(parked, func(i, j int) bool {
-		di, dj := "…", "…"
-		if prs, ok := m.prs[parked[i].Slug]; ok {
-			di = parkedDisposition(prs)
-		}
-		if prs, ok := m.prs[parked[j].Slug]; ok {
-			dj = parkedDisposition(prs)
-		}
-		if dispRank(di) != dispRank(dj) {
-			return dispRank(di) < dispRank(dj)
-		}
-		return parked[i].Created.Before(parked[j].Created)
+		return m.moreRecentlyTouched(parked[i], parked[j])
 	})
 
 	// History is hidden at rest. The popup's rows belong to live work, and a
@@ -965,10 +965,11 @@ func (m radarModel) parentSections() []radarSection {
 	return sections
 }
 
-// recency is a row's most-recent-touch stamp: when its tmux session was last
-// attached, or — for a parked or sessionless rig with no live session — the
-// newest claude turn, falling back to when it was created. Never-touched rows
-// come back 0 and sink.
+// recency is the timestamp radar both displays and sorts on. A live tmux
+// attachment can move a row to the top immediately; the manifest's durable
+// last-touched stamp preserves that order after the session goes away. Legacy
+// rigs and history rows fall back to Created. Agent output is intentionally not
+// part of this key: background work should update state without moving rows.
 func (m radarModel) recency(s rigStatus) int64 {
 	var r int64
 	if s.bare {
@@ -976,13 +977,28 @@ func (m radarModel) recency(s rigStatus) int64 {
 	} else {
 		r = m.attached[tmuxSessionName(s.Path)]
 	}
-	if s.LastActive != nil && s.LastActive.Unix() > r {
-		r = s.LastActive.Unix()
+	if t := s.LastTouched.Unix(); t > r {
+		r = t
 	}
 	if c := s.Created.Unix(); c > r {
 		r = c
 	}
 	return r
+}
+
+func (m radarModel) touchedAt(s rigStatus) time.Time {
+	if unix := m.recency(s); unix > 0 {
+		return time.Unix(unix, 0)
+	}
+	return time.Time{}
+}
+
+// moreRecentlyTouched deliberately returns false for a tie, leaving the stable
+// sort's existing order alone. Equal second-resolution touch stamps are common
+// when a rig is created and entered in one operation; inventing a secondary
+// priority there would create motion without a newer touch.
+func (m radarModel) moreRecentlyTouched(a, b rigStatus) bool {
+	return m.recency(a) > m.recency(b)
 }
 
 // screenLine is one rendered row of the board: a blank separator, a section
@@ -1599,7 +1615,7 @@ func (m radarModel) columns(items []radarLine) radarColumns {
 			continue
 		}
 		wID = max(wID, lipgloss.Width(it.row.ID))
-		wAge = max(wAge, lipgloss.Width(age(it.row.Created)))
+		wAge = max(wAge, lipgloss.Width(age(m.touchedAt(it.row))))
 		wTitle = max(wTitle, lipgloss.Width(it.row.Title))
 		wTail = max(wTail, m.radarTailWidth(it.row))
 	}
@@ -1764,7 +1780,7 @@ func (m radarModel) View() string {
 			// through a wrapping reverse, so the selected row goes plain — the
 			// reverse-video already marks it, no match bolding needed.
 			var b strings.Builder
-			fmt.Fprintf(&b, "▸ %-*s  %s  %s", cols.wAge, age(s.Created), glyph, title)
+			fmt.Fprintf(&b, "▸ %-*s  %s  %s", cols.wAge, age(m.touchedAt(s)), glyph, title)
 			if rw > 0 {
 				b.WriteString("  " + strings.Join(rightPlain, "  "))
 			}
@@ -1779,7 +1795,7 @@ func (m radarModel) View() string {
 		}
 		var b strings.Builder
 		b.WriteString("  ")
-		b.WriteString(padRight(age(s.Created), cols.wAge) + "  ")
+		b.WriteString(padRight(age(m.touchedAt(s)), cols.wAge) + "  ")
 		b.WriteString(gstyle.Render(glyph) + "  ")
 		b.WriteString(titleCell)
 		if rw > 0 {

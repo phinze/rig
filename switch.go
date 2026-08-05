@@ -78,6 +78,9 @@ func runSwitch(args []string) error {
 	if chosen == nil {
 		return nil
 	}
+	if err := touchRig(chosen.Path); err != nil {
+		return err
+	}
 
 	session := tmuxSessionName(chosen.Path)
 	if !tmuxHasSession(session) {

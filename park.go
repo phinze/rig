@@ -51,15 +51,20 @@ func setRigParked(basedir string, parked, nonblocking bool, afterWrite func(mani
 		return fmt.Errorf("reading manifest: %w", err)
 	}
 	currentlyParked := !m.Parked.IsZero()
+	// Every call here is a deliberate interaction: park, wake, or enter. Keep
+	// that MRU signal in the manifest so radar order survives session teardown
+	// and never depends on background agent or GitHub activity.
+	now := time.Now()
+	m.Touched = now
 	if parked != currentlyParked {
 		if parked {
-			m.Parked = time.Now()
+			m.Parked = now
 		} else {
 			m.Parked = time.Time{}
 		}
-		if err := writeManifest(basedir, m); err != nil {
-			return err
-		}
+	}
+	if err := writeManifest(basedir, m); err != nil {
+		return err
 	}
 	if afterWrite != nil {
 		afterWrite(m)
@@ -82,4 +87,26 @@ func setRigParked(basedir string, parked, nonblocking bool, afterWrite func(mani
 		}
 	}
 	return nil
+}
+
+// touchRig advances only the durable MRU stamp. Switching to an already-live
+// rig does not otherwise mutate its lifecycle, but it is still exactly the
+// deliberate interaction radar's order is meant to remember.
+func touchRig(basedir string) error {
+	return touchRigMode(basedir, false)
+}
+
+func touchRigMode(basedir string, nonblocking bool) error {
+	lock, err := acquireRigMutationLockMode(basedir, nonblocking)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = lock.Close() }()
+
+	m, err := readManifest(basedir)
+	if err != nil {
+		return fmt.Errorf("reading manifest: %w", err)
+	}
+	m.Touched = time.Now()
+	return writeManifest(basedir, m)
 }

@@ -175,6 +175,7 @@ type rigStatus struct {
 	Title       string     `json:"title"`
 	Path        string     `json:"path"`
 	Created     time.Time  `json:"created"`
+	LastTouched time.Time  `json:"last_touched"`
 	SessionLive bool       `json:"session_live"`
 	Agent       string     `json:"agent"`                 // working | idle | "" (no session)
 	Parked      bool       `json:"parked"`                // dormant, awaiting review
@@ -233,6 +234,7 @@ func rigStatuses(rigs []rigInfo, home string, now time.Time) []rigStatus {
 			Title:       r.Title,
 			Path:        r.Path,
 			Created:     r.Created,
+			LastTouched: r.LastTouched,
 			Parked:      !r.Parked.IsZero(),
 			Repos:       r.Repos,
 			SessionLive: tmuxHasSession(tmuxSessionName(r.Path)),
@@ -406,13 +408,14 @@ func age(t time.Time) string {
 }
 
 type rigInfo struct {
-	ID      string
-	Slug    string // basedir directory name
-	Title   string
-	Path    string // absolute basedir path
-	Created time.Time
-	Parked  time.Time // non-zero once `rig park` marked it dormant
-	Repos   []string  // "owner/repo" per repo in the rig, subdir-sorted
+	ID          string
+	Slug        string // basedir directory name
+	Title       string
+	Path        string // absolute basedir path
+	Created     time.Time
+	LastTouched time.Time // durable MRU stamp; falls back to Created for legacy rigs
+	Parked      time.Time // non-zero once `rig park` marked it dormant
+	Repos       []string  // "owner/repo" per repo in the rig, subdir-sorted
 }
 
 // manifestRepos flattens a manifest's repo table to its "owner/repo" slugs,
@@ -470,7 +473,11 @@ func listRigs() ([]rigInfo, error) {
 		if created.IsZero() {
 			created = fi.ModTime()
 		}
-		rigs = append(rigs, rigInfo{ID: m.ID, Slug: e.Name(), Title: m.Title, Path: base, Created: created, Parked: m.Parked, Repos: manifestRepos(m)})
+		touched := m.Touched
+		if touched.IsZero() {
+			touched = created
+		}
+		rigs = append(rigs, rigInfo{ID: m.ID, Slug: e.Name(), Title: m.Title, Path: base, Created: created, LastTouched: touched, Parked: m.Parked, Repos: manifestRepos(m)})
 	}
 	sort.Slice(rigs, func(i, j int) bool { return rigs[i].Created.Before(rigs[j].Created) })
 	return rigs, nil

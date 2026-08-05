@@ -23,8 +23,9 @@ func TestDispRank(t *testing.T) {
 	}
 }
 
-// In-flight rigs and plain sessions share one MRU section. Parked rigs follow
-// in their own section regardless of recency.
+// In-flight rigs and plain sessions share one last-touched section. Parked rigs
+// follow in their own section, also ordered by last touch. Agent activity is a
+// live state signal, not an ordering signal.
 func TestBoardRowsMRU(t *testing.T) {
 	at := func(u int64) *time.Time { tm := time.Unix(u, 0); return &tm }
 	m := radarModel{
@@ -34,7 +35,7 @@ func TestBoardRowsMRU(t *testing.T) {
 		},
 		inflight: []rigStatus{
 			{Slug: "live", Path: "/w/live", Created: time.Unix(1, 0)},                        // recency 500 (attach)
-			{Slug: "agent", Path: "/w/agent", Created: time.Unix(1, 0), LastActive: at(400)}, // recency 400 (claude turn, no attach)
+			{Slug: "agent", Path: "/w/agent", Created: time.Unix(1, 0), LastActive: at(400)}, // activity does not change recency
 		},
 		parked: []rigStatus{
 			{Slug: "parked", Path: "/w/parked", Created: time.Unix(300, 0)}, // recency 300 (created)
@@ -52,11 +53,30 @@ func TestBoardRowsMRU(t *testing.T) {
 			got = append(got, s.Slug)
 		}
 	}
-	want := []string{"live", "agent", "sess-old", "parked"}
+	want := []string{"live", "sess-old", "agent", "parked"}
 	for i, w := range want {
 		if got[i] != w {
 			t.Fatalf("MRU order = %v, want %v", got, want)
 		}
+	}
+}
+
+// The timestamp rendered in radar's first column is the same timestamp used
+// for ordering. A durable touch wins over creation, while a live tmux attach
+// can make the row fresher without rewriting the manifest.
+func TestRadarTouchedAt(t *testing.T) {
+	s := rigStatus{
+		Path:        "/w/a",
+		Created:     time.Unix(100, 0),
+		LastTouched: time.Unix(200, 0),
+	}
+	m := radarModel{attached: map[string]int64{tmuxSessionName(s.Path): 300}}
+	if got := m.touchedAt(s); !got.Equal(time.Unix(300, 0)) {
+		t.Fatalf("touchedAt = %v, want live attach time", got)
+	}
+	delete(m.attached, tmuxSessionName(s.Path))
+	if got := m.touchedAt(s); !got.Equal(s.LastTouched) {
+		t.Fatalf("touchedAt without session = %v, want durable touch %v", got, s.LastTouched)
 	}
 }
 
@@ -70,16 +90,16 @@ func TestRadarParentSections(t *testing.T) {
 		inflight: []rigStatus{{Slug: "live", Title: "live"}},
 		sessions: []rigStatus{{bare: true, session: "shell", Title: "shell"}},
 		parked: []rigStatus{
-			{Slug: "waiting", Parked: true, Created: time.Unix(1, 0), PRs: []rigPR{{prInfo: prInfo{State: "OPEN"}}}},
-			{Slug: "approved", Parked: true, Created: time.Unix(2, 0), PRs: []rigPR{{prInfo: prInfo{State: "OPEN", Review: "APPROVED"}}}},
-			{Slug: "changes", Parked: true, Created: time.Unix(3, 0), PRs: []rigPR{{prInfo: prInfo{State: "OPEN", Review: "CHANGES_REQUESTED"}}}},
+			{Slug: "waiting", Parked: true, Created: time.Unix(1, 0), LastTouched: time.Unix(30, 0), PRs: []rigPR{{prInfo: prInfo{State: "OPEN"}}}},
+			{Slug: "approved", Parked: true, Created: time.Unix(2, 0), LastTouched: time.Unix(20, 0), PRs: []rigPR{{prInfo: prInfo{State: "OPEN", Review: "APPROVED"}}}},
+			{Slug: "changes", Parked: true, Created: time.Unix(3, 0), LastTouched: time.Unix(10, 0), PRs: []rigPR{{prInfo: prInfo{State: "OPEN", Review: "CHANGES_REQUESTED"}}}},
 		},
 	}
 	sections := m.parentSections()
 	if len(sections) != 2 || sections[0].header != "IN FLIGHT" || sections[1].header != "PARKED / AWAITING REVIEW" {
 		t.Fatalf("sections = %+v", sections)
 	}
-	if got := []string{sections[1].rows[0].Slug, sections[1].rows[1].Slug, sections[1].rows[2].Slug}; !slices.Equal(got, []string{"changes", "approved", "waiting"}) {
+	if got := []string{sections[1].rows[0].Slug, sections[1].rows[1].Slug, sections[1].rows[2].Slug}; !slices.Equal(got, []string{"waiting", "approved", "changes"}) {
 		t.Fatalf("parked order = %v", got)
 	}
 }

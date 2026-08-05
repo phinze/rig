@@ -55,6 +55,9 @@ func createBasedir(basedir string, m manifest) error {
 	if m.Created.IsZero() {
 		m.Created = time.Now()
 	}
+	if m.Touched.IsZero() {
+		m.Touched = m.Created
+	}
 	if err := os.MkdirAll(basedir, 0o755); err != nil {
 		return err
 	}

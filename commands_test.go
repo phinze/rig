@@ -119,12 +119,14 @@ func TestEncodeRigsJSON(t *testing.T) {
 	}
 
 	last := time.Unix(1_700_000_000, 0).UTC()
+	touched := last.Add(-time.Hour)
 	statuses := []rigStatus{{
 		ID:          "mir-75",
 		Slug:        "mir-75-add-zig-stack",
 		Title:       "add zig stack",
 		Path:        "/home/phinze/workspaces/mir-75-add-zig-stack",
 		Created:     time.Unix(1_699_999_000, 0).UTC(),
+		LastTouched: touched,
 		SessionLive: true,
 		Agent:       "working",
 		LastActive:  &last,
@@ -144,6 +146,7 @@ func TestEncodeRigsJSON(t *testing.T) {
 		"slug":         "mir-75-add-zig-stack",
 		"session_live": true,
 		"agent":        "working",
+		"last_touched": touched.Format(time.RFC3339),
 	} {
 		if got[k] != want {
 			t.Errorf("json[%q] = %v, want %v", k, got[k], want)

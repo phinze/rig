@@ -18,6 +18,11 @@ type manifest struct {
 	ID      string
 	Title   string
 	Created time.Time
+	// Touched is the last deliberate interaction with the rig: creation,
+	// entering it, parking it, or waking it. Unlike agent activity and fetched
+	// review state, it only moves when the user acts, so radar can use it as a
+	// durable MRU key without rows dancing during background refreshes.
+	Touched time.Time
 	// Agent is the terminal agent this rig was created for. Empty means Claude,
 	// preserving the behavior of manifests written before agent selection.
 	Agent string
@@ -82,6 +87,9 @@ func writeManifest(basedir string, m manifest) error {
 	}
 	if !m.Created.IsZero() {
 		fmt.Fprintf(&b, "created = %q\n", m.Created.Format(time.RFC3339))
+	}
+	if !m.Touched.IsZero() {
+		fmt.Fprintf(&b, "touched = %q\n", m.Touched.Format(time.RFC3339))
 	}
 	if !m.Parked.IsZero() {
 		fmt.Fprintf(&b, "parked = %q\n", m.Parked.Format(time.RFC3339))
@@ -230,6 +238,10 @@ func readManifest(basedir string) (manifest, error) {
 			case "created":
 				if t, err := time.Parse(time.RFC3339, val); err == nil {
 					m.Created = t
+				}
+			case "touched":
+				if t, err := time.Parse(time.RFC3339, val); err == nil {
+					m.Touched = t
 				}
 			case "parked":
 				if t, err := time.Parse(time.RFC3339, val); err == nil {
