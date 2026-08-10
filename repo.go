@@ -319,13 +319,24 @@ func jjWorkspaceForget(repoArg string, names []string) error {
 
 // workspaceRegistered reports whether a workspace name is registered with the
 // source repo (regardless of whether its directory still exists on disk).
+//
+// The template is the point. This used to scan the human output for a
+// "<name>:" prefix, which meant rig cared how jj chose to format a list — and
+// jj 0.44 duly changed it, adding workspace roots to that line. A template
+// names the field we want, so the only thing that can break it is jj removing
+// the field. Templated `workspace list` arrived in 0.44, which is the floor
+// this pins rig to.
+//
+// --ignore-working-copy because this is a question about the repo, not an
+// excuse to snapshot the default workspace of some repo we merely pointed at.
 func workspaceRegistered(repoPath, wsName string) bool {
-	out, err := exec.Command("jj", "-R", repoPath, "workspace", "list").Output()
+	out, err := exec.Command("jj", "-R", repoPath, "--ignore-working-copy",
+		"workspace", "list", "-T", `name ++ "\n"`).Output()
 	if err != nil {
 		return false
 	}
 	for _, line := range strings.Split(string(out), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), wsName+":") {
+		if strings.TrimSpace(line) == wsName {
 			return true
 		}
 	}

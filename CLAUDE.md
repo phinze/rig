@@ -155,6 +155,22 @@ you don't get asked what you just said.
 TODO: fill in as the shape solidifies. For now, see DESIGN.md §"Shape
 sketch" and §"CLI shape".
 
+### Talking to jj
+
+rig shells out to jj. Always ask for data with an explicit `-T` template,
+never by reading jj's human output. A template is a contract rig writes, so
+jj is free to change how it renders and rig doesn't care; scanning the
+default rendering makes rig's correctness depend on jj's formatting choices.
+`workspaceRegistered` learned this the hard way, matching a `"<name>:"`
+prefix out of `jj workspace list` until 0.44 added workspace roots to that
+line.
+
+Templated `jj workspace list` requires **jj 0.44 or newer**, which is rig's
+floor. Worth knowing that nix-config now bumps jj automatically within days
+of a release, so jj moves under rig without anyone deciding to upgrade; the
+e2e suite runs real jj commands, which is what catches it when that goes
+wrong.
+
 ## Development
 
 ```sh
