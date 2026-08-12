@@ -103,6 +103,12 @@ func renderRigInstructions(basedir string, m manifest) string {
 	b.WriteString("- The repos here are **jj workspaces**, not plain git checkouts. Use `jj`\n")
 	b.WriteString("  (`jj st`, `jj diff`, `jj log`), not `git`. Git commands fail here with\n")
 	b.WriteString("  \"not a git repository\". The `jj` skill has the full playbook.\n")
+	b.WriteString("- The repo under each workspace moves while you work: other rigs share it,\n")
+	b.WriteString("  bookmarks advance, and branches get force-pushed. `@` is yours alone; `@-`\n")
+	b.WriteString("  and bookmark names re-resolve as the repo shifts, so when it matters that\n")
+	b.WriteString("  we mean the same code, name the commit id. Read `jj op log` before\n")
+	b.WriteString("  deciding something broke — a working copy that jumped is usually another\n")
+	b.WriteString("  workspace's operation, not damage.\n")
 
 	if len(m.Repos) > 0 {
 		b.WriteString("- Repos in this rig:\n")
