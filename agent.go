@@ -15,7 +15,9 @@ const (
 )
 
 // agentKinds is the cycle order the picker walks, and the order every list of
-// agents renders in. Claude leads because it's the compatibility default.
+// agents renders in. Fixed, and independent of which agent starts selected:
+// agentBar moves brackets rather than a cursor, so the columns hold still while
+// the choice travels. Claude leads because it was the original default.
 var agentKinds = []agentKind{agentClaude, agentCodex, agentAntigravity}
 
 // short is the three-letter name an agent goes by in the picker bar and on the
@@ -67,7 +69,9 @@ func parseAgent(name string) (agentKind, error) {
 // arguments and resolves it against RIG_AGENT. The flag wins over the env var,
 // and naming one explicitly is also what suppresses the interactive pick: you
 // don't get asked what you just said. RIG_AGENT only moves the starting
-// position, since a rig exports it to everything running inside it.
+// position: it's a standing preference from your shell, which is a different
+// statement from "this rig, this one time" — so it seeds the bar and still
+// lets you see it.
 func extractAgentFlag(args []string) (*agentPick, []string, error) {
 	name := ""
 	var rest []string

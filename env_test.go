@@ -19,6 +19,9 @@ func TestEnvExports(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(basedir, "cloud", ".iso"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// The agent is set and deliberately absent from every want list below: rig
+	// reads RIG_AGENT to seed the picker and must never write it, or a rig ends
+	// up choosing for the next rig you create from inside it.
 	m := manifest{ID: "mir-75", Title: "add zig stack", Agent: "codex", Repos: map[string]string{
 		"runtime": "mirendev/runtime",
 		"cloud":   "mirendev/cloud",
@@ -43,7 +46,6 @@ func TestEnvExports(t *testing.T) {
 				"export RIG_BASEDIR='" + basedir + "'",
 				"PATH_rm '" + filepath.Join(basedir, ".rig", "bin") + "'",
 				"PATH_add '" + filepath.Join(basedir, ".rig", "bin") + "'",
-				"export RIG_AGENT='codex'",
 				"export RIG_ID='mir-75'",
 			},
 		},
@@ -53,7 +55,6 @@ func TestEnvExports(t *testing.T) {
 				"export RIG_BASEDIR='" + basedir + "'",
 				"PATH_rm '" + filepath.Join(basedir, ".rig", "bin") + "'",
 				"PATH_add '" + filepath.Join(basedir, ".rig", "bin") + "'",
-				"export RIG_AGENT='codex'",
 				"export RIG_ID='mir-75'",
 				"export RIG_WORKSPACE='mir-75-runtime'",
 				"export RIG_PORT=17527",
@@ -66,7 +67,6 @@ func TestEnvExports(t *testing.T) {
 				"export RIG_BASEDIR='" + basedir + "'",
 				"PATH_rm '" + filepath.Join(basedir, ".rig", "bin") + "'",
 				"PATH_add '" + filepath.Join(basedir, ".rig", "bin") + "'",
-				"export RIG_AGENT='codex'",
 				"export RIG_ID='mir-75'",
 				"export RIG_WORKSPACE='mir-75-runtime'",
 				"export RIG_PORT=17527",
@@ -79,7 +79,6 @@ func TestEnvExports(t *testing.T) {
 				"export RIG_BASEDIR='" + basedir + "'",
 				"PATH_rm '" + filepath.Join(basedir, ".rig", "bin") + "'",
 				"PATH_add '" + filepath.Join(basedir, ".rig", "bin") + "'",
-				"export RIG_AGENT='codex'",
 				"export RIG_ID='mir-75'",
 			},
 		},
@@ -89,7 +88,6 @@ func TestEnvExports(t *testing.T) {
 				"export RIG_BASEDIR='" + basedir + "'",
 				"PATH_rm '" + filepath.Join(basedir, ".rig", "bin") + "'",
 				"PATH_add '" + filepath.Join(basedir, ".rig", "bin") + "'",
-				"export RIG_AGENT='codex'",
 				"export RIG_ID='mir-75'",
 				"export RIG_WORKSPACE='mir-75-cloud'",
 				"export RIG_PORT=17314",

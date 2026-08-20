@@ -110,12 +110,12 @@ usage:
                             of yours to resume; idempotent — re-up just switches.
                             Repo is chosen by an fzf picker over ghq repos, cwd
                             pre-selected on top, unless --repo names one)
-                            Agent is cld/claude (default), cdx/codex, or
-                            agy/antigravity. Every prompt a creation command
-                            already shows carries an agent bar that ctrl-o
-                            cycles; an invocation that prompts for nothing gets
-                            the bar on its own. --agent picks without asking,
-                            RIG_AGENT moves the starting position
+                            Agent is cld/claude, cdx/codex, or agy/antigravity,
+                            defaulting to $RIG_AGENT and then to claude. Every
+                            prompt a creation command already shows carries an
+                            agent bar that ctrl-o cycles; an invocation that
+                            prompts for nothing gets the bar on its own.
+                            --agent picks without asking
   rig new [kickoff] [--repo owner/repo] [--agent AGENT]
                             start unticketed work in a normal authoring rig
                             (prompts for the kickoff when omitted, then for a

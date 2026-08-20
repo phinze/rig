@@ -1045,7 +1045,7 @@ func TestDownLeavesRecoverableTombstone(t *testing.T) {
 		"SHELL=/bin/sh",
 		"HISTFILE=/dev/null",
 		// The fixture below plants a Claude session for resurrection. Do not let
-		// the enclosing rig's agent choice turn this into a Codex-owned rig.
+		// the developer's own RIG_AGENT turn this into a Codex-owned rig.
 		"RIG_AGENT=claude",
 		// Pin state explicitly so a set XDG_STATE_HOME in the developer's shell
 		// can never route test tombstones into the real store.

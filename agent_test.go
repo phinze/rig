@@ -25,8 +25,8 @@ func TestExtractAgentFlag(t *testing.T) {
 		t.Errorf("rest = %q", got)
 	}
 
-	// The env var only moves the starting position: a rig exports RIG_AGENT to
-	// everything inside it, so inheriting one must not count as having picked.
+	// The env var only moves the starting position: it's a standing shell
+	// preference, and having one must not count as having picked this time.
 	pick, _, err = extractAgentFlag(nil)
 	if err != nil || pick.kind != agentCodex {
 		t.Errorf("env default = %q, %v; want codex", pick.kind, err)

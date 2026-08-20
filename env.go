@@ -48,6 +48,14 @@ func envExports(cwd, home string) []string {
 // rigExports emits the rig's identity: basedir and id everywhere under the
 // rig, plus the working-tree id (same shape as the jj workspace name) and
 // GH_REPO when cwd is inside one of the rig's repo workspaces.
+//
+// Deliberately absent: the rig's agent. Every other key here exists because
+// something downstream reads it — a dev server wants RIG_PORT, gh wants
+// GH_REPO, iso wants ISO_SESSION — and nothing ever read RIG_AGENT. What it
+// did instead was collide with the input side: parseAgent reads that same name
+// to seed the picker, so a rig quietly made its own agent the starting position
+// for the next rig you created from inside it. RIG_AGENT is now yours alone,
+// a standing preference set in your shell, and rig only reads it.
 func rigExports(basedir, cwd string) []string {
 	m, err := readManifest(basedir)
 	if err != nil {
@@ -58,7 +66,6 @@ func rigExports(basedir, cwd string) []string {
 		"PATH_rm " + shellQuote(filepath.Join(basedir, ".rig", "bin")),
 		"PATH_add " + shellQuote(filepath.Join(basedir, ".rig", "bin")),
 	}
-	out = append(out, "export RIG_AGENT="+shellQuote(string(m.agentKind())))
 	if m.ID != "" {
 		out = append(out, "export RIG_ID="+shellQuote(m.ID))
 	}

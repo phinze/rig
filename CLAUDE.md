@@ -110,10 +110,18 @@ goes through it — see its comment for why the default is nearly free (`b`
 cycles back to `@-` in one keystroke).
 
 The agent is selectable with `--agent`, which takes either the long name or the
-short one it goes by in the picker: `cld`, `cdx`, `agy`. It defaults to Claude
-for compatibility, and `RIG_AGENT` (which every rig exports) moves the starting
-position. Rig writes equivalent generated instructions and tracks session
-activity for all three.
+short one it goes by in the picker: `cld`, `cdx`, `agy`. `RIG_AGENT` moves the
+starting position, with Claude as the fallback beneath it. Rig writes equivalent
+generated instructions and tracks session activity for all three.
+
+`rig env` deliberately does not export `RIG_AGENT`, though it once did. Every
+other key it projects has a downstream consumer (`RIG_PORT` a dev server,
+`GH_REPO` gh, `ISO_SESSION` iso); that one had none, and because `parseAgent`
+reads the same name, exporting it meant a rig silently seeded the picker for the
+next rig you made from inside it. The name now belongs to you, not to whichever
+rig you're standing in — which is what makes setting it in home-manager a real
+global default. If you ever want a rig's agent readable from inside it, read
+`.rig.toml`, or pick a name that doesn't feed back into the picker.
 
 Codex additionally gates every unseen directory behind a trust prompt, which a
 rig trips by construction: a fresh basedir and a fresh workspace under it, every

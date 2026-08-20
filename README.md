@@ -30,11 +30,12 @@ repo into the main hot seat, and `rig recto cloud focus path:42` promotes and
 drives it in one step. Repo tabs do not carry permanent shells, but splitting
 from a Recto inherits that repo's working directory when one is useful.
 
-Claude Code is the default agent, but it is not baked into the rig. `rig up`,
+Claude Code is the fallback agent, but it is not baked into the rig. `rig up`,
 `rig new`, and `rig review` all let you pick: whatever prompt they're already
 showing carries an agent bar that ctrl-o cycles through `cld`, `cdx`, and `agy`,
 and an invocation that prompts for nothing gets the bar on its own. `--agent`
-names one without being asked and `RIG_AGENT` moves the starting position. The
+names one without being asked, and `RIG_AGENT` in your shell moves the starting
+position for every new rig. The
 choice is saved in `.rig.toml`; generated `CLAUDE.md`, `AGENTS.md`, and
 Antigravity workspace rules carry the same live task context, and `ls`, `radar`,
 and `sweep` read all three agents' session activity.

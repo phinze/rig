@@ -21,8 +21,10 @@ and `jreview` fish functions, reshaped for where the work actually is:
   structural, not bolted on.
 - **Metadata + .envrc at the basedir.** A `.rig.toml` is the source of
   truth; the basedir `.envrc` and `rig env` project `RIG_ID`,
-  `RIG_BASEDIR`, `RIG_AGENT`, and per-workspace keys so downstream tools (agent
-  context, jj templates, `rig down`) read from one place.
+  `RIG_BASEDIR`, and per-workspace keys so downstream tools (agent
+  context, jj templates, `rig down`) read from one place. Projection is for
+  keys something downstream actually reads; the rig's agent isn't one, and
+  exporting it only fed the picker back into itself.
 
 ## Where it stands
 
@@ -111,8 +113,17 @@ job (climbing rig, fishing rig, sound rig):
 `rig up`, `rig new`, and `rig review` accept `--agent`, by long name
 (`claude|codex|antigravity`) or by the three-letter one the picker uses
 (`cld|cdx|agy`). `RIG_AGENT` supplies the default when the flag is absent, with
-Claude retained as the compatibility default. Rig launches the selected terminal
-agent in the left pane and saves the choice in the manifest.
+Claude retained as the compatibility fallback beneath it. Rig launches the
+selected terminal agent in the left pane and saves the choice in the manifest.
+
+`RIG_AGENT` is read, never written. It used to be both: `rig env` projected each
+rig's manifest agent into its environment, on the general principle that the
+manifest is the source of truth and downstream tools shouldn't rediscover it.
+But nothing downstream ever read it — unlike `RIG_PORT`, `GH_REPO`, and
+`ISO_SESSION`, each of which exists for a specific consumer — and sharing a name
+with the input side meant a rig made its own agent the starting position for the
+next rig you created from inside it. Dropping the export leaves the name to mean
+one thing: the agent you'd like new rigs to start on, set once in your shell.
 
 The choice is also pickable, and deliberately not as a screen of its own. Every
 prompt a creation command already puts up — the kickoff line, the context
@@ -133,10 +144,10 @@ An invocation that prompts for nothing (`rig review <url>`, or an `up` carrying
 both an exact id and `--repo`) has nothing to ride along on, so there the bar
 becomes its own one-line prompt rather than letting the default pass silently.
 It runs past every resume check, so re-running `rig review <url>` on a rig you
-already have still just attaches. Naming `--agent` skips it outright; inheriting
-`RIG_AGENT` does not, because a rig exports it to everything running inside it
-and "the rig I happen to be sitting in" isn't the same statement as "this one
-should use Codex." It renders the same generated
+already have still just attaches. Naming `--agent` skips it outright; having
+`RIG_AGENT` set does not, because a standing preference for what new rigs start
+on isn't the same statement as "this one should use Codex." It renders the same
+generated
 context as `CLAUDE.md`, `AGENTS.md`, and `.agents/rules/rig.md`, leaving those
 files at the basedir so they do not become jj changes inside a repo workspace.
 Codex and Antigravity are explicitly pointed to `../AGENTS.md` in their opening
