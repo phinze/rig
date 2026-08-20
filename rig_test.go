@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -190,6 +191,11 @@ func TestResolveKickoffInline(t *testing.T) {
 // hypothetical: a stale checkout once seeded a workspace missing an upstream
 // fix, and the agent working in it spent an afternoon re-solving it.
 func TestAddRepoWorkspaceFetchesStaleTrunk(t *testing.T) {
+	for _, bin := range []string{"git", "jj"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			t.Skipf("%s not installed", bin)
+		}
+	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	setHermeticGit(t)
