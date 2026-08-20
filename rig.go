@@ -106,6 +106,19 @@ func addRepoWorkspace(basedir, rigID string, repo repoRef, startRev, branch stri
 		_ = jjWorkspaceForget(repo.Path, []string{wsName})
 	}
 
+	// trunk() resolves against the source clone's remote-tracking refs, so a
+	// repo nobody has fetched in a while seeds the workspace with whatever it
+	// last saw. Branch-based callers already fetched in resolveStartRev; this
+	// covers the ones that start from trunk. Best-effort on purpose, since
+	// offline should still get you a workspace, but say so when it fails:
+	// silently handing an agent a months-old tree is how you spend an afternoon
+	// re-fixing something that landed upstream weeks ago.
+	if startRev == "trunk()" {
+		if err := jjGitFetch(repo.Path); err != nil {
+			fmt.Fprintf(os.Stderr, "rig: warning: fetch of %s failed, starting from possibly stale trunk: %v\n", repo.Path, err)
+		}
+	}
+
 	fmt.Fprintf(os.Stderr, "rig: jj workspace add %s (from %s) → %s\n", wsName, startRev, repoDest)
 	if err := jjWorkspaceAdd(repo.Path, wsName, startRev, repoDest); err != nil {
 		return "", fmt.Errorf("jj workspace add: %w", err)

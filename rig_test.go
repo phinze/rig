@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -178,5 +180,56 @@ func TestResolveKickoffInline(t *testing.T) {
 	}
 	if got != "investigate the flake" {
 		t.Errorf("resolveKickoff = %q, want %q", got, "investigate the flake")
+	}
+}
+
+// TestAddRepoWorkspaceFetchesStaleTrunk pins down why seeding from trunk() has
+// to fetch first. trunk() resolves against the source clone's remote-tracking
+// refs, and ghq-style checkouts are only cloned once, so a repo nobody has
+// touched in months hands the new workspace months-old code. That is not
+// hypothetical: a stale checkout once seeded a workspace missing an upstream
+// fix, and the agent working in it spent an afternoon re-solving it.
+func TestAddRepoWorkspaceFetchesStaleTrunk(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	setHermeticGit(t)
+
+	env := append(os.Environ(), "HOME="+home)
+	env = append(env, hermeticGitVars()...)
+
+	// The remote everyone agrees on.
+	origin := filepath.Join(home, "origin.git")
+	mustMkdir(t, origin)
+	mustRun(t, origin, env, "git", "init", "-q", "--bare", "-b", "main")
+
+	// A scratch clone, used only to publish commits to origin.
+	seed := filepath.Join(home, "seed")
+	mustRun(t, home, env, "git", "clone", "-q", origin, seed)
+	mustRun(t, seed, env, "git", "commit", "-q", "--allow-empty", "-m", "first")
+	mustRun(t, seed, env, "git", "push", "-q", "origin", "main")
+
+	// The ghq-style checkout rig reuses. It sees "first" and nothing after.
+	source := filepath.Join(home, "src", "github.com", "o", "r")
+	mustRun(t, home, env, "git", "clone", "-q", origin, source)
+	mustRun(t, source, env, "jj", "git", "init", "--colocate")
+
+	// Upstream moves on. Nobody tells the checkout.
+	mustRun(t, seed, env, "git", "commit", "-q", "--allow-empty", "-m", "landed upstream")
+	mustRun(t, seed, env, "git", "push", "-q", "origin", "main")
+
+	basedir := filepath.Join(home, "workspaces", "rig-id")
+	mustMkdir(t, basedir)
+	if err := writeManifest(basedir, manifest{ID: "rig-id", Title: "Rig Id"}); err != nil {
+		t.Fatal(err)
+	}
+
+	dest, err := addRepoWorkspace(basedir, "rig-id", repoRef{Owner: "o", Name: "r", Path: source}, "trunk()", "")
+	if err != nil {
+		t.Fatalf("addRepoWorkspace: %v", err)
+	}
+
+	got := strings.TrimSpace(mustOutput(t, dest, env, "jj", "log", "--no-graph", "-r", "@-", "-T", "description"))
+	if !strings.Contains(got, "landed upstream") {
+		t.Errorf("workspace seeded from stale trunk: @- is %q, want the commit that had landed upstream", got)
 	}
 }
