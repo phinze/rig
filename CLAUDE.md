@@ -191,15 +191,16 @@ nix flake check
 This is a personal, single-author repo. Land work by committing straight to
 `main` — no PR ceremony, no review gate, `pr-time` is overkill here. The whole
 flow is: keep the tree green (`go build ./... && go test ./... && nix flake
-check`), draft the commit message and get a nod, `jj describe` the change, then
-advance the `main` bookmark to it.
+check`), write and apply the commit message, then show the final change and
+message once before advancing the `main` bookmark.
 
 ## Conventions
 
 - stdlib net/http preferred over frameworks
-- Shell-out to `jj`, `gh`, `tmux`, `linearis` via `os/exec` rather than
-  pulling in heavy SDKs. The whole point of rig is to compose tools that
-  already exist.
+- Shell out to `jj`, `gh`, and `tmux` via `os/exec` rather than pulling in
+  heavy SDKs. Linear is the exception: its small read-only adapter talks to
+  GraphQL directly so PR attachment lookup, issue resolution, and picker search
+  share one auth and error boundary.
 - TODO: Document project-specific conventions as they emerge.
 
 ## Related

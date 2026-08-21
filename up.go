@@ -17,9 +17,10 @@ func runUp(args []string) error {
 	// A PR URL means "pick up my own work on this PR" — authoring, not the issue
 	// flow. pickupPR sorts authoring vs review by who owns the PR (and reroutes
 	// to review if it's not yours). Idempotency lives inside the authoring pickup,
-	// keyed off the branch-derived id (a PR born from an issue shares that issue's
-	// rig), which is why there's no cheap pr-<n> pre-check here: pr-<n> is unique
-	// only per repo, and wouldn't match an issue-keyed rig anyway.
+	// keyed off the linked Linear issue or its branch fallback (a PR born from an
+	// issue shares that issue's rig), which is why there's no cheap pr-<n>
+	// pre-check here: pr-<n> is unique only per repo, and wouldn't match an
+	// issue-keyed rig anyway.
 	if len(args) >= 1 {
 		if pr := parsePRURL(args[0]); pr != nil {
 			return pickupPR(pr, "up", pick)
@@ -79,11 +80,19 @@ func runUp(args []string) error {
 		return err
 	}
 
+	branchName := tk.workBranchName()
 	startRev := resolveStartRev(repo.Path, tk.BranchName)
-	// Record the Linear branch even when startRev fell back to trunk() because
-	// the branch isn't pushed yet: it's still the branch this rig's PR will ride,
-	// so pr/ls/reap resolve the right PR the moment it exists.
-	repoDest, err := addRepoWorkspace(basedir, tk.rigID(), repo, startRev, tk.BranchName)
+	if startRev == "trunk()" {
+		// Existing work may predate keyword-controlled Linear linking and still
+		// ride the generated, issue-bearing branch. Resume it when found; only
+		// use the new branch shape when there is no old work to recover.
+		startRev = resolveStartRev(repo.Path, branchName)
+	} else {
+		branchName = tk.BranchName
+	}
+	// Record the intended branch even when startRev fell back to trunk() because
+	// it isn't pushed yet, so pr/ls/reap resolve the right PR once it exists.
+	repoDest, err := addRepoWorkspace(basedir, tk.rigID(), repo, startRev, branchName)
 	if err != nil {
 		return err
 	}

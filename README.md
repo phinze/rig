@@ -41,9 +41,15 @@ Antigravity workspace rules carry the same live task context, and `ls`, `radar`,
 and `sweep` read all three agents' session activity.
 
 It exists to fold a pair of fish functions (`jpickup` / `jreview`) into one tool
-that composes things I already lean on (jj, gh, tmux, recto, linearis) instead
-of reinventing them. See [DESIGN.md](./DESIGN.md) for the full shape and the
+that composes things I already lean on (jj, gh, tmux, recto) instead of
+reinventing them. See [DESIGN.md](./DESIGN.md) for the full shape and the
 reasoning behind it.
+
+## Linear authentication
+
+Rig reads Linear through its GraphQL API. Set `LINEAR_API_TOKEN`, or put a
+personal API key in `~/.linear_api_token` with mode `0600`. The agent-facing
+Linear MCP uses its own OAuth credentials; Rig does not read or modify them.
 
 ## Heads up
 

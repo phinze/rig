@@ -187,25 +187,30 @@ clone-colocate-fetch-workspace path, one bit of divergence hanging off
 authorship.
 
 An authoring PR pickup also has to land at the *same path* its originating `rig
-up <issue>` used, because that's where the claude sessions you built live —
-claude keys its history by cwd, and a rig's cwd is `<basedir>/<repo>`. The
-bridge is the branch: a PR born from a Linear issue rides
-`phinze/mir-75-add-zig-stack`, the very slug `rig up MIR-75` turned into id
-`mir-75` and basedir `mir-75-add-zig-stack`. So the pickup derives its identity
-from the branch rather than the PR number, reconstructing that id and path
-exactly. A live issue-rig is then found by id and switched to; a `down`'d one
-rebuilds at the same basedir, so `claude --resume` still lists what you did
-there. Only a PR with no issue id in its branch (not born from a tracker) falls
-back to `pr-<n>`, since there was never a sibling rig to line up with.
+up <issue>` used, because that's where the agent sessions you built live. Each
+agent keys history by cwd, and a rig's cwd is `<basedir>/<repo>`. Linear exposes
+its GitHub links as issue attachments and supports a reverse lookup by canonical
+PR URL, so that relationship is the primary bridge back to the issue id, title,
+and original Linear branch slug. A live issue-rig is found by id and switched
+to; a `down`'d one rebuilds at the same basedir, so resume still lists what you
+did there.
+
+The branch remains a lossless offline and compatibility bridge. Older work
+uses Linear's literal `phinze/mir-75-add-zig-stack`; new work uses
+`phinze/mir_75-add-zig-stack`. The underscore form reverses to the same
+`mir-75-add-zig-stack` basedir but does not give Linear an exact issue token.
+That leaves `Closes MIR-75`, `Part of MIR-75`, or `Related to MIR-75` in the PR
+body in charge of linkage and status behavior. A PR with no Linear attachment
+or recognizable issue branch falls back to `pr-<n>`.
 
 Because `up` owns your work end to end, it's idempotent by design. `rig up X`
 doesn't mean "create a rig," it means "put me in my rig for X, making it if it
 isn't there." If the rig's in flight, switch to it. If it's parked, wake it.
 If it got `down`'d entirely, rebuild it from `branch@origin` and your pushed
 work comes back with the branch. The existence check comes before any network:
-`up` matches `listRigs()` the way `switch` does (id/slug/title, no gh or
-linearis round-trip), so re-upping into work you already have is as instant as
-switching. The tracker call only happens on genuine creation.
+`up` matches `listRigs()` the way `switch` does (id/slug/title, no gh or Linear
+round-trip), so re-upping into work you already have is as instant as switching.
+The tracker call only happens on genuine creation.
 
 The invariant that makes this safe rather than scary: **`down` can't destroy
 anything `up` can't rebuild.** `down`'s safety gate is "no unmerged, no

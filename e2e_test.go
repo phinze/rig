@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +13,38 @@ import (
 	"testing"
 	"time"
 )
+
+func fakeLinearGraphQL(t *testing.T) string {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "test-token" {
+			http.Error(w, "missing test token", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+  "data": {
+    "issue": {
+      "identifier": "FAKE-1",
+      "title": "do the thing",
+      "branchName": "fake/fake-1-do-the-thing"
+    },
+    "attachmentsForURL": {
+      "nodes": [{
+        "metadata": {"linkKind": "contributes"},
+        "issue": {
+          "identifier": "MIR-75",
+          "title": "fix the thing",
+          "branchName": "phinze/mir-75-fix-the-thing"
+        }
+      }]
+    }
+  }
+}`))
+	}))
+	t.Cleanup(server.Close)
+	return server.URL
+}
 
 func TestSpawnSessionAgents(t *testing.T) {
 	realTmux, err := exec.LookPath("tmux")
@@ -71,7 +105,7 @@ func TestSpawnSessionAgents(t *testing.T) {
 	}
 }
 
-// TestNew exercises ticketless creation without providing a linearis shim: the
+// TestNew exercises ticketless creation without Linear credentials: the
 // kickoff mints the local identity, the explicit repo takes the same clone-
 // resolution path as up's picker result, and the workspace deliberately starts
 // branchless at trunk().
@@ -265,18 +299,12 @@ func TestUpDown(t *testing.T) {
 	mustRun(t, repoDir, env, "jj", "git", "init", "--colocate")
 	mustRun(t, repoDir, env, "jj", "config", "set", "--repo", `revset-aliases."trunk()"`, "main")
 
-	// Fake linearis: always returns FAKE-1 → fake/fake-1-do-the-thing.
-	linearis := `#!/bin/sh
-if [ "$1" = "issues" ] && [ "$2" = "read" ]; then
-  cat <<JSON
-{"identifier":"FAKE-1","title":"do the thing","branchName":"fake/fake-1-do-the-thing"}
-JSON
-  exit 0
-fi
-echo "fake linearis: unsupported invocation $*" >&2
-exit 1
-`
-	mustWriteExec(t, filepath.Join(bin, "linearis"), linearis)
+	// Rig talks to Linear directly; keep the test hermetic with a local GraphQL
+	// endpoint and the same token override production supports.
+	env = append(env,
+		"LINEAR_API_TOKEN=test-token",
+		"RIG_LINEAR_GRAPHQL_ENDPOINT="+fakeLinearGraphQL(t),
+	)
 
 	// Fake gh: this rig's branch was never pushed, so it has no PR. Answering
 	// "no pull requests found" lets `rig down`'s guardrail see nothing unmerged
@@ -351,6 +379,9 @@ exit 1
 	// The [repos] table is what the global direnvrc reads to set GH_REPO.
 	if !strings.Contains(string(manifest), `fakerepo = "fakeowner/fakerepo"`) {
 		t.Errorf("manifest missing repos mapping:\n%s", manifest)
+	}
+	if !strings.Contains(string(manifest), `fakerepo = ["fake/fake_1-do-the-thing"]`) {
+		t.Errorf("manifest should record the non-linking Linear work branch:\n%s", manifest)
 	}
 
 	// Session named after the basedir, session-wizard full-path style.
@@ -591,8 +622,8 @@ exit 1
 }
 
 // TestUpFromOwnPR exercises `rig up <pr-url>` where the PR is the current
-// user's: the authorship split routes it to authoring, not review. The PR rides
-// a Linear-style branch, so the rig rebuilds under that issue's id and path
+// user's: the authorship split routes it to authoring, not review. Linear's PR
+// attachment lookup lets the rig rebuild under the linked issue's id and path
 // (mir-75, not pr-42) — the property that lets claude --resume find the sessions
 // you built under `rig up MIR-75`. gh reports the author as the current user, so
 // the rig comes out authoring (no kind=review) on the branch you'd keep pushing.
@@ -620,14 +651,19 @@ func TestUpFromOwnPR(t *testing.T) {
 		"PATH="+bin+":"+os.Getenv("PATH"),
 	)
 	env = append(env, hermeticGitVars()...)
+	env = append(env,
+		"LINEAR_API_TOKEN=test-token",
+		"RIG_LINEAR_GRAPHQL_ENDPOINT="+fakeLinearGraphQL(t),
+	)
 
-	// Source repo with a main commit and a Linear-style PR branch. The branch
-	// carries the issue id (mir-75), which is what the pickup keys identity off.
+	// Source repo with a main commit and Rig's non-linking Linear work branch.
+	// The canonical attachment lookup supplies identity; the reversible branch
+	// token is its offline fallback.
 	// resolveStartRev prefers branch@origin but falls back to the local branch,
 	// which is what it finds here (no origin remote).
 	mustRun(t, repoDir, env, "git", "init", "-q", "-b", "main")
 	mustRun(t, repoDir, env, "git", "commit", "-q", "--allow-empty", "-m", "init")
-	mustRun(t, repoDir, env, "git", "checkout", "-q", "-b", "phinze/mir-75-fix-the-thing")
+	mustRun(t, repoDir, env, "git", "checkout", "-q", "-b", "phinze/mir_75-fix-the-thing")
 	mustRun(t, repoDir, env, "git", "commit", "-q", "--allow-empty", "-m", "pr work")
 	mustRun(t, repoDir, env, "git", "checkout", "-q", "main")
 
@@ -636,7 +672,7 @@ func TestUpFromOwnPR(t *testing.T) {
 	ghScript := `#!/bin/sh
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
   cat <<JSON
-{"headRefName":"phinze/mir-75-fix-the-thing","title":"fix the thing","author":{"login":"testuser"}}
+{"headRefName":"phinze/mir_75-fix-the-thing","title":"fix the thing","author":{"login":"testuser"}}
 JSON
   exit 0
 fi
@@ -671,7 +707,7 @@ exit 1
 		t.Fatalf("rig up <own-pr>: %v\n%s", err, out)
 	}
 
-	// Identity comes from the branch, not the PR number: the rig rebuilds at the
+	// Identity comes from Linear, not the PR number: the rig rebuilds at the
 	// issue's path (mir-75-fix-the-thing), where `rig up MIR-75` would have built
 	// it, so claude --resume can find the earlier sessions.
 	basedir := filepath.Join(home, "workspaces", "mir-75-fix-the-thing")
@@ -684,7 +720,7 @@ exit 1
 		t.Errorf("own-PR pickup should be authoring, but manifest is kind=review:\n%s", manifest)
 	}
 	// The branch is recorded so pr/ls/reap resolve this rig's own PR.
-	if !strings.Contains(manifest, `fakerepo = ["phinze/mir-75-fix-the-thing"]`) {
+	if !strings.Contains(manifest, `fakerepo = ["phinze/mir_75-fix-the-thing"]`) {
 		t.Errorf("manifest missing branch record:\n%s", manifest)
 	}
 
@@ -757,17 +793,10 @@ func TestReap(t *testing.T) {
 	mustRun(t, repoDir, env, "jj", "git", "init", "--colocate")
 	mustRun(t, repoDir, env, "jj", "config", "set", "--repo", `revset-aliases."trunk()"`, "main")
 
-	linearis := `#!/bin/sh
-if [ "$1" = "issues" ] && [ "$2" = "read" ]; then
-  cat <<JSON
-{"identifier":"FAKE-1","title":"do the thing","branchName":"fake/fake-1-do-the-thing"}
-JSON
-  exit 0
-fi
-echo "fake linearis: unsupported invocation $*" >&2
-exit 1
-`
-	mustWriteExec(t, filepath.Join(bin, "linearis"), linearis)
+	env = append(env,
+		"LINEAR_API_TOKEN=test-token",
+		"RIG_LINEAR_GRAPHQL_ENDPOINT="+fakeLinearGraphQL(t),
+	)
 	ghNoPR := "#!/bin/sh\n" +
 		"if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"view\" ]; then\n" +
 		"  echo 'no pull requests found for branch' >&2\n  exit 1\nfi\n" +
@@ -878,17 +907,10 @@ func TestParkWake(t *testing.T) {
 	mustRun(t, repoDir, env, "jj", "git", "init", "--colocate")
 	mustRun(t, repoDir, env, "jj", "config", "set", "--repo", `revset-aliases."trunk()"`, "main")
 
-	linearis := `#!/bin/sh
-if [ "$1" = "issues" ] && [ "$2" = "read" ]; then
-  cat <<JSON
-{"identifier":"FAKE-1","title":"do the thing","branchName":"fake/fake-1-do-the-thing"}
-JSON
-  exit 0
-fi
-echo "fake linearis: unsupported invocation $*" >&2
-exit 1
-`
-	mustWriteExec(t, filepath.Join(bin, "linearis"), linearis)
+	env = append(env,
+		"LINEAR_API_TOKEN=test-token",
+		"RIG_LINEAR_GRAPHQL_ENDPOINT="+fakeLinearGraphQL(t),
+	)
 
 	socket := "rig-e2e-parkwake"
 	tmuxWrap := fmt.Sprintf("#!/bin/sh\nexec %s -L %s \"$@\"\n", realTmux, socket)
@@ -1058,16 +1080,10 @@ func TestDownLeavesRecoverableTombstone(t *testing.T) {
 	mustRun(t, repoDir, env, "jj", "git", "init", "--colocate")
 	mustRun(t, repoDir, env, "jj", "config", "set", "--repo", `revset-aliases."trunk()"`, "main")
 
-	linearis := `#!/bin/sh
-if [ "$1" = "issues" ] && [ "$2" = "read" ]; then
-  cat <<JSON
-{"identifier":"FAKE-1","title":"do the thing","branchName":"fake/fake-1-do-the-thing"}
-JSON
-  exit 0
-fi
-exit 1
-`
-	mustWriteExec(t, filepath.Join(bin, "linearis"), linearis)
+	env = append(env,
+		"LINEAR_API_TOKEN=test-token",
+		"RIG_LINEAR_GRAPHQL_ENDPOINT="+fakeLinearGraphQL(t),
+	)
 	mustWriteExec(t, filepath.Join(bin, "gh"), "#!/bin/sh\n"+
 		"if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"view\" ]; then\n"+
 		"  echo 'no pull requests found for branch' >&2\n  exit 1\nfi\nexit 1\n")

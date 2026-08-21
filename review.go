@@ -200,19 +200,24 @@ func reviewPickupPR(pr *prRef, meta prMeta, pick *agentPick) error {
 	return attachOrReport(session)
 }
 
-// prRigIdentity derives an authoring pickup's rig id and basedir slug from the
-// PR's branch, so a PR that was born from an issue rebuilds under the SAME id
-// and path its `rig up <issue>` used. Linear stamps its id into the branch
-// (phinze/mir-75-add-zig-stack), which the issue flow turned into id "mir-75"
-// and basedir "mir-75-add-zig-stack"; recovering both here means a resumed rig
-// lands at the exact cwd where you built it, so the agent can find those
-// sessions (each supported agent keys history by cwd). A branch
-// with no issue id (a PR not born from a tracker) has no prior rig to match, so
-// it falls back to pr-<n> + the PR title.
-func prRigIdentity(pr *prRef, meta prMeta) (rigID, basedirName string) {
+// prRigIdentity derives an authoring pickup's rig id and basedir slug. Linear's
+// canonical PR-attachment lookup is authoritative when available. The literal
+// and reversible issue tokens used by old and new Rig branches remain offline
+// fallbacks. A PR with none of these signals falls back to pr-<n>.
+func prRigIdentity(pr *prRef, meta prMeta, linked []linkedLinearTask) (rigID, basedirName string) {
+	if tk, ok := primaryLinkedLinearTask(linked); ok {
+		basedirName := tk.basedirName()
+		if basedirName == "" {
+			basedirName = taskSlug(tk.rigID(), tk.Title)
+		}
+		return tk.rigID(), basedirName
+	}
 	slug := stripBranchUserPrefix(meta.Branch)
 	if id := leadingIssueID(slug); id != "" {
 		return id, slug
+	}
+	if id := leadingEscapedIssueID(slug); id != "" {
+		return id, restoreIssueSlug(slug)
 	}
 	rigID = fmt.Sprintf("pr-%d", pr.Number)
 	return rigID, taskSlug(rigID, meta.Title)
@@ -223,11 +228,15 @@ func prRigIdentity(pr *prRef, meta prMeta) (rigID, basedirName string) {
 // resolveStartRev) so your pushed commits come back and you stay on a pushable
 // branch — the crucial difference from review's read-only pull/N/head — and
 // leaves kind unset (authoring: done when the work merges). Identity comes from
-// the branch (see prRigIdentity), so it's idempotent against the rig its
-// originating issue-up created: a live one is switched to, a down'd one rebuilds
-// at the same path for agent resume.
+// Linear's PR link with branch fallbacks (see prRigIdentity), so it's idempotent
+// against the rig its originating issue-up created: a live one is switched to,
+// a down'd one rebuilds at the same path for agent resume.
 func authorPickupPR(pr *prRef, meta prMeta, pick *agentPick) error {
-	rigID, basedirName := prRigIdentity(pr, meta)
+	linked, err := linkedLinearTasksForPR(pr.URL())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "rig: warning: couldn't ask Linear about PR links: %v\n", err)
+	}
+	rigID, basedirName := prRigIdentity(pr, meta, linked)
 	if done, err := attachExistingRig(rigID); err != nil {
 		return err
 	} else if done {
@@ -292,6 +301,10 @@ type prRef struct {
 	Owner  string
 	Repo   string
 	Number int
+}
+
+func (pr *prRef) URL() string {
+	return fmt.Sprintf("https://github.com/%s/%s/pull/%d", pr.Owner, pr.Repo, pr.Number)
 }
 
 var prURLRe = regexp.MustCompile(`github\.com/([^/]+)/([^/]+)/pull/([0-9]+)`)
