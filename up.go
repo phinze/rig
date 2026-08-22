@@ -75,7 +75,7 @@ func runUp(args []string) error {
 		return fmt.Errorf("colocating jj on %s: %w", repo.Path, err)
 	}
 
-	m := manifest{ID: tk.rigID(), Title: tk.Title, Agent: string(pick.kind)}
+	m := manifest{ID: tk.rigID(), Title: tk.Title, Agent: string(pick.kind), MainRepo: repo.Name}
 	if err := createBasedir(basedir, m); err != nil {
 		return err
 	}

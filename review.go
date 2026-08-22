@@ -171,7 +171,7 @@ func reviewPickupPR(pr *prRef, meta prMeta, pick *agentPick) error {
 		return err
 	}
 
-	m := manifest{ID: rigID, Title: meta.Title, Kind: "review", Agent: string(pick.kind)}
+	m := manifest{ID: rigID, Title: meta.Title, Kind: "review", Agent: string(pick.kind), MainRepo: pr.Repo}
 	if err := createBasedir(basedir, m); err != nil {
 		return err
 	}
@@ -264,7 +264,7 @@ func authorPickupPR(pr *prRef, meta prMeta, pick *agentPick) error {
 		return err
 	}
 
-	m := manifest{ID: rigID, Title: meta.Title, Agent: string(pick.kind)} // kind "" = authoring
+	m := manifest{ID: rigID, Title: meta.Title, Agent: string(pick.kind), MainRepo: pr.Repo} // kind "" = authoring
 	if err := createBasedir(basedir, m); err != nil {
 		return err
 	}

@@ -29,6 +29,11 @@ full-screen Recto tab with its viewer state intact. `rig recto cloud` pulls a
 repo into the main hot seat, and `rig recto cloud focus path:42` promotes and
 drives it in one step. Repo tabs do not carry permanent shells, but splitting
 from a Recto inherits that repo's working directory when one is useful.
+Parking records the hot repo and current agent conversation before killing the
+session. Waking rebuilds this full carousel and resumes that conversation.
+`rig resume` provides the same repair without changing parked state: from inside
+a rig it relaunches an agent that accidentally exited, or reconstructs a missing
+tmux session, without needing to remember which agent owned it.
 
 Claude Code is the fallback agent, but it is not baked into the rig. `rig up`,
 `rig new`, and `rig review` all let you pick: whatever prompt they're already

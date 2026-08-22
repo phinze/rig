@@ -24,8 +24,8 @@ import (
 // seconds on top, so a rig going hot updates while you're looking at it.
 //
 // Enter does the right thing per row so you never pick a verb: a live rig
-// switches, a sessionless one gets a bare session stood up first, a parked one
-// wakes. The popup inherits $TMUX, so switch-client from inside it moves the
+// switches after repairing its carousel when needed, and a parked one wakes.
+// The popup inherits $TMUX, so switch-client from inside it moves the
 // underlying client, and the -E popup tears down as we exit.
 //
 // It doubles as the universal picker that replaces tmux-session-wizard: live

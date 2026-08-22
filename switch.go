@@ -78,16 +78,9 @@ func runSwitch(args []string) error {
 	if chosen == nil {
 		return nil
 	}
-	if err := touchRig(chosen.Path); err != nil {
+	session, err := resumeRigRuntime(chosen.Path, false, false)
+	if err != nil {
 		return err
-	}
-
-	session := tmuxSessionName(chosen.Path)
-	if !tmuxHasSession(session) {
-		// Rig dir is present but its session was killed; stand up a bare one.
-		if err := tmuxNewSession(session, chosen.Path); err != nil {
-			return fmt.Errorf("tmux new-session: %w", err)
-		}
 	}
 	return attachOrReport(session)
 }

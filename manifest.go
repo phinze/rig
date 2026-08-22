@@ -26,6 +26,15 @@ type manifest struct {
 	// Agent is the terminal agent this rig was created for. Empty means Claude,
 	// preserving the behavior of manifests written before agent selection.
 	Agent string
+	// MainRepo is the repo currently occupying the carousel's main window. It
+	// lets a killed tmux session come back in the same working directory. Older
+	// manifests leave it empty and deterministically fall back to their first
+	// repo.
+	MainRepo string
+	// SessionID pins runtime repair to the task-level conversation most recently
+	// resolved for this rig. It is captured before parking kills the agent; older
+	// manifests resolve the newest matching conversation on first resume.
+	SessionID string
 	// Kind records how the rig came to be, which sets its terminal condition.
 	// "" and "up" are authoring rigs — done when the work merges, so teardown
 	// guards their local commits. "review" is a `rig review` pickup of someone
@@ -37,7 +46,7 @@ type manifest struct {
 	// Parked, when non-zero, marks a rig as dormant: its work is done and up
 	// for human review, so it drops out of `rig switch` and its tmux session is
 	// killed, but the basedir (and its agent session history) stay on disk.
-	// `rig wake` clears it and stands the session back up at the same path. Zero
+	// `rig wake` clears it and rebuilds its agent + Recto session. Zero
 	// means an ordinary in-flight rig.
 	Parked time.Time
 	// Repos maps a repo's subdir name under the basedir to its
@@ -84,6 +93,12 @@ func writeManifest(basedir string, m manifest) error {
 	}
 	if m.Agent != "" && m.Agent != string(agentClaude) {
 		fmt.Fprintf(&b, "agent = %q\n", m.Agent)
+	}
+	if m.MainRepo != "" {
+		fmt.Fprintf(&b, "main_repo = %q\n", m.MainRepo)
+	}
+	if m.SessionID != "" {
+		fmt.Fprintf(&b, "session_id = %q\n", m.SessionID)
 	}
 	if !m.Created.IsZero() {
 		fmt.Fprintf(&b, "created = %q\n", m.Created.Format(time.RFC3339))
@@ -235,6 +250,10 @@ func readManifest(basedir string) (manifest, error) {
 				m.Kind = val
 			case "agent":
 				m.Agent = val
+			case "main_repo":
+				m.MainRepo = val
+			case "session_id":
+				m.SessionID = val
 			case "created":
 				if t, err := time.Parse(time.RFC3339, val); err == nil {
 					m.Created = t

@@ -183,6 +183,40 @@ func TestManifestAgentRoundTrip(t *testing.T) {
 	}
 }
 
+func TestManifestRuntimeHintsRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	if err := writeManifest(dir, manifest{
+		ID: "mir-9", MainRepo: "runtime", SessionID: "session-123",
+		Repos: map[string]string{"runtime": "mirendev/runtime"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	m, err := readManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.MainRepo != "runtime" || m.SessionID != "session-123" {
+		t.Errorf("runtime hints = repo %q, session %q", m.MainRepo, m.SessionID)
+	}
+
+	legacy := t.TempDir()
+	if err := writeManifest(legacy, manifest{ID: "mir-10", Repos: map[string]string{"zeta": "o/z", "alpha": "o/a"}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, repo := range []string{"zeta", "alpha"} {
+		if err := os.Mkdir(filepath.Join(legacy, repo), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m, err = readManifest(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := firstRigRepo(legacy, m); got != "alpha" {
+		t.Errorf("legacy first repo = %q, want alpha", got)
+	}
+}
+
 func TestManifestNoBranchesTable(t *testing.T) {
 	dir := t.TempDir()
 	m := manifest{ID: "pr-9", Repos: map[string]string{"rig": "phinze/rig"}}

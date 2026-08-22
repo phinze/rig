@@ -27,6 +27,10 @@ separate section. Both are ordered by the same durable last-touched timestamp,
 which is also the age shown in the first column; background agent and PR updates
 never move rows. ctrl-p toggles the selected rig between sections without
 leaving the board; Enter on a parked rig still wakes and enters it.
+Parking captures the carousel's hot repo and the selected agent's conversation;
+wake reconstructs the full repo-rooted agent + Recto layout and resumes it.
+`rig resume [query]` performs the same runtime repair without changing parked
+state, defaulting to the rig containing cwd when no query is given.
 `rig add owner/repo` brings additional repos under the same rig. `rig down`
 breaks it back down.
 

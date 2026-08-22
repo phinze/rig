@@ -206,16 +206,10 @@ func currentTmuxSession() string {
 	return strings.TrimSpace(string(out))
 }
 
-func tmuxNewSession(name, cwd string) error {
-	cmd := exec.Command("tmux", "new-session", "-d", "-s", name, "-c", cwd)
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	return cmd.Run()
-}
-
 // tmuxNewRigSession creates the first, task-level window for a rig and returns
 // stable pane/window ids for the metadata and split operations that follow.
-// Unlike bare sessions stood up by switch/wake, a rig session has an explicit
-// window name so tmux never replaces its identity with "claude" or "recto".
+// A rig session has an explicit window name so tmux never replaces its identity
+// with "claude" or "recto".
 func tmuxNewRigSession(name, windowName, cwd string) (string, string, error) {
 	cmd := exec.Command("tmux", "new-session", "-d",
 		"-s", name, "-n", windowName, "-c", cwd,
@@ -236,6 +230,17 @@ func tmuxNewRigSession(name, windowName, cwd string) (string, string, error) {
 func tmuxSplitHID(target, cwd, command string) (string, error) {
 	cmd := exec.Command("tmux", "split-window", "-d", "-h", "-l", "50%",
 		"-t", target, "-c", cwd, "-P", "-F", "#{pane_id}", command)
+	cmd.Stderr = os.Stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func tmuxSplitShell(target, cwd string) (string, error) {
+	cmd := exec.Command("tmux", "split-window", "-d", "-h", "-l", "50%",
+		"-t", target, "-c", cwd, "-P", "-F", "#{pane_id}")
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
 	if err != nil {

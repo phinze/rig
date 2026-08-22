@@ -8,8 +8,8 @@ import (
 )
 
 // runWake reverses rig park: it picks a parked rig (fzf when the arg is ambiguous
-// or absent), clears the parked mark, stands the tmux session back up at the same
-// basedir — so earlier agent sessions resume from the same cwd — and attaches.
+// or absent), clears the parked mark, rebuilds the tmux carousel in its hot repo,
+// resumes the selected agent's recorded conversation, and attaches.
 // This is the "a review came back, back to work" path; a rig that was merged
 // instead never needs waking, reap collects it.
 func runWake(args []string) error {

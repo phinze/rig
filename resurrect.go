@@ -102,6 +102,14 @@ func runResurrect(args []string) error {
 	if primary == "" {
 		return fmt.Errorf("no repos could be restored for %s (sources missing)", t.ID)
 	}
+	m, err = readManifest(t.Basedir)
+	if err != nil {
+		return err
+	}
+	m.MainRepo = filepath.Base(primary)
+	if err := writeManifest(t.Basedir, m); err != nil {
+		return err
+	}
 
 	agent, err := parseAgent(t.Agent)
 	if err != nil {

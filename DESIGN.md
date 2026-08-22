@@ -47,14 +47,15 @@ sessions that predate the move, and those age out.
 
 ```
 ~/workspaces/proj-123-fix-auth/
-  .rig.toml          # id, title, created, touched, agent, [parked], [repos], [branches]
+  .rig.toml          # identity, lifecycle, runtime resume hints, repos, branches
   .envrc             # exports RIG_BASEDIR, RIG_ID; rig env adds the rest
   api/               # jj workspace of phinze/api
   web/               # jj workspace of phinze/web
 ```
 
-The manifest is flat TOML: scalar `id` / `title` / `created` / `touched` (plus `agent` for
-non-Claude rigs, and `parked` once dormant), a `[repos]` table mapping each subdir to its `owner/repo`,
+The manifest is flat TOML: scalar identity and lifecycle fields, plus
+`main_repo` / `session_id` hints for reconstructing a killed runtime. A `[repos]`
+table maps each subdir to its `owner/repo`,
 and a `[branches]` table mapping each subdir to the branches its work rides
 (primary first, `rig track` secondaries after). `GH_REPO`, `RIG_WORKSPACE`,
 and a stable per-workspace `RIG_PORT` are projected by `rig env` rather than
@@ -103,6 +104,9 @@ job (climbing rig, fishing rig, sound rig):
   park sends a finished rig quiet (kills its session, keeps the basedir),
   waiting reports which parked rig's review came back, wake stands it back
   up for the selected agent to resume.
+- `rig resume [rig]` — repair and enter an active rig's runtime, defaulting to
+  the rig containing cwd. Rebuild a missing carousel or relaunch an agent that
+  exited to its shell, without changing parked state.
 - `rig down` — break the rig down; refuses to drop unmerged work.
 - `rig reap` — retry stranded teardown jobs and stop orphaned tmux/iso
   scopes. Janitorial only; it does not decide which rigs live or die.
@@ -488,11 +492,12 @@ row without moving it. `rig waiting` retains its explicit review-priority sort
 for the times you are asking what came back rather than where you last were.
 
 Enter does the right thing per row so you never pick a verb: a live rig
-switches, an in-flight rig whose session was killed gets a bare one stood
-up first, a parked rig wakes (clears the park stamp, spawns a session for
-`claude --resume`, attaches). The switch itself is the same popup trick
-ilmari uses. The popup inherits `$TMUX`, so `tmux switch-client` from inside
-it moves the underlying client, and the `-E` popup tears down as the program
+switches, repairing its agent + Recto carousel first when needed. A parked rig
+wakes by clearing the park stamp, rebuilding the same repo-rooted carousel, and
+resuming the selected agent's recorded conversation. The switch itself is the
+same popup trick ilmari uses. The popup inherits `$TMUX`, so
+`tmux switch-client` from inside it moves the underlying client, and the `-E`
+popup tears down as the program
 exits, landing you in the target.
 
 ctrl-p is the explicit state toggle. On an in-flight rig it parks and kills the

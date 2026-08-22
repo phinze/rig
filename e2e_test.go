@@ -888,6 +888,7 @@ func TestParkWake(t *testing.T) {
 	bin := filepath.Join(home, "bin")
 	repoDir := filepath.Join(home, "src", "github.com", "fakeowner", "fakerepo")
 	rigBin := filepath.Join(home, "rig")
+	agentMarker := filepath.Join(home, "claude.args")
 
 	mustMkdir(t, bin)
 	mustMkdir(t, repoDir)
@@ -899,6 +900,8 @@ func TestParkWake(t *testing.T) {
 	env := append(os.Environ(),
 		"HOME="+home,
 		"PATH="+bin+":"+os.Getenv("PATH"),
+		"SHELL=/bin/sh",
+		"HISTFILE=/dev/null",
 	)
 	env = append(env, hermeticGitVars()...)
 
@@ -918,7 +921,8 @@ func TestParkWake(t *testing.T) {
 
 	sleeper := "#!/bin/sh\nexec sleep infinity\n"
 	mustWriteExec(t, filepath.Join(bin, "recto"), sleeper)
-	mustWriteExec(t, filepath.Join(bin, "claude"), sleeper)
+	claude := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$*\" >> %s\nwhile :; do sleep 60; done\n", shellQuote(agentMarker))
+	mustWriteExec(t, filepath.Join(bin, "claude"), claude)
 
 	t.Cleanup(func() {
 		_ = exec.Command(realTmux, "-L", socket, "kill-server").Run()
@@ -939,14 +943,21 @@ func TestParkWake(t *testing.T) {
 	if !hasSession() {
 		t.Fatal("expected a session after up")
 	}
+	workspace := filepath.Join(basedir, "fakerepo")
+	projectDir := filepath.Join(home, ".claude", "projects", claudeProjectDirName(workspace))
+	mustMkdir(t, projectDir)
+	if err := os.WriteFile(filepath.Join(projectDir, "resume-me.jsonl"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	// --- rig park --- from inside the basedir.
 	parkOut := mustOutput(t, basedir, env, rigBin, "park")
 	if !strings.Contains(parkOut, "parked fake-1") {
 		t.Errorf("park output missing confirmation:\n%s", parkOut)
 	}
-	if m := string(mustReadFile(t, filepath.Join(basedir, ".rig.toml"))); !strings.Contains(m, "parked = \"") {
-		t.Errorf("manifest missing parked timestamp:\n%s", m)
+	if m := string(mustReadFile(t, filepath.Join(basedir, ".rig.toml"))); !strings.Contains(m, "parked = \"") ||
+		!strings.Contains(m, `session_id = "resume-me"`) {
+		t.Errorf("manifest missing parked runtime hints:\n%s", m)
 	}
 	if hasSession() {
 		t.Error("expected park to kill the session")
@@ -980,6 +991,58 @@ func TestParkWake(t *testing.T) {
 	if !hasSession() {
 		t.Error("expected wake to stand the session back up")
 	}
+	waitFor(t, 3*time.Second, "woken agent resume", func() bool {
+		raw, _ := os.ReadFile(agentMarker)
+		return strings.Contains(string(raw), "--resume resume-me")
+	})
+
+	// Wake rebuilds the same repo-rooted carousel as creation, not the old bare
+	// shell at the rig root. The metadata is part of the contract: recto relies
+	// on it when promoting repos later.
+	layout, err := exec.Command(realTmux, "-L", socket, "list-panes", "-s", "-t", session, "-F",
+		"#{window_name}\t#{pane_current_path}\t#{@rig-window-role}\t#{@rig-pane-role}\t#{@rig-pane-repo}").CombinedOutput()
+	if err != nil {
+		t.Fatalf("reading wake layout: %v\n%s", err, layout)
+	}
+	lines := strings.Split(strings.TrimSpace(string(layout)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("wake layout has %d panes, want agent + recto:\n%s", len(lines), layout)
+	}
+	for _, line := range lines {
+		if !strings.Contains(line, "main/fakerepo\t"+workspace+"\tmain\t") || !strings.HasSuffix(line, "\tfakerepo") {
+			t.Errorf("wake pane lacks canonical repo layout metadata: %s", line)
+		}
+	}
+
+	// If only the agent exits, `rig resume` repairs that half-live runtime in
+	// place and chooses the manifest's agent without another flag or picker.
+	agentPaneOut, err := exec.Command(realTmux, "-L", socket, "list-panes", "-s", "-t", session, "-F",
+		"#{pane_id}\t#{@rig-pane-role}").CombinedOutput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentPane := ""
+	for _, line := range strings.Split(strings.TrimSpace(string(agentPaneOut)), "\n") {
+		fields := strings.Split(line, "\t")
+		if len(fields) == 2 && fields[1] == rigPaneAgent {
+			agentPane = fields[0]
+		}
+	}
+	if agentPane == "" {
+		t.Fatal("wake layout has no marked agent pane")
+	}
+	mustRun(t, home, env, realTmux, "-L", socket, "send-keys", "-t", agentPane, "C-c")
+	waitFor(t, 3*time.Second, "agent returning to its shell", func() bool {
+		out, _ := exec.Command(realTmux, "-L", socket, "display-message", "-p", "-t", agentPane, "#{pane_current_command}").Output()
+		return isShellCommand(strings.TrimSpace(string(out)))
+	})
+	// Exercise the real muscle-memory path: type `rig resume` into the shell
+	// that replaced the agent, rather than invoking it from a separate process.
+	mustRun(t, home, env, realTmux, "-L", socket, "send-keys", "-t", agentPane, shellQuote(rigBin)+" resume", "Enter")
+	waitFor(t, 3*time.Second, "explicit agent resume", func() bool {
+		raw, _ := os.ReadFile(agentMarker)
+		return strings.Count(string(raw), "--resume resume-me") >= 2
+	})
 }
 
 func mustReadFile(t *testing.T, path string) []byte {

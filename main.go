@@ -43,6 +43,8 @@ func main() {
 		err = runPark(args)
 	case "wake":
 		err = runWake(args)
+	case "resume":
+		err = runResume(args)
 	case "waiting":
 		err = runWaiting(args)
 	case "sweep":
@@ -155,6 +157,8 @@ usage:
   rig park                  park the current rig: mark it awaiting-review,
                             kill its session, drop it from switch (dir kept)
   rig wake [query|PR-URL]   resume a rig, waking it first when parked
+  rig resume [query]        repair and enter an active rig's agent + Recto
+                            session (cwd rig by default; does not unpark)
   rig waiting               review status of parked rigs, most-actionable first
                             (which came back with changes, which are mergeable)
   rig sweep [-n] [--merge-method merge|squash|rebase]
