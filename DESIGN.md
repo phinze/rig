@@ -101,7 +101,8 @@ job (climbing rig, fishing rig, sound rig):
 - `rig switch` (alias `cd`) — jump to a rig; fzf if no arg, most-recently-
   attached first. `rig radar` (below) is the richer live-TUI take.
 - `rig park` / `rig wake` / `rig waiting` — the dormant-review lifecycle:
-  park sends a finished rig quiet (kills its session, keeps the basedir),
+  when run inside its session, park picks the next hop in radar, then sends a
+  finished rig quiet (kills its session, keeps the basedir),
   waiting reports which parked rig's review came back, wake stands it back
   up for the selected agent to resume.
 - `rig resume [rig]` — repair and enter an active rig's runtime, defaulting to

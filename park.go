@@ -26,6 +26,14 @@ func runPark(args []string) error {
 	if err != nil {
 		return err
 	}
+	session := tmuxSessionName(basedir)
+	proceed, err := sessionExitHandoff(insideTmuxSession(session))
+	if err != nil {
+		return err
+	}
+	if !proceed {
+		return nil
+	}
 	return setRigParked(basedir, true, false, func(m manifest) {
 		// Announce before killing the session: when park runs from inside the rig,
 		// that final tmux operation also closes the command's own terminal.

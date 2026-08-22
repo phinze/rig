@@ -30,7 +30,9 @@ repo into the main hot seat, and `rig recto cloud focus path:42` promotes and
 drives it in one step. Repo tabs do not carry permanent shells, but splitting
 from a Recto inherits that repo's working directory when one is useful.
 Parking records the hot repo and current agent conversation before killing the
-session. Waking rebuilds this full carousel and resumes that conversation.
+session. When run inside that session, `rig park` opens the radar first so you
+pick the next hop instead of falling out to an outer shell. Waking rebuilds this
+full carousel and resumes that conversation.
 `rig resume` provides the same repair without changing parked state: from inside
 a rig it relaunches an agent that accidentally exited, or reconstructs a missing
 tmux session, without needing to remember which agent owned it.

@@ -72,29 +72,12 @@ func runDown(args []string) error {
 	session := tmuxSessionName(basedir)
 	inDoomed := insideTmuxSession(session)
 
-	// Interactive rescue: when down runs from inside the very session it's about
-	// to kill, pop the radar so you can pick where to land next instead of the
-	// kill dropping you to the outer shell. Escaping means second thoughts and
-	// aborts the teardown before its durable job is prepared. We only do this
-	// when we're actually in the doomed session:
-	// run from elsewhere, the kill never touches your client, so a TUI would just
-	// hijack a terminal that was going to stay put anyway.
-	if inDoomed && stdinIsTTY() {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return err
-		}
-		dest, err := radarPick(home)
-		if err != nil {
-			return err
-		}
-		proceed, err := handleDownDestination(dest, radarAct)
-		if err != nil {
-			return err
-		}
-		if !proceed {
-			return nil
-		}
+	proceed, err := sessionExitHandoff(inDoomed)
+	if err != nil {
+		return err
+	}
+	if !proceed {
+		return nil
 	}
 
 	job, err := prepareTeardownJob(basedir, m)
@@ -124,10 +107,29 @@ func runDown(args []string) error {
 	return nil
 }
 
-// handleDownDestination turns the rescue pick into permission to continue.
-// A nil destination is an explicit cancellation, not a request for the old
-// detach behavior.
-func handleDownDestination(dest *rigStatus, act func(rigStatus) error) (bool, error) {
+// sessionExitHandoff opens the radar before the current tmux session is killed,
+// switches the client to the selected destination, and gives the caller
+// permission to continue. Commands run elsewhere need no rescue; noninteractive
+// callers retain their old no-picker behavior.
+func sessionExitHandoff(inExitingSession bool) (bool, error) {
+	if !inExitingSession || !stdinIsTTY() {
+		return true, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false, err
+	}
+	dest, err := radarPick(home)
+	if err != nil {
+		return false, err
+	}
+	return handleSessionExitDestination(dest, radarAct)
+}
+
+// handleSessionExitDestination turns the rescue pick into permission to
+// continue. A nil destination is an explicit cancellation, not a request for
+// the old detach behavior.
+func handleSessionExitDestination(dest *rigStatus, act func(rigStatus) error) (bool, error) {
 	if dest == nil {
 		return false, nil
 	}

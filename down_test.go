@@ -12,10 +12,10 @@ import (
 	"time"
 )
 
-func TestHandleDownDestination(t *testing.T) {
+func TestHandleSessionExitDestination(t *testing.T) {
 	t.Run("escape aborts", func(t *testing.T) {
 		acted := false
-		proceed, err := handleDownDestination(nil, func(rigStatus) error {
+		proceed, err := handleSessionExitDestination(nil, func(rigStatus) error {
 			acted = true
 			return nil
 		})
@@ -23,17 +23,27 @@ func TestHandleDownDestination(t *testing.T) {
 			t.Fatal(err)
 		}
 		if proceed {
-			t.Error("cancelled picker should abort teardown")
+			t.Error("cancelled picker should abort the session exit")
 		}
 		if acted {
 			t.Error("cancelled picker should not switch destinations")
 		}
 	})
 
+	t.Run("caller outside doomed session needs no handoff", func(t *testing.T) {
+		proceed, err := sessionExitHandoff(false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !proceed {
+			t.Error("safe caller should continue without opening the radar")
+		}
+	})
+
 	t.Run("selection lands before teardown", func(t *testing.T) {
 		want := rigStatus{ID: "next-rig"}
 		var got rigStatus
-		proceed, err := handleDownDestination(&want, func(dest rigStatus) error {
+		proceed, err := handleSessionExitDestination(&want, func(dest rigStatus) error {
 			got = dest
 			return nil
 		})
@@ -50,7 +60,7 @@ func TestHandleDownDestination(t *testing.T) {
 
 	t.Run("switch failure aborts", func(t *testing.T) {
 		wantErr := errors.New("switch failed")
-		proceed, err := handleDownDestination(&rigStatus{}, func(rigStatus) error {
+		proceed, err := handleSessionExitDestination(&rigStatus{}, func(rigStatus) error {
 			return wantErr
 		})
 		if !errors.Is(err, wantErr) {

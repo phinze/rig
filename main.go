@@ -155,7 +155,8 @@ usage:
                             ranked by review status; enter switches or wakes,
                             ctrl-p toggles the selected rig's parked state
   rig park                  park the current rig: mark it awaiting-review,
-                            kill its session, drop it from switch (dir kept)
+                            pick the next hop in radar when run inside it, kill
+                            this session, and drop it from switch (dir kept)
   rig wake [query|PR-URL]   resume a rig, waking it first when parked
   rig resume [query]        repair and enter an active rig's agent + Recto
                             session (cwd rig by default; does not unpark)
