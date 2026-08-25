@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -137,7 +138,7 @@ type agentChild struct {
 // running.
 func tmuxAgentChildren() map[string][]agentChild {
 	out, err := exec.Command("tmux", "list-panes", "-a", "-F",
-		"#{session_name}\t#{window_index}\t#{pane_index}\t#{window_name}\t#{pane_current_command}\t#{window_activity}\t#{pane_title}").Output()
+		"#{session_name}\t#{window_index}\t#{pane_index}\t#{window_name}\t#{pane_current_command}\t#{window_activity}\t#{pane_current_path}\t#{pane_title}").Output()
 	if err != nil {
 		return nil
 	}
@@ -146,11 +147,14 @@ func tmuxAgentChildren() map[string][]agentChild {
 
 // parseAgentPanes is tmuxAgentChildren's pure core: it turns list-panes output
 // (tab-separated session, window index, pane index, window name, command, window
-// activity, title per line) into the per-session child list, applying the agent
-// filter and the same-window-same-context dedup. window_activity is when the
-// window last produced output — a stable working signal that idles off after a
-// few quiet minutes, unlike the animating title glyph, which is why the glyph
-// carries only the task text and never the state. now is the current unix time.
+// activity, cwd, title per line) into the per-session child list, applying the
+// agent filter and the same-window-same-context dedup. Some agents set the pane
+// title to cwd's basename instead of naming the task; that repeats the repo and
+// is treated like a placeholder so a rig can fall back to its durable title.
+// window_activity is when the window last produced output — a stable working
+// signal that idles off after a few quiet minutes, unlike the animating title
+// glyph, which is why the glyph carries only the task text and never the state.
+// now is the current unix time.
 func parseAgentPanes(out string, now int64) map[string][]agentChild {
 	activeWithin := int64(agentActiveWindow / time.Second)
 	children := map[string][]agentChild{}
@@ -159,16 +163,16 @@ func parseAgentPanes(out string, now int64) map[string][]agentChild {
 		if line == "" {
 			continue
 		}
-		f := strings.SplitN(line, "\t", 7)
-		if len(f) != 7 {
+		f := strings.SplitN(line, "\t", 8)
+		if len(f) != 8 {
 			continue
 		}
-		session, windex, pindex, wname, cmd, activity, title := f[0], f[1], f[2], f[3], f[4], f[5], f[6]
+		session, windex, pindex, wname, cmd, activity, cwd, title := f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7]
 		if !isAgentCommand(cmd) && stripAgentGlyph(title) == title {
 			continue // not an agent pane: no known command or state glyph
 		}
 		ctx := stripAgentGlyph(title)
-		if isAgentPlaceholder(ctx) {
+		if isAgentPlaceholder(ctx) || (cwd != "" && ctx == filepath.Base(cwd)) {
 			ctx = ""
 		}
 		key := session + "\t" + windex + "\t" + ctx

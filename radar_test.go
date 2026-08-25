@@ -967,24 +967,25 @@ func TestRadarMouse(t *testing.T) {
 // parseAgentPanes keeps one child per distinct agent: two panes sharing a window
 // and the exact same context collapse (a claude mirrored across a split), but
 // two different tasks in one window both survive. Shells drop out; the
-// placeholder title becomes an empty context.
+// placeholder and cwd-basename titles become empty contexts.
 func TestParseAgentPanes(t *testing.T) {
 	now := int64(1_000_000)
 	recent, stale := "999990", "900000" // 10s ago (working) vs ~28h ago (idle)
-	// fields: session, window, pane, window name, command, window activity, title
+	// fields: session, window, pane, window name, command, window activity, cwd, title
 	out := strings.Join([]string{
-		"s\t0\t0\twin\tclaude\t" + recent + "\t✳ Task A",
-		"s\t0\t1\twin\tclaude\t" + recent + "\t✳ Task A",    // dup: same window + context → collapse
-		"s\t0\t2\twin\tclaude\t" + recent + "\t⠂ Task B",    // distinct task, same window → keep
-		"s\t1\t0\twin\tfish\t" + recent + "\t~/x - fish",    // shell → skip
-		"s\t2\t0\tcw\tclaude\t" + stale + "\t✳ Claude Code", // placeholder, idle
-		"s\t3\t0\tcodex\tcodex-raw\t" + recent + "\t⠴ rig",
-		"s\t4\t0\tagy\tagy\t" + recent + "\tAntigravity",
+		"s\t0\t0\twin\tclaude\t" + recent + "\t/work/one\t✳ Task A",
+		"s\t0\t1\twin\tclaude\t" + recent + "\t/work/one\t✳ Task A",   // dup: same window + context → collapse
+		"s\t0\t2\twin\tclaude\t" + recent + "\t/work/one\t⠂ Task B",   // distinct task, same window → keep
+		"s\t1\t0\twin\tfish\t" + recent + "\t/work/x\t~/x - fish",     // shell → skip
+		"s\t2\t0\tcw\tclaude\t" + stale + "\t/work/cw\t✳ Claude Code", // placeholder, idle
+		"s\t3\t0\tmain/rig\tcodex-raw\t" + recent + "\t/work/rig\t⠴ rig",
+		"s\t4\t0\tagy\tagy\t" + recent + "\t/work/agy\tAntigravity",
+		"s\t5\t0\tmain/rig\tcodex\t" + recent + "\t/work/rig\tFix sparse radar titles",
 	}, "\n")
 
 	kids := parseAgentPanes(out, now)["s"]
-	if len(kids) != 5 {
-		t.Fatalf("children = %d (%+v), want 5", len(kids), kids)
+	if len(kids) != 6 {
+		t.Fatalf("children = %d (%+v), want 6", len(kids), kids)
 	}
 	if kids[0].Context != "Task A" || kids[0].Target != "s:0.0" || !kids[0].Working {
 		t.Errorf("child 0 = %+v, want working Task A at s:0.0", kids[0])
@@ -995,11 +996,38 @@ func TestParseAgentPanes(t *testing.T) {
 	if kids[2].Context != "" || kids[2].Target != "s:2.0" || kids[2].Working {
 		t.Errorf("child 2 = %+v, want idle empty context at s:2.0", kids[2])
 	}
-	if kids[3].Context != "rig" || kids[3].Target != "s:3.0" {
-		t.Errorf("child 3 = %+v, want codex at s:3.0", kids[3])
+	if kids[3].Context != "" || kids[3].Target != "s:3.0" {
+		t.Errorf("child 3 = %+v, want cwd-titled codex with empty context at s:3.0", kids[3])
 	}
 	if kids[4].Context != "" || kids[4].Target != "s:4.0" {
 		t.Errorf("child 4 = %+v, want blank antigravity at s:4.0", kids[4])
+	}
+	if kids[5].Context != "Fix sparse radar titles" || kids[5].Target != "s:5.0" {
+		t.Errorf("child 5 = %+v, want self-titled codex at s:5.0", kids[5])
+	}
+}
+
+// A rig with several agents still gives an untitled child enough context to be
+// useful. The window labels distinguish destinations; the stable task title is
+// a better child label than a dash or repeated repo basename.
+func TestDisplayItemsUntitledRigChildFallsBackToTaskTitle(t *testing.T) {
+	m := radarModel{inflight: []rigStatus{{
+		Slug: "a", ID: "mir-1", Title: "Canonicalize deployment attempts", Path: "/work/a",
+		agents: []agentChild{
+			{Window: "main/runtime", Target: "s:0"},
+			{Window: "rfd", Target: "s:1", Context: "Draft the RFD"},
+		},
+	}}}
+
+	items := m.displayItems()
+	if got := items[2].row.Title; got != "Canonicalize deployment attempts" {
+		t.Errorf("untitled child = %q, want stable rig title", got)
+	}
+	if got := items[2].action.Title; got != "Canonicalize deployment attempts" {
+		t.Errorf("untitled child action = %q, want stable rig title", got)
+	}
+	if got := items[3].row.Title; got != "Draft the RFD" {
+		t.Errorf("self-titled child = %q, want live context preserved", got)
 	}
 }
 

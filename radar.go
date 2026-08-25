@@ -872,15 +872,19 @@ func (m radarModel) displayItems() []radarLine {
 			if showLabel {
 				key = c.Window
 			}
+			title := strings.TrimSpace(c.Context)
+			if title == "" && !p.bare {
+				title = p.Title
+			}
 			agent := ""
 			if c.Working {
 				agent = "working"
 			}
-			display := rigStatus{child: true, session: c.Target, Title: c.Context, childKey: key, Agent: agent}
+			display := rigStatus{child: true, session: c.Target, Title: title, childKey: key, Agent: agent}
 			action := p
 			action.child = true
 			action.session = c.Target
-			action.Title = c.Context
+			action.Title = title
 			action.childKey = key
 			action.Agent = agent
 			items = append(items, radarLine{
