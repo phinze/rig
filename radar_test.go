@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -10,6 +11,40 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+func TestRadarActionFailureStaysInCurrentModel(t *testing.T) {
+	wantErr := errors.New("destination busy")
+	m := radarModel{
+		filter:        "shell",
+		cursor:        0,
+		actionPending: true,
+		sessions:      []rigStatus{{bare: true, session: "shell", Title: "shell"}},
+	}
+	updated, cmd := m.Update(radarActionMsg{err: wantErr})
+	m = updated.(radarModel)
+	if cmd != nil || m.actionPending || m.chosen != nil {
+		t.Fatalf("failure left model in action state: pending=%v chosen=%v cmd=%v", m.actionPending, m.chosen, cmd != nil)
+	}
+	if m.filter != "shell" || m.cursor != 0 || !errors.Is(m.actionErr, wantErr) {
+		t.Fatalf("failure lost board state: filter=%q cursor=%d err=%v", m.filter, m.cursor, m.actionErr)
+	}
+	if view := m.View(); !strings.Contains(view, wantErr.Error()) {
+		t.Fatalf("failure is not rendered in current board:\n%s", view)
+	}
+}
+
+func TestRadarActionSuccessQuitsForFinalSwitch(t *testing.T) {
+	m := radarModel{sessions: []rigStatus{{bare: true, session: "shell", Title: "shell"}}}
+	m, cmd := m.handleKey("enter")
+	if cmd == nil || !m.actionPending || m.chosen != nil {
+		t.Fatalf("enter = pending:%v chosen:%v cmd:%v", m.actionPending, m.chosen, cmd != nil)
+	}
+	updated, quit := m.Update(cmd())
+	m = updated.(radarModel)
+	if quit == nil || m.actionPending || m.chosen == nil || m.chosen.session != "shell" {
+		t.Fatalf("success = pending:%v chosen:%v quit:%v", m.actionPending, m.chosen, quit != nil)
+	}
+}
 
 // dispRank drives both waiting's table order and the radar's parked section;
 // the whole point is "most actionable first", so pin the full ordering.
@@ -57,6 +92,81 @@ func TestBoardRowsMRU(t *testing.T) {
 	for i, w := range want {
 		if got[i] != w {
 			t.Fatalf("MRU order = %v, want %v", got, want)
+		}
+	}
+}
+
+func TestRadarCurrentBareSessionIsContextNotDestination(t *testing.T) {
+	m := radarModel{home: "/home/me", current: "here", prs: map[string][]rigPR{}}
+	m.apply(radarScanMsg{
+		attached: map[string]int64{"here": 300, "newer": 200, "older": 100},
+		sessions: []tmuxSession{
+			{Name: "here", Path: "/home/me/current", LastAttached: 300},
+			{Name: "older", Path: "/home/me/older", LastAttached: 100},
+			{Name: "newer", Path: "/home/me/newer", LastAttached: 200},
+		},
+	})
+	if m.currentRow == nil || !m.currentRow.bare || m.currentRow.session != "here" {
+		t.Fatalf("current row = %+v, want bare session here", m.currentRow)
+	}
+	rows := m.rows()
+	if len(rows) != 2 || rows[0].session != "newer" || rows[1].session != "older" {
+		t.Fatalf("destinations = %+v, want newer then older", rows)
+	}
+	if m.cursor != 0 {
+		t.Fatalf("cursor = %d, want most recent other row", m.cursor)
+	}
+	lines := m.boardLines()
+	if len(lines) != 6 || lines[0].item.header != "CURRENT" || !lines[1].item.label || lines[4].cursor != 0 {
+		t.Fatalf("board lines = %+v", lines)
+	}
+	for y := range 4 {
+		if _, ok := m.rowAtY(y); ok {
+			t.Errorf("current context line %d was selectable", y)
+		}
+	}
+	if got, ok := m.rowAtY(4); !ok || got != 0 {
+		t.Errorf("first destination hit = (%d,%v), want (0,true)", got, ok)
+	}
+
+	m.setFilter("no-such-session")
+	if rows := m.rows(); len(rows) != 0 {
+		t.Fatalf("filtered destinations = %+v, want none", rows)
+	}
+	view := m.View()
+	if !strings.Contains(view, "CURRENT") || !strings.Contains(view, "~/current") || !strings.Contains(view, "no other matches") {
+		t.Fatalf("filtered board lost current context:\n%s", view)
+	}
+}
+
+func TestRadarCurrentRigKeepsRigIdentity(t *testing.T) {
+	path := "/work/current"
+	session := tmuxSessionName(path)
+	m := radarModel{current: session, prs: map[string][]rigPR{}}
+	m.apply(radarScanMsg{
+		statuses: []rigStatus{
+			{Slug: "current", ID: "MIR-1", Title: "durable title", Path: path},
+			{Slug: "other", ID: "MIR-2", Title: "other", Path: "/work/other"},
+		},
+		sessions: []tmuxSession{{Name: session, Path: path}},
+		agents: map[string][]agentChild{
+			session: {{Target: session + ":0", Context: "live task context"}},
+		},
+		attached: map[string]int64{},
+	})
+	if m.currentRow == nil || m.currentRow.bare || m.currentRow.Slug != "current" {
+		t.Fatalf("current row = %+v, want MIR-1 rig", m.currentRow)
+	}
+	if len(m.rigRows()) != 2 {
+		t.Fatalf("rigRows = %+v, want current and other for PR enrichment", m.rigRows())
+	}
+	items := m.displayItems()
+	if len(items) < 2 || items[1].row.Title != "live task context" || !items[1].label {
+		t.Fatalf("current display = %+v, want folded non-selectable live context", items)
+	}
+	for _, row := range m.rows() {
+		if row.Slug == "current" {
+			t.Fatal("current rig appeared in selectable destinations")
 		}
 	}
 }
@@ -949,11 +1059,16 @@ func TestRadarMouse(t *testing.T) {
 		t.Fatalf("first click: cursor=%d chosen=%v, want select to 2, no activate", m.cursor, m.chosen)
 	}
 
-	// Click the same row again: activates it.
-	nm, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Y: 3})
+	// Click the same row again: prepares it, then quits for the final switch.
+	nm, cmd := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Y: 3})
 	m = nm.(radarModel)
-	if m.chosen == nil || m.chosen.session != "s" {
-		t.Fatalf("second click: chosen = %v, want the session", m.chosen)
+	if cmd == nil || !m.actionPending || m.chosen != nil {
+		t.Fatalf("second click: pending=%v chosen=%v cmd=%v", m.actionPending, m.chosen, cmd != nil)
+	}
+	nm, quit := m.Update(cmd())
+	m = nm.(radarModel)
+	if quit == nil || m.chosen == nil || m.chosen.session != "s" {
+		t.Fatalf("prepared click: chosen=%v quit=%v, want session", m.chosen, quit != nil)
 	}
 
 	// A release event is ignored (only the press acts).

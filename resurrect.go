@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -25,14 +26,26 @@ func runResurrect(args []string) error {
 	if len(args) != 1 || args[0] == "" {
 		return fmt.Errorf("usage: rig resurrect <rig-id>")
 	}
-	id := args[0]
-
-	t, err := findTombstone(id, time.Now())
+	session, err := prepareResurrect(args[0], false, os.Stderr)
 	if err != nil {
 		return err
 	}
+	return attachOrReport(session)
+}
+
+// prepareResurrect rebuilds a tombstoned rig without attaching to it. Radar
+// runs this inside its live Bubble Tea model and performs the final tmux switch
+// only after the TUI exits; the CLI passes stderr and attaches immediately.
+func prepareResurrect(id string, nonblocking bool, report io.Writer) (string, error) {
+	if report == nil {
+		report = io.Discard
+	}
+	t, err := findTombstone(id, time.Now())
+	if err != nil {
+		return "", err
+	}
 	if t == nil {
-		return fmt.Errorf("no tombstone for %q — nothing torn down in the last %s has that id (`rig history` lists what's left)",
+		return "", fmt.Errorf("no tombstone for %q — nothing torn down in the last %s has that id (`rig history` lists what's left)",
 			id, tombstoneRetentionLabel())
 	}
 
@@ -42,14 +55,17 @@ func runResurrect(args []string) error {
 	if rigs, err := listRigs(); err == nil {
 		for _, r := range rigs {
 			if r.ID == t.ID {
-				fmt.Fprintf(os.Stderr, "rig: %s is already up — switching instead\n", t.ID)
-				return activateRig(r)
+				fmt.Fprintf(report, "rig: %s is already up — switching instead\n", t.ID)
+				if err := setRigParked(r.Path, false, nonblocking, nil); err != nil {
+					return "", err
+				}
+				return tmuxSessionName(r.Path), nil
 			}
 		}
 	}
 
 	if dirExists(t.Basedir) {
-		return fmt.Errorf("%s already exists; move it aside before resurrecting %s", t.Basedir, t.ID)
+		return "", fmt.Errorf("%s already exists; move it aside before resurrecting %s", t.Basedir, t.ID)
 	}
 
 	m := manifest{
@@ -63,7 +79,7 @@ func runResurrect(args []string) error {
 		PRs:      t.PRs,
 	}
 	if err := createBasedir(t.Basedir, m); err != nil {
-		return err
+		return "", err
 	}
 
 	// Rebuild workspaces in a stable order so the primary repo (the one the
@@ -78,7 +94,7 @@ func runResurrect(args []string) error {
 	for _, sub := range subdirs {
 		source := t.Sources[sub]
 		if !dirExists(source) {
-			fmt.Fprintf(os.Stderr, "rig: skipping %s — source repo %s is gone\n", sub, source)
+			fmt.Fprintf(report, "rig: skipping %s — source repo %s is gone\n", sub, source)
 			continue
 		}
 		owner, _, _ := strings.Cut(t.Repos[sub], "/")
@@ -93,22 +109,22 @@ func runResurrect(args []string) error {
 		}
 		dest, err := addRepoWorkspace(t.Basedir, t.ID, repo, resolveStartRev(source, branch), branch)
 		if err != nil {
-			return fmt.Errorf("restoring %s: %w", sub, err)
+			return "", fmt.Errorf("restoring %s: %w", sub, err)
 		}
 		if primary == "" {
 			primary = dest
 		}
 	}
 	if primary == "" {
-		return fmt.Errorf("no repos could be restored for %s (sources missing)", t.ID)
+		return "", fmt.Errorf("no repos could be restored for %s (sources missing)", t.ID)
 	}
 	m, err = readManifest(t.Basedir)
 	if err != nil {
-		return err
+		return "", err
 	}
 	m.MainRepo = filepath.Base(primary)
 	if err := writeManifest(t.Basedir, m); err != nil {
-		return err
+		return "", err
 	}
 
 	agent, err := parseAgent(t.Agent)
@@ -126,21 +142,21 @@ func runResurrect(args []string) error {
 		// No conversation on record: this rig predates session capture, or the
 		// agent never wrote one. Rebuilding the workspaces is still worth doing,
 		// but say plainly that the context isn't coming with it.
-		fmt.Fprintf(os.Stderr, "rig: no session recorded for %s — rebuilding workspaces only\n", t.ID)
+		fmt.Fprintf(report, "rig: no session recorded for %s — rebuilding workspaces only\n", t.ID)
 		sess.prompt = fmt.Sprintf("This rig (%s) was rebuilt from a tombstone after teardown; its previous agent session could not be recovered. Ask me for context before assuming any.", t.ID)
 	}
 
 	session, err := spawnSession(t.Basedir, primary, sess)
 	if err != nil {
-		return err
+		return "", err
 	}
 
-	fmt.Fprintf(os.Stderr, "rig: resurrected %s — %s\n", t.ID, t.Basedir)
+	fmt.Fprintf(report, "rig: resurrected %s — %s\n", t.ID, t.Basedir)
 	if t.resurrectable() {
-		fmt.Fprintf(os.Stderr, "rig: resuming %s session %s (uncommitted work from before teardown is not recoverable)\n",
+		fmt.Fprintf(report, "rig: resuming %s session %s (uncommitted work from before teardown is not recoverable)\n",
 			t.Session.Agent, t.Session.ID)
 	}
-	return attachOrReport(session)
+	return session, nil
 }
 
 // runHistory implements `rig history`: what's died lately and what can still be

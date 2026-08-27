@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -28,13 +29,14 @@ import (
 // The popup inherits $TMUX, so switch-client from inside it moves the
 // underlying client, and the -E popup tears down as we exit.
 //
-// It doubles as the universal picker that replaces tmux-session-wizard: live
-// rigs and non-rig tmux sessions share an MRU section, with review-priority
-// parked rigs below. Each parent dangles its live agent windows as a HUD of
-// what's in flight. You just type to fuzzy-filter, with verbs on modifier keys
-// so they never fight the query: ctrl+n opens the shared new-rig wizard, ctrl+p
-// parks or wakes the selected rig, ctrl+r refreshes, and esc clears a live query
-// then quits.
+// It doubles as the universal picker that replaces tmux-session-wizard: the
+// hosting session appears first as non-selectable context, then other live rigs
+// and non-rig tmux sessions share an MRU section, with review-priority parked
+// rigs below. Each parent dangles its live agent windows as a HUD of what's in
+// flight. You just type to fuzzy-filter, with verbs on modifier keys so they
+// never fight the query: ctrl+n opens the shared new-rig wizard, ctrl+p parks or
+// wakes the selected rig, ctrl+r refreshes, and esc clears a live query then
+// quits.
 func runRadar(args []string) error {
 	if len(args) != 0 {
 		return fmt.Errorf("usage: rig radar")
@@ -44,19 +46,16 @@ func runRadar(args []string) error {
 		return err
 	}
 	chosen, err := radarPick(home)
-	if err != nil {
+	if err != nil || chosen == nil {
 		return err
 	}
-	if chosen == nil {
-		return nil
-	}
-	return radarAct(*chosen)
+	return radarFinish(*chosen)
 }
 
-// radarPick runs the radar as a pure chooser: it renders the live board, lets
-// you land on a row, and returns that row without acting on it — so a caller
-// can sequence its own work (rig down's teardown, say) between the pick and the
-// switch radarAct would perform. nil means you escaped without choosing.
+// radarPick runs the board as a chooser. It prepares a selected destination
+// while Bubble Tea is still alive, so failures stay visible in the same model;
+// a successful choice is returned for the final tmux switch after the TUI has
+// restored the terminal. nil means the user escaped without choosing.
 func radarPick(home string) (*rigStatus, error) {
 	if !stdinIsTTY() {
 		return nil, fmt.Errorf("radar is a TUI — run it from a terminal (or tmux popup)")
@@ -90,54 +89,61 @@ func radarPick(home string) (*rigStatus, error) {
 	return final.(radarModel).chosen, nil
 }
 
-// radarAct is what Enter meant: wake the rig if it was parked, stand a session
-// up if it lacks one, and land in it. This is the tail of switch and wake,
-// executed after the TUI has released the terminal.
-func radarAct(s rigStatus) error {
+// radarPrepare does the fallible work behind Enter without switching the tmux
+// client. It runs as a Bubble Tea command, so an error returns to the existing
+// model and the board can render it without losing the filter or cursor.
+func radarPrepare(s rigStatus) (rigStatus, error) {
 	// A history row's rig no longer exists, so there's nothing to unpark or
 	// attach to. Rebuild it instead, which is the only verb that makes sense on
 	// something already gone.
 	if s.stone != nil {
-		return runResurrect([]string{s.stone.ID})
+		session, err := prepareResurrect(s.stone.ID, true, io.Discard)
+		if err != nil {
+			return rigStatus{}, err
+		}
+		s.session = session
+		return s, nil
 	}
 	// A bare session is nothing but a name to land in; a child is the same, its
 	// session field a session:index window target. No manifest, no session to
 	// stand up, no PR to wake.
 	if s.bare {
-		return attachOrReport(s.session)
+		return s, nil
 	}
 	if s.child {
 		if err := touchRigMode(s.Path, true); err != nil {
 			if errors.Is(err, errRigBusy) {
-				return fmt.Errorf("%q is busy — another rig command is holding it (try again shortly)", s.Title)
+				return rigStatus{}, fmt.Errorf("%q is busy — another rig command is holding it (try again shortly)", s.Title)
 			}
-			return err
+			return rigStatus{}, err
 		}
-		return attachOrReport(s.session)
+		return s, nil
 	}
-	// Nonblocking: radarAct runs after the picker's TUI has torn down, so a
-	// blocking flock here would hang a bare terminal with no output while some
-	// other rig command holds the lock. The common case is mundane — you're
-	// already attached to this rig (which holds the lock across the whole
-	// attach) and you Enter it again from the radar. Report the contention and
-	// bail instead of freezing.
-	err := setRigParked(s.Path, false, true, func(m manifest) {
-		if s.Parked {
-			fmt.Fprintf(os.Stderr, "rig: woke %s\n", m.ID)
-		}
-	})
+	// Nonblocking keeps a contended destination from parking the action command
+	// forever. The error comes back through radarActionMsg and remains visible.
+	err := setRigParked(s.Path, false, true, nil)
 	if err != nil {
 		if errors.Is(err, errRigBusy) {
 			label := s.Title
 			if label == "" {
 				label = s.ID
 			}
-			return fmt.Errorf("%q is busy — another rig command is holding it (try again shortly)", label)
+			return rigStatus{}, fmt.Errorf("%q is busy — another rig command is holding it (try again shortly)", label)
 		}
-		return err
+		return rigStatus{}, err
 	}
-	session := tmuxSessionName(s.Path)
-	return attachOrReport(session)
+	s.session = tmuxSessionName(s.Path)
+	return s, nil
+}
+
+// radarFinish is deliberately tiny: preparation has already established the
+// destination, so after Bubble Tea restores the terminal only the tmux switch
+// remains.
+func radarFinish(s rigStatus) error {
+	if s.session == "" {
+		return fmt.Errorf("radar destination has no tmux target")
+	}
+	return attachOrReport(s.session)
 }
 
 // radarModel is the Bubble Tea model. The framework layer stays thin: state is
@@ -145,8 +151,9 @@ func radarAct(s rigStatus) error {
 // so "no PR" and "not asked yet" stay distinguishable), and all the real logic
 // lives in the helpers switch/waiting/ls already share.
 type radarModel struct {
-	home    string
-	current string // tmux session under the popup; dropped from in-flight
+	home       string
+	current    string     // tmux session under the popup
+	currentRow *rigStatus // same session rendered as non-selectable context
 
 	inflight    []rigStatus
 	parked      []rigStatus
@@ -164,14 +171,15 @@ type radarModel struct {
 	// how loud rather than reprinting each — `rig notify list` is the detail view.
 	inbox []notification
 
-	newRig    *newRigModel // shared `rig new` wizard, embedded without leaving radar
-	filter    string       // fuzzy query; empty = show everything
-	cursor    int
-	chosen    *rigStatus // set on Enter or successful creation; acted on after exit
-	width     int
-	height    int
-	scanErr   error
-	actionErr error
+	newRig        *newRigModel // shared `rig new` wizard, embedded without leaving radar
+	filter        string       // fuzzy query; empty = show everything
+	cursor        int
+	chosen        *rigStatus // set on Enter or successful creation; acted on after exit
+	actionPending bool       // selected destination is being prepared in a tea.Cmd
+	width         int
+	height        int
+	scanErr       error
+	actionErr     error
 }
 
 type radarScanMsg struct {
@@ -193,6 +201,11 @@ type radarParkMsg struct {
 	label  string
 	parked bool
 	err    error
+}
+
+type radarActionMsg struct {
+	destination rigStatus
+	err         error
 }
 
 type radarTickMsg time.Time
@@ -279,6 +292,13 @@ func radarParkCmd(s rigStatus, parked bool) tea.Cmd {
 			label = s.ID
 		}
 		return radarParkMsg{path: s.Path, label: label, parked: parked, err: err}
+	}
+}
+
+func radarActionCmd(s rigStatus) tea.Cmd {
+	return func() tea.Msg {
+		destination, err := radarPrepare(s)
+		return radarActionMsg{destination: destination, err: err}
 	}
 }
 
@@ -402,6 +422,16 @@ func (m radarModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// Preparation mutates the selected destination and cannot be cancelled
+	// safely halfway through. Keep rendering ticks and scans, but ignore input
+	// until its result lands; the footer makes that short wait explicit.
+	if m.actionPending {
+		switch msg.(type) {
+		case tea.KeyMsg, tea.MouseMsg:
+			return m, nil
+		}
+	}
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -429,9 +459,7 @@ func (m radarModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if cur, ok := m.rowAtY(msg.Y); ok {
 				if cur == m.cursor {
 					rows := m.rows()
-					s := rows[cur]
-					m.chosen = &s
-					return m, tea.Quit
+					return m.beginAction(rows[cur])
 				}
 				m.cursor = cur
 			}
@@ -470,6 +498,9 @@ func (m radarModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case radarPRsMsg:
 		m.prs[msg.slug] = msg.prs
+		if m.currentRow != nil && m.currentRow.Slug == msg.slug {
+			m.currentRow.PRs = msg.prs
+		}
 		for _, section := range []*[]rigStatus{&m.inflight, &m.parked} {
 			for i := range *section {
 				if (*section)[i].Slug == msg.slug {
@@ -496,6 +527,16 @@ func (m radarModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.actionErr = nil
 		m.applyParked(msg.path, msg.parked)
 		return m, radarScanCmd(m.home)
+
+	case radarActionMsg:
+		m.actionPending = false
+		if msg.err != nil {
+			m.actionErr = msg.err
+			return m, nil
+		}
+		m.actionErr = nil
+		m.chosen = &msg.destination
+		return m, tea.Quit
 	}
 	return m, nil
 }
@@ -524,11 +565,18 @@ func (m radarModel) handleKey(key string) (radarModel, tea.Cmd) {
 		if len(rows) == 0 {
 			return m, nil
 		}
-		s := rows[m.cursor]
-		m.chosen = &s
-		return m, tea.Quit
+		return m.beginAction(rows[m.cursor])
 	}
 	return m.handleBoardKey(key)
+}
+
+func (m radarModel) beginAction(s rigStatus) (radarModel, tea.Cmd) {
+	if m.actionPending {
+		return m, nil
+	}
+	m.actionErr = nil
+	m.actionPending = true
+	return m, radarActionCmd(s)
 }
 
 // handleBoardKey runs the board: printable runes narrow the filter, the verbs
@@ -646,17 +694,20 @@ func (m *radarModel) apply(scan radarScanMsg) {
 	// The rig session names are the ones the bare-session pass must exclude, so
 	// a rig never shows up twice (once as itself, once as a plain session).
 	rigSessions := make(map[string]bool, len(scan.statuses))
+	var currentRow *rigStatus
 	var inflight, parked []rigStatus
 	for _, s := range scan.statuses {
-		rigSessions[tmuxSessionName(s.Path)] = true
+		session := tmuxSessionName(s.Path)
+		rigSessions[session] = true
 		if prs, ok := m.prs[s.Slug]; ok {
 			s.PRs = prs
 		}
 		switch {
+		case m.current != "" && session == m.current:
+			current := s
+			currentRow = &current
 		case s.Parked:
 			parked = append(parked, s)
-		case m.current != "" && tmuxSessionName(s.Path) == m.current:
-			// You never switch to where you already are.
 		default:
 			inflight = append(inflight, s)
 		}
@@ -664,10 +715,15 @@ func (m *radarModel) apply(scan radarScanMsg) {
 
 	var sessions []rigStatus
 	for _, ts := range scan.sessions {
-		if rigSessions[ts.Name] || ts.Name == m.current {
+		if rigSessions[ts.Name] {
 			continue
 		}
-		sessions = append(sessions, bareSession(ts, m.home))
+		s := bareSession(ts, m.home)
+		if ts.Name == m.current {
+			currentRow = &s
+			continue
+		}
+		sessions = append(sessions, s)
 	}
 
 	// Dangle each parent's live claude windows under it: rigs key off their
@@ -682,7 +738,11 @@ func (m *radarModel) apply(scan radarScanMsg) {
 	attachAgents(inflight, rigSession)
 	attachAgents(parked, rigSession)
 	attachAgents(sessions, func(s rigStatus) string { return s.session })
+	if currentRow != nil {
+		currentRow.agents = scan.agents[m.current]
+	}
 
+	m.currentRow = currentRow
 	m.inflight, m.parked, m.sessions = inflight, parked, sessions
 	m.history = scan.stones
 	m.resortKeeping(selected)
@@ -799,10 +859,13 @@ func (m *radarModel) resortKeeping(selected string) {
 	}
 }
 
-// rigRows is the two rig sections flattened, unfiltered: the PR fan-out enriches
-// every rig regardless of what the filter is currently hiding.
+// rigRows is every live rig flattened, unfiltered: the PR fan-out enriches the
+// current rig and every destination regardless of what the filter is hiding.
 func (m radarModel) rigRows() []rigStatus {
-	out := make([]rigStatus, 0, len(m.inflight)+len(m.parked))
+	out := make([]rigStatus, 0, len(m.inflight)+len(m.parked)+1)
+	if m.currentRow != nil && !m.currentRow.bare {
+		out = append(out, *m.currentRow)
+	}
 	out = append(out, m.inflight...)
 	out = append(out, m.parked...)
 	return out
@@ -838,6 +901,21 @@ func (l radarLine) selectableRow() (rigStatus, bool) {
 // each section rather than flattening the state boundary away.
 func (m radarModel) displayItems() []radarLine {
 	var items []radarLine
+	if m.currentRow != nil {
+		current := *m.currentRow
+		// Match the useful title folding of a one-agent rig without turning the
+		// current row into a destination. Multiple agents keep the durable rig
+		// title because there is no single context to stand in for the session.
+		if !current.bare && len(current.agents) == 1 {
+			if context := strings.TrimSpace(current.agents[0].Context); context != "" {
+				current.Title = context
+			}
+		}
+		items = append(items,
+			radarLine{header: "CURRENT"},
+			radarLine{row: current, label: true},
+		)
+	}
 	parent := func(p rigStatus) {
 		// A rig with one live agent has one meaningful destination. Fold the
 		// agent's fresher context into the rig row and make Enter target that pane
@@ -1701,6 +1779,8 @@ func (m radarModel) View() string {
 		}
 	}
 	switch {
+	case m.actionPending:
+		footer = radarFaintStyle.Render("opening selected destination…")
 	case m.filter != "" && onStone:
 		footer = radarFaintStyle.Render("type to filter · enter resurrect · esc clear")
 	case m.filter != "":
@@ -1723,12 +1803,18 @@ func (m radarModel) View() string {
 		}
 	}
 	if selectable == 0 {
-		msg := "  nothing to pick"
-		switch {
-		case m.filter != "":
-			msg = radarFaintStyle.Render("  no matches")
+		if m.currentRow == nil {
+			msg := "  nothing to pick"
+			if m.filter != "" {
+				msg = radarFaintStyle.Render("  no matches")
+			}
+			return "\n" + prompt + msg + "\n\n" + footer + m.radarErrorLines() + "\n"
 		}
-		return "\n" + prompt + msg + "\n\n" + footer + m.radarErrorLines() + "\n"
+		if m.filter != "" {
+			footer = radarFaintStyle.Render("no other matches · esc clear")
+		} else {
+			footer = radarFaintStyle.Render("nothing else to pick · ^n new · ^r refresh · esc quit")
+		}
 	}
 
 	// Resolve the column layout for this frame: cell widths, and where the title

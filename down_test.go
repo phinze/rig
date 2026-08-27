@@ -72,6 +72,30 @@ func TestHandleSessionExitDestination(t *testing.T) {
 	})
 }
 
+func TestHandoffDoesNotHoldSourceRigLock(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	basedir := t.TempDir()
+
+	held, err := acquireRigLock(basedir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proceed, err := handoffWithoutRigLock(held, func() (bool, error) {
+		probe, err := acquireRigLock(basedir, true)
+		if err != nil {
+			return false, fmt.Errorf("source rig remained locked in handoff: %w", err)
+		}
+		defer func() { _ = probe.Close() }()
+		return false, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proceed {
+		t.Error("cancelled handoff should not proceed")
+	}
+}
+
 // unmergedPRsBlocker is `rig down`'s eager gate: every recorded branch's PR must
 // be merged (or absent). It's what refuses a teardown while a PR — primary or a
 // tracked secondary — is still open, independent of local commit state.

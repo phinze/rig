@@ -31,29 +31,15 @@ func runDown(args []string) error {
 		return err
 	}
 
-	m, err := readManifest(basedir)
-	if err != nil {
-		return fmt.Errorf("reading manifest: %w", err)
-	}
-	lock, err := acquireRigLock(basedir, false)
+	lock, m, err := acquireDownRig(basedir, force)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = lock.Close() }()
-	// The manifest may have changed while we waited for another command.
-	m, err = readManifest(basedir)
-	if err != nil {
-		return fmt.Errorf("reading manifest: %w", err)
-	}
-
-	// Safety gate, unless forced. The shared judgment covers local work and asks
-	// eagerly about every recorded PR, including a disjoint secondary whose
-	// commits are no longer reachable from the working copy.
-	if !force {
-		if reason := rigTeardownBlocker(basedir, map[string]bool{}); reason != "" {
-			return downRefusal(reason)
+	defer func() {
+		if lock != nil {
+			_ = lock.Close()
 		}
-	}
+	}()
 
 	// Note if the caller will be stranded by their cwd vanishing. This
 	// matters when we're NOT killing the session (running from outside
@@ -72,14 +58,26 @@ func runDown(args []string) error {
 	session := tmuxSessionName(basedir)
 	inDoomed := insideTmuxSession(session)
 
-	proceed, err := sessionExitHandoff(inDoomed)
-	if err != nil {
-		return err
+	if inDoomed && stdinIsTTY() {
+		// The picker can sit open indefinitely. Do not make that think time an
+		// exclusive mutation lock on the rig being left. Reacquire and re-run the
+		// safety gate afterward so another command cannot invalidate the preflight
+		// while the user chooses a destination.
+		proceed, err := handoffWithoutRigLock(lock, func() (bool, error) {
+			return sessionExitHandoff(true)
+		})
+		lock = nil
+		if err != nil {
+			return err
+		}
+		if !proceed {
+			return nil
+		}
+		lock, m, err = acquireDownRig(basedir, force)
+		if err != nil {
+			return err
+		}
 	}
-	if !proceed {
-		return nil
-	}
-
 	job, err := prepareTeardownJob(basedir, m)
 	if err != nil {
 		return err
@@ -107,6 +105,42 @@ func runDown(args []string) error {
 	return nil
 }
 
+// acquireDownRig owns the locked teardown preflight. A handoff from inside the
+// doomed session runs it twice: once before switching away, so a refusal does
+// not strand the user elsewhere, and once after the unlocked picker boundary,
+// so teardown still acts on current state.
+func acquireDownRig(basedir string, force bool) (*rigLock, manifest, error) {
+	lock, err := acquireRigLock(basedir, false)
+	if err != nil {
+		return nil, manifest{}, err
+	}
+	m, err := readManifest(basedir)
+	if err != nil {
+		_ = lock.Close()
+		return nil, manifest{}, fmt.Errorf("reading manifest: %w", err)
+	}
+
+	// The shared judgment covers local work and asks eagerly about every
+	// recorded PR, including a disjoint secondary whose commits are no longer
+	// reachable from the working copy.
+	if !force {
+		if reason := rigTeardownBlocker(basedir, map[string]bool{}); reason != "" {
+			_ = lock.Close()
+			return nil, manifest{}, downRefusal(reason)
+		}
+	}
+	return lock, m, nil
+}
+
+// handoffWithoutRigLock makes the interactive boundary explicit and testable:
+// no picker or destination action may run while the source rig is locked.
+func handoffWithoutRigLock(lock *rigLock, handoff func() (bool, error)) (bool, error) {
+	if err := lock.Close(); err != nil {
+		return false, fmt.Errorf("releasing rig lock before handoff: %w", err)
+	}
+	return handoff()
+}
+
 // sessionExitHandoff opens the radar before the current tmux session is killed,
 // switches the client to the selected destination, and gives the caller
 // permission to continue. Commands run elsewhere need no rescue; noninteractive
@@ -123,7 +157,7 @@ func sessionExitHandoff(inExitingSession bool) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return handleSessionExitDestination(dest, radarAct)
+	return handleSessionExitDestination(dest, radarFinish)
 }
 
 // handleSessionExitDestination turns the rescue pick into permission to

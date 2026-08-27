@@ -484,13 +484,16 @@ landed in the last few minutes (`agentState`), whether the rig is parked,
 and what its PRs' review decision is (`parkedDisposition`). The radar is
 that truth drawn as a board instead of re-derived from terminal scrollback.
 
-Layout is two sections. *In flight* is the switch view: unparked rigs and plain
-sessions, the session you're in dropped, each row carrying its live agent
-state. *Parked / awaiting review* holds the dormant rigs below. Both sections
-are most-recently-touched first, using the same durable timestamp shown in the
-first column. Agent output and asynchronously fetched review state update the
-row without moving it. `rig waiting` retains its explicit review-priority sort
-for the times you are asking what came back rather than where you last were.
+Layout opens with a non-selectable *Current* row, so the session hosting the
+popup stays visible without becoming a destination. The cursor still starts on
+the most recent other row. Two action sections follow. *In flight* is the
+switch view: the other unparked rigs and plain sessions, each carrying its live
+agent state. *Parked / awaiting review* holds the dormant rigs below. Both
+action sections are most-recently-touched first, using the same durable
+timestamp shown in the first column. Agent output and asynchronously fetched
+review state update the row without moving it. `rig waiting` retains its
+explicit review-priority sort for the times you are asking what came back
+rather than where you last were.
 
 Enter does the right thing per row so you never pick a verb: a live rig
 switches, repairing its agent + Recto carousel first when needed. A parked rig

@@ -197,8 +197,8 @@ func isAgentCommand(cmd string) bool {
 }
 
 // currentTmuxSession returns the name of the session the current process is
-// running inside, or "" if not inside tmux. `rig switch` drops this from the
-// list — you never switch to where you already are.
+// running inside, or "" if not inside tmux. Radar renders this as context but
+// keeps it out of the selectable destinations.
 func currentTmuxSession() string {
 	if os.Getenv("TMUX") == "" {
 		return ""
