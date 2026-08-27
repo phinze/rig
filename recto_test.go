@@ -41,6 +41,7 @@ func TestRectoCarouselPreservesAdHocShell(t *testing.T) {
 	mustWriteExec(t, filepath.Join(bin, "tmux"), tmuxWrap)
 	mustWriteExec(t, filepath.Join(bin, "recto"), "#!/bin/sh\n"+
 		"if [ \"$1\" = -R ]; then printf '%s\\n' \"$*\" > \"$HOME/recto.args\"; exit \"${RECTO_EXIT:-0}\"; fi\n"+
+		"if [ \"$#\" -ne 0 ]; then printf 'unexpected recto args: %s\\n' \"$*\" >&2; exit 2; fi\n"+
 		"exec sleep infinity\n")
 	mustWriteExec(t, filepath.Join(bin, "claude"), "#!/bin/sh\nexec sleep infinity\n")
 	t.Setenv("HOME", home)
@@ -58,13 +59,13 @@ func TestRectoCarouselPreservesAdHocShell(t *testing.T) {
 		t.Fatal(err)
 	}
 	session, err := spawnSession(basedir, filepath.Join(basedir, "runtime"), sessionSpec{
-		rectoCmd: "recto", repo: "runtime", agent: agentClaude, prompt: "test",
+		rectoCmd: rectoCommand(), repo: "runtime", agent: agentClaude, prompt: "test",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, repo := range []string{"cloud", "brand"} {
-		pane, window, err := tmuxNewCommandWindow(session, repo, filepath.Join(basedir, repo), "recto")
+		pane, window, err := tmuxNewCommandWindow(session, repo, filepath.Join(basedir, repo), rectoCommand())
 		if err != nil {
 			t.Fatal(err)
 		}

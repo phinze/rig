@@ -221,20 +221,12 @@ func findRectoPane(panes []rigTmuxPane, repo string) (rigTmuxPane, bool) {
 	return rigTmuxPane{}, false
 }
 
-// rectoCommand is how every Recto in a rig starts, review or authoring. `--pr`
-// picks the trunk merge-base as the opening base instead of `@-`, which is the
-// rig's own unit of attention: a rig is one task, and the task's diff is the
-// whole stack that becomes the PR, not just whatever commit is on top right now.
-// The two agree at rig birth (a fresh workspace sits on trunk, so merge-base ==
-// `@-` == trunk) and only diverge once the stack is two deep — exactly when you
-// want the wider view. It costs nothing to be wrong about: `--pr` moves the
-// starting index within Recto's base ring rather than changing the ring, so `b`
-// cycles back to `@-` in one keystroke. And it's the richer starting point, not
-// merely the wider one — Recto's per-rev narrowing enumerates `base..@`, so from
-// the merge-base you can drill into any commit in the stack, while from `@-` you
-// have one rev and must cycle the base to see anything else.
+// rectoCommand is how every Recto in a rig starts, review or authoring. Recto
+// opens at the branch point by default, which shows the task's whole stack
+// rather than only the top commit. Keep the command centralized so creation,
+// add, resume, and resurrection cannot drift apart again.
 func rectoCommand() string {
-	return "recto --pr"
+	return "recto"
 }
 
 func ensureRepoRecto(session, basedir, repo string, panes []rigTmuxPane) ([]rigTmuxPane, error) {

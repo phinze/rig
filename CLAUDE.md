@@ -111,11 +111,11 @@ full-screen Recto windows. `rig recto <repo> [recto args...]` promotes one and
 optionally drives it. Ad hoc shells are ordinary splits from a repo's Recto,
 not permanent empty panes.
 
-Every Recto starts with `--pr`, review rig or authoring rig, because a rig is
-one task and the task's diff is the whole stack rather than whatever commit is
-on top. `rectoCommand` is the single place that decides, and every launch site
-goes through it — see its comment for why the default is nearly free (`b`
-cycles back to `@-` in one keystroke).
+Every Recto uses Recto's default branch-point base, review rig or authoring rig,
+because a rig is one task and the task's diff is the whole stack rather than
+whatever commit is on top. `rectoCommand` is the single launch contract, and
+every launch site goes through it so creation, add, resume, and resurrection
+cannot disagree.
 
 The agent is selectable with `--agent`, which takes either the long name or the
 short one it goes by in the picker: `cld`, `cdx`, `agy`. `RIG_AGENT` moves the
