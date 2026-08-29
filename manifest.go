@@ -43,6 +43,12 @@ type manifest struct {
 	// review, never gated on the PR itself merging. Absent on rigs predating this
 	// field, which read as authoring — the safe default.
 	Kind string
+	// ReviewPRs maps a repo's subdir to the durable GitHub locator a review rig
+	// is reviewing there. The workspace branch says which code was fetched, but
+	// not which PR context Recto should restore after a restart. A map keeps a
+	// combined review from making its first PR structurally special. Empty on
+	// authoring rigs and review rigs created before this field existed.
+	ReviewPRs map[string]string
 	// Parked, when non-zero, marks a rig as dormant: its work is done and up
 	// for human review, so it drops out of `rig switch` and its tmux session is
 	// killed, but the basedir (and its agent session history) stay on disk.
@@ -110,6 +116,7 @@ func writeManifest(basedir string, m manifest) error {
 		fmt.Fprintf(&b, "parked = %q\n", m.Parked.Format(time.RFC3339))
 	}
 	writeTable(&b, "repos", m.Repos)
+	writeTable(&b, "review_prs", m.ReviewPRs)
 	writeBranchTable(&b, "branches", m.Branches)
 	writeIntTable(&b, "prs", m.PRs)
 	return os.WriteFile(filepath.Join(basedir, manifestName), []byte(b.String()), 0o644)
@@ -220,7 +227,10 @@ func readManifest(basedir string) (manifest, error) {
 	}
 	defer f.Close()
 
-	m := manifest{Repos: map[string]string{}, Branches: map[string][]string{}, PRs: map[string]int{}}
+	m := manifest{
+		Repos: map[string]string{}, ReviewPRs: map[string]string{},
+		Branches: map[string][]string{}, PRs: map[string]int{},
+	}
 	section := ""
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
@@ -269,6 +279,8 @@ func readManifest(basedir string) (manifest, error) {
 			}
 		case "repos":
 			m.Repos[key] = parseTOMLString(val)
+		case "review_prs":
+			m.ReviewPRs[key] = parseTOMLString(val)
 		case "branches":
 			// Array form is the current shape; a bare scalar is a legacy
 			// single-branch manifest, read as a one-element list.

@@ -59,6 +59,8 @@ func main() {
 		err = runResurrect(args)
 	case "env":
 		err = runEnv(args)
+	case "info":
+		err = runInfo(args)
 	case "__gh":
 		// Hidden: each rig prepends a tiny `gh` shim that delegates here. Resolve
 		// repository context from cwd on every invocation, including agent tool
@@ -182,5 +184,7 @@ usage:
                             branches; uncommitted work does not)
   rig env                   print shell setup describing the current dir
                             (eval'd by the direnv stdlib; silent outside a rig)
+  rig info --format=json    print stable machine-readable context for the
+                            current rig and repository
 `)
 }

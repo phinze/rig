@@ -117,6 +117,12 @@ whatever commit is on top. `rectoCommand` is the single launch contract, and
 every launch site goes through it so creation, add, resume, and resurrection
 cannot disagree.
 
+External tools learn the current rig through `rig info --format=json`, never by
+parsing `.rig.toml`. The manifest is Rig's private persistence format; the JSON
+shape is the compatibility boundary. Review rigs expose the current repository's
+durable PR locator there so Recto can restore PR context after a restart without making
+Rig's naming and directory conventions part of Recto.
+
 The agent is selectable with `--agent`, which takes either the long name or the
 short one it goes by in the picker: `cld`, `cdx`, `agy`. `RIG_AGENT` moves the
 starting position, with Claude as the fallback beneath it. Rig writes equivalent

@@ -550,6 +550,10 @@ exit 1
 	if !strings.Contains(manifest, `title = "fix the thing"`) {
 		t.Errorf("manifest missing title:\n%s", manifest)
 	}
+	if !strings.Contains(manifest, `[review_prs]`) ||
+		!strings.Contains(manifest, `fakerepo = "https://github.com/fakeowner/fakerepo/pull/42"`) {
+		t.Errorf("manifest missing review PR locator:\n%s", manifest)
+	}
 	if !strings.Contains(manifest, `fakerepo = "fakeowner/fakerepo"`) {
 		t.Errorf("manifest missing repos mapping:\n%s", manifest)
 	}

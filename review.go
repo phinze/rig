@@ -137,6 +137,33 @@ func attachExistingReviewRig(pr *prRef) (bool, error) {
 	if found == nil {
 		return false, nil
 	}
+	// Older review rigs predate the explicit locator. Record it on the first
+	// URL-based resume so Recto can restore the attached review on its own from
+	// then on, without relying on the globally ambiguous pr-<n> id.
+	m, err := readManifest(found.Path)
+	if err != nil {
+		return false, fmt.Errorf("reading manifest: %w", err)
+	}
+	reviewRepo := ""
+	for subdir, repository := range m.Repos {
+		if strings.EqualFold(repository, pr.Owner+"/"+pr.Repo) &&
+			(len(m.Branches[subdir]) > 0 || len(m.Repos) == 1) {
+			reviewRepo = subdir
+			break
+		}
+	}
+	if reviewRepo == "" {
+		return false, fmt.Errorf("review rig has no repository for %s", pr.URL())
+	}
+	if m.ReviewPRs == nil {
+		m.ReviewPRs = map[string]string{}
+	}
+	if m.ReviewPRs[reviewRepo] == "" {
+		m.ReviewPRs[reviewRepo] = pr.URL()
+		if err := writeManifest(found.Path, m); err != nil {
+			return false, fmt.Errorf("recording review PR: %w", err)
+		}
+	}
 	return true, activateRig(*found)
 }
 
@@ -171,7 +198,11 @@ func reviewPickupPR(pr *prRef, meta prMeta, pick *agentPick) error {
 		return err
 	}
 
-	m := manifest{ID: rigID, Title: meta.Title, Kind: "review", Agent: string(pick.kind), MainRepo: pr.Repo}
+	m := manifest{
+		ID: rigID, Title: meta.Title, Kind: "review",
+		ReviewPRs: map[string]string{pr.Repo: pr.URL()},
+		Agent:     string(pick.kind), MainRepo: pr.Repo,
+	}
 	if err := createBasedir(basedir, m); err != nil {
 		return err
 	}

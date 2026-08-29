@@ -126,7 +126,11 @@ func TestManifestParkedRoundTrip(t *testing.T) {
 // key at all (so it reads back as the safe authoring default, isReview()==false).
 func TestManifestKindRoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	m := manifest{ID: "pr-882", Kind: "review", Repos: map[string]string{"runtime": "o/runtime"}}
+	m := manifest{
+		ID: "pr-882", Kind: "review",
+		ReviewPRs: map[string]string{"runtime": "https://github.com/o/runtime/pull/882"},
+		Repos:     map[string]string{"runtime": "o/runtime"},
+	}
 	if err := writeManifest(dir, m); err != nil {
 		t.Fatalf("writeManifest: %v", err)
 	}
@@ -137,6 +141,9 @@ func TestManifestKindRoundTrip(t *testing.T) {
 	if !got.isReview() {
 		t.Errorf("kind = %q, want a review rig", got.Kind)
 	}
+	if got.ReviewPRs["runtime"] != m.ReviewPRs["runtime"] {
+		t.Errorf("review_prs.runtime = %q, want %q", got.ReviewPRs["runtime"], m.ReviewPRs["runtime"])
+	}
 
 	// An authoring rig leaves no kind key behind and reads as not-a-review.
 	dir2 := t.TempDir()
@@ -146,6 +153,9 @@ func TestManifestKindRoundTrip(t *testing.T) {
 	raw := string(mustReadFile(t, dir2+"/"+manifestName))
 	if strings.Contains(raw, "kind") {
 		t.Errorf("expected no kind key for an authoring rig:\n%s", raw)
+	}
+	if strings.Contains(raw, "review_prs") {
+		t.Errorf("expected no review_prs table for an authoring rig:\n%s", raw)
 	}
 	got2, err := readManifest(dir2)
 	if err != nil {
