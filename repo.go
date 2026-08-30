@@ -317,6 +317,45 @@ func jjWorkspaceForget(repoArg string, names []string) error {
 	return cmd.Run()
 }
 
+func jjBookmarkDelete(repoArg, name string) error {
+	cmd := exec.Command("jj", "-R", repoArg, "bookmark", "delete", name)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	return cmd.Run()
+}
+
+func jjCommitID(repoArg, rev string) (string, error) {
+	cmd := exec.Command("jj", "-R", repoArg, "log", "-r", rev,
+		"--no-graph", "--limit", "1", "-T", `commit_id ++ "\n"`)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	id := strings.TrimSpace(string(out))
+	if id == "" {
+		return "", fmt.Errorf("revision %s did not resolve", rev)
+	}
+	return id, nil
+}
+
+func jjWorkspaceDirty(workspace string) (bool, error) {
+	out, err := exec.Command("jj", "-R", workspace, "diff", "--summary").Output()
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(string(out)) != "", nil
+}
+
+func jjRebaseWorkspace(workspace, destination string) error {
+	update := exec.Command("jj", "-R", workspace, "workspace", "update-stale")
+	update.Stdout, update.Stderr = os.Stdout, os.Stderr
+	if err := update.Run(); err != nil {
+		return err
+	}
+	cmd := exec.Command("jj", "-R", workspace, "rebase", "-s", "@", "-d", destination)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	return cmd.Run()
+}
+
 // workspaceRegistered reports whether a workspace name is registered with the
 // source repo (regardless of whether its directory still exists on disk).
 //

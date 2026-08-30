@@ -42,6 +42,7 @@ type teardownJob struct {
 	ISOWorkspaces   []isoCleanup        `json:"iso_workspaces,omitempty"`
 	Compose         []string            `json:"compose_projects,omitempty"`
 	ForgetGroups    map[string][]string `json:"forget_groups,omitempty"`
+	ReviewBookmarks map[string][]string `json:"review_bookmarks,omitempty"`
 	ScratchDirs     []string            `json:"scratch_dirs,omitempty"`
 	RectoWorkspaces []string            `json:"recto_workspaces,omitempty"`
 	path            string
@@ -241,15 +242,16 @@ func prepareTeardownJob(basedir string, m manifest) (*teardownJob, error) {
 		return nil, err
 	}
 	job := &teardownJob{
-		Version:      teardownJobVersion,
-		ID:           m.ID,
-		Basedir:      basedir,
-		Session:      tmuxSessionName(basedir),
-		TmuxSocket:   tmuxSocketPath(),
-		Created:      time.Now(),
-		RigCreated:   m.Created,
-		ForgetGroups: map[string][]string{},
-		ScratchDirs:  claudeScratchDirs(basedir),
+		Version:         teardownJobVersion,
+		ID:              m.ID,
+		Basedir:         basedir,
+		Session:         tmuxSessionName(basedir),
+		TmuxSocket:      tmuxSocketPath(),
+		Created:         time.Now(),
+		RigCreated:      m.Created,
+		ForgetGroups:    map[string][]string{},
+		ReviewBookmarks: map[string][]string{},
+		ScratchDirs:     claudeScratchDirs(basedir),
 	}
 	sources := map[string]string{}
 	for _, e := range entries {
@@ -275,6 +277,9 @@ func prepareTeardownJob(basedir string, m manifest) (*teardownJob, error) {
 		}
 		sources[e.Name()] = source
 		job.ForgetGroups[source] = append(job.ForgetGroups[source], jjWorkspaceName(m.ID, e.Name()))
+		if m.isReview() && m.ReviewPRs[e.Name()] != "" {
+			job.ReviewBookmarks[source] = append(job.ReviewBookmarks[source], reviewBookmarkName(m.ID, e.Name()))
+		}
 	}
 	// Leave a tombstone before anything is destroyed. This is the last moment
 	// the agent stores can still be queried for this rig's session, since they
@@ -286,6 +291,9 @@ func prepareTeardownJob(basedir string, m manifest) (*teardownJob, error) {
 	}
 	for source := range job.ForgetGroups {
 		sort.Strings(job.ForgetGroups[source])
+	}
+	for source := range job.ReviewBookmarks {
+		sort.Strings(job.ReviewBookmarks[source])
 	}
 	sort.Strings(job.RectoWorkspaces)
 
@@ -394,6 +402,20 @@ func executeTeardownJobForPlatform(job *teardownJob, platform string) error {
 		delete(job.ForgetGroups, source)
 		if err := writeTeardownJob(job); err != nil {
 			return fmt.Errorf("recording forgotten workspaces: %w", err)
+		}
+	}
+	for _, source := range sortedKeys(job.ReviewBookmarks) {
+		for _, bookmark := range job.ReviewBookmarks[source] {
+			if revExists(source, bookmark) {
+				fmt.Fprintf(os.Stderr, "rig: jj bookmark delete %s (from %s)\n", bookmark, source)
+				if err := jjBookmarkDelete(source, bookmark); err != nil {
+					return fmt.Errorf("jj bookmark delete: %w", err)
+				}
+			}
+		}
+		delete(job.ReviewBookmarks, source)
+		if err := writeTeardownJob(job); err != nil {
+			return fmt.Errorf("recording deleted review bookmarks: %w", err)
 		}
 	}
 

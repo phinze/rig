@@ -127,10 +127,12 @@ usage:
                             stdin supplies it without a prompt), then picks the
                             repo; the same TUI opens inside radar on ctrl-n;
                             starts at trunk with no branch recorded yet)
-  rig review [pr-url] [--agent AGENT]
+  rig review [pr-url] [--agent AGENT] [--refresh]
                             pitch a review rig for someone else's PR
                             (url, or fzf picker over review-requested PRs;
-                            a URL that turns out to be yours routes to up)
+                            a URL that turns out to be yours routes to up;
+                            --refresh explicitly advances an existing review
+                            workspace to the PR's current head)
   rig pr                    open one of the rig's PRs in the browser
                             (across added repos and tracked/current branches;
                             when several match, pick one with fzf)

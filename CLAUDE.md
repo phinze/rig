@@ -126,6 +126,14 @@ private layout. Recto owns its authored state beneath XDG for standalone and
 Rig launches alike. Teardown asks `recto state forget` about each workspace on
 a best-effort basis; Rig never parses Recto's files or computes its state key.
 
+A review rig also pins each fetched `pull/N/head` with a reserved, untracked
+`rig-review/…` bookmark in the shared jj repository. The bookmark is the
+reachability root a workspace registration is not: force-pushing and fetching a
+tracked PR branch cannot abandon the reviewed commits or rebase the empty
+review working copy out from under Recto. `rig review --refresh <url>` is the
+only path that advances the pin and working copy to a new head. Teardown deletes
+the pin after forgetting the workspace.
+
 The agent is selectable with `--agent`, which takes either the long name or the
 short one it goes by in the picker: `cld`, `cdx`, `agy`. `RIG_AGENT` moves the
 starting position, with Claude as the fallback beneath it. Rig writes equivalent

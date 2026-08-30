@@ -450,8 +450,8 @@ func TestUpDown(t *testing.T) {
 
 // TestReview exercises `rig review <pr-url>` end to end against a fake repo
 // (already cloned under the ghq root) and fake gh/ghq, then checks `rig ls`
-// reports the rig. It pre-creates the PR branch so the pull/N/head fetch is
-// skipped (gitHasBranch short-circuits), keeping the test offline.
+// reports the rig. A local bare origin publishes both the ordinary branch and
+// GitHub's pull/N/head ref, keeping the fork-safe fetch path offline.
 func TestReview(t *testing.T) {
 	realTmux, err := exec.LookPath("tmux")
 	if err != nil {
@@ -462,10 +462,13 @@ func TestReview(t *testing.T) {
 	bin := filepath.Join(home, "bin")
 	// ghq root == ~/src; the "already cloned" repo lives at the ghq path.
 	repoDir := filepath.Join(home, "src", "github.com", "fakeowner", "fakerepo")
+	origin := filepath.Join(home, "origin.git")
+	seed := filepath.Join(home, "seed")
 	rigBin := filepath.Join(home, "rig")
 
 	mustMkdir(t, bin)
-	mustMkdir(t, repoDir)
+	mustMkdir(t, filepath.Dir(repoDir))
+	mustMkdir(t, origin)
 
 	build := exec.Command("go", "build", "-o", rigBin, ".")
 	if out, err := build.CombinedOutput(); err != nil {
@@ -480,13 +483,17 @@ func TestReview(t *testing.T) {
 	)
 	env = append(env, hermeticGitVars()...)
 
-	// Source repo with a main commit and a separate pr-branch commit. The
-	// branch standing in for the PR head must exist so `rig review` finds it.
-	mustRun(t, repoDir, env, "git", "init", "-q", "-b", "main")
-	mustRun(t, repoDir, env, "git", "commit", "-q", "--allow-empty", "-m", "init")
-	mustRun(t, repoDir, env, "git", "checkout", "-q", "-b", "pr-branch")
-	mustRun(t, repoDir, env, "git", "commit", "-q", "--allow-empty", "-m", "pr work")
-	mustRun(t, repoDir, env, "git", "checkout", "-q", "main")
+	// Source repo with a main commit and a separate PR head published under the
+	// same pull ref GitHub exposes for fork-safe review checkout.
+	mustRun(t, origin, env, "git", "init", "-q", "--bare", "-b", "main")
+	mustRun(t, home, env, "git", "clone", "-q", origin, seed)
+	mustRun(t, seed, env, "git", "commit", "-q", "--allow-empty", "-m", "init")
+	mustRun(t, seed, env, "git", "push", "-q", "origin", "main")
+	mustRun(t, seed, env, "git", "checkout", "-q", "-b", "pr-branch")
+	mustRun(t, seed, env, "git", "commit", "-q", "--allow-empty", "-m", "pr work")
+	mustRun(t, seed, env, "git", "push", "-q", "origin", "pr-branch")
+	mustRun(t, seed, env, "git", "push", "-q", "origin", "HEAD:refs/pull/42/head")
+	mustRun(t, filepath.Dir(repoDir), env, "git", "clone", "-q", origin, repoDir)
 
 	// Fake gh: `gh pr view` reports the head branch, title, and an author who
 	// is NOT the current user, and `gh api user` names that current user — so
@@ -515,7 +522,7 @@ exit 1
 	mustWriteExec(t, filepath.Join(bin, "tmux"), tmuxWrap)
 
 	sleeper := "#!/bin/sh\nexec sleep infinity\n"
-	mustWriteExec(t, filepath.Join(bin, "recto"), sleeper)
+	mustWriteExec(t, filepath.Join(bin, "recto"), "#!/bin/sh\nif [ \"$1\" = pr ]; then exit 0; fi\nexec sleep infinity\n")
 	mustWriteExec(t, filepath.Join(bin, "claude"), sleeper)
 
 	t.Cleanup(func() {
@@ -577,6 +584,21 @@ exit 1
 	}
 
 	prURL := "https://github.com/fakeowner/fakerepo/pull/42"
+	// The author force-pushes a replacement head. Only --refresh moves the
+	// reserved pin and review workspace; it also asks the running Recto through
+	// the public `recto pr` command to attach the new snapshot.
+	mustRun(t, seed, env, "git", "commit", "-q", "--allow-empty", "-m", "refreshed pr work")
+	mustRun(t, seed, env, "git", "push", "-q", "--force", "origin", "pr-branch")
+	mustRun(t, seed, env, "git", "push", "-q", "--force", "origin", "HEAD:refs/pull/42/head")
+	refreshOut := mustOutput(t, home, env, rigBin, "review", "--refresh", prURL)
+	if !strings.Contains(refreshOut, "refreshed") {
+		t.Errorf("explicit review refresh did not report the move:\n%s", refreshOut)
+	}
+	desc = mustOutput(t, filepath.Join(basedir, "fakerepo"), env,
+		"jj", "log", "-r", "@-", "--no-graph", "-T", "description")
+	if !strings.Contains(desc, "refreshed pr work") {
+		t.Errorf("review workspace did not move on explicit refresh:\n%s", desc)
+	}
 
 	// Repeating review is a local resume, not an attempt to recreate the
 	// basedir. An active rig switches; a parked one wakes at the same cwd.
@@ -622,6 +644,10 @@ exit 1
 	})
 	if _, err := os.Stat(basedir); err == nil {
 		t.Errorf("basedir still exists after down")
+	}
+	bookmark := reviewBookmarkName("pr-42", "fakerepo")
+	if revExists(repoDir, bookmark) {
+		t.Errorf("review bookmark %s survived teardown", bookmark)
 	}
 }
 

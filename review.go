@@ -17,11 +17,31 @@ import (
 // only ever offers review-requested PRs, which are others' by construction, so
 // it skips straight to the review pickup.
 func runReview(args []string) error {
+	refresh := false
+	filtered := args[:0]
+	for _, arg := range args {
+		if arg == "--refresh" {
+			refresh = true
+			continue
+		}
+		filtered = append(filtered, arg)
+	}
+	args = filtered
 	pick, args, err := extractAgentFlag(args)
 	if err != nil {
 		return err
 	}
 	defer pick.cleanup()
+	if refresh {
+		if len(args) != 1 {
+			return fmt.Errorf("usage: rig review --refresh https://github.com/OWNER/REPO/pull/NUMBER")
+		}
+		pr := parsePRURL(args[0])
+		if pr == nil {
+			return fmt.Errorf("usage: rig review --refresh https://github.com/OWNER/REPO/pull/NUMBER")
+		}
+		return refreshReviewRig(pr)
+	}
 	if len(args) >= 1 {
 		pr := parsePRURL(args[0])
 		if pr == nil {
@@ -47,6 +67,95 @@ func runReview(args []string) error {
 		return err
 	}
 	return reviewPickupPR(pr, meta, pick)
+}
+
+// refreshReviewRig is the only path that moves an existing review snapshot.
+// Fetching elsewhere stays harmless because the reserved bookmark keeps the
+// old PR head reachable; this command deliberately advances that bookmark and
+// rebases the empty review working-copy commit onto the new head.
+func refreshReviewRig(pr *prRef) error {
+	rigs, err := listRigs()
+	if err != nil {
+		return err
+	}
+	found, err := existingReviewRig(rigs, pr)
+	if err != nil {
+		return err
+	}
+	if found == nil {
+		return fmt.Errorf("no review rig found for %s", pr.URL())
+	}
+	m, err := readManifest(found.Path)
+	if err != nil {
+		return fmt.Errorf("reading manifest: %w", err)
+	}
+	repoName := reviewRepoForPR(m, pr)
+	if repoName == "" {
+		return fmt.Errorf("review rig has no repository for %s", pr.URL())
+	}
+	workspace := filepath.Join(found.Path, repoName)
+	if dirty, err := jjWorkspaceDirty(workspace); err != nil {
+		return fmt.Errorf("checking review workspace: %w", err)
+	} else if dirty {
+		return fmt.Errorf("review workspace has local changes; commit or discard them before refreshing")
+	}
+	source, err := jjSourceRepo(workspace)
+	if err != nil {
+		return fmt.Errorf("resolving source repo: %w", err)
+	}
+	bookmark := reviewBookmarkName(m.ID, repoName)
+	oldHead, err := jjCommitID(workspace, "@-")
+	if err != nil {
+		return fmt.Errorf("resolving current review head: %w", err)
+	}
+	if err := fetchReviewHead(source, bookmark, pr.Number); err != nil {
+		return err
+	}
+	newHead, err := jjCommitID(source, bookmark)
+	if err != nil {
+		return fmt.Errorf("resolving refreshed review head: %w", err)
+	}
+	if oldHead != newHead {
+		if err := jjRebaseWorkspace(workspace, bookmark); err != nil {
+			return fmt.Errorf("moving review workspace to refreshed head: %w", err)
+		}
+	}
+
+	// Recto owns the attached PR snapshot. Ask through its public command so a
+	// live viewer updates in place; a parked or older session will restore it on
+	// launch, so an unavailable companion is only a warning.
+	cmd := exec.Command("recto", "pr", pr.URL())
+	cmd.Dir = workspace
+	if output, err := cmd.CombinedOutput(); err != nil {
+		detail := strings.TrimSpace(string(output))
+		if detail == "" {
+			detail = err.Error()
+		}
+		fmt.Fprintf(os.Stderr, "rig: warning: refreshed workspace but could not update Recto: %s\n", detail)
+	}
+	if oldHead == newHead {
+		fmt.Fprintf(os.Stderr, "rig: review %s is already at %s\n", pr.URL(), shortCommitID(newHead))
+	} else {
+		fmt.Fprintf(os.Stderr, "rig: refreshed %s from %s to %s\n", pr.URL(), shortCommitID(oldHead), shortCommitID(newHead))
+	}
+	return activateRig(*found)
+}
+
+func reviewRepoForPR(m manifest, pr *prRef) string {
+	for subdir, repository := range m.Repos {
+		if strings.EqualFold(repository, pr.Owner+"/"+pr.Repo) &&
+			(len(m.Branches[subdir]) > 0 || len(m.Repos) == 1) {
+			return subdir
+		}
+	}
+	return ""
+}
+
+func shortCommitID(id string) string {
+	if len(id) > 12 {
+		return id[:12]
+	}
+	return id
 }
 
 // pickupPR materializes a rig around an existing PR, choosing authoring vs
@@ -144,14 +253,7 @@ func attachExistingReviewRig(pr *prRef) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("reading manifest: %w", err)
 	}
-	reviewRepo := ""
-	for subdir, repository := range m.Repos {
-		if strings.EqualFold(repository, pr.Owner+"/"+pr.Repo) &&
-			(len(m.Branches[subdir]) > 0 || len(m.Repos) == 1) {
-			reviewRepo = subdir
-			break
-		}
-	}
+	reviewRepo := reviewRepoForPR(m, pr)
 	if reviewRepo == "" {
 		return false, fmt.Errorf("review rig has no repository for %s", pr.URL())
 	}
@@ -183,9 +285,6 @@ func reviewPickupPR(pr *prRef, meta prMeta, pick *agentPick) error {
 	if err := ensureJJColocated(repoPath); err != nil {
 		return fmt.Errorf("colocating jj on %s: %w", repoPath, err)
 	}
-	if err := fetchPRHead(repoPath, meta.Branch, pr.Number); err != nil {
-		return err
-	}
 
 	// Task id is just pr-<n>: jj workspace names get the repo appended and are
 	// registered per source repo, and the basedir gets the title slug, so the
@@ -193,6 +292,10 @@ func reviewPickupPR(pr *prRef, meta prMeta, pick *agentPick) error {
 	// derives from the PR title (Linear-style id-plus-title shape) rather than
 	// the branch, which often embeds a whole ticket slug of its own.
 	rigID := fmt.Sprintf("pr-%d", pr.Number)
+	reviewBookmark := reviewBookmarkName(rigID, pr.Repo)
+	if err := fetchReviewHead(repoPath, reviewBookmark, pr.Number); err != nil {
+		return err
+	}
 	basedir, err := basedirPath(taskSlug(rigID, meta.Title))
 	if err != nil {
 		return err
@@ -208,7 +311,7 @@ func reviewPickupPR(pr *prRef, meta prMeta, pick *agentPick) error {
 	}
 
 	repo := repoRef{Owner: pr.Owner, Name: pr.Repo, Path: repoPath}
-	repoDest, err := addRepoWorkspace(basedir, rigID, repo, meta.Branch, meta.Branch)
+	repoDest, err := addRepoWorkspace(basedir, rigID, repo, reviewBookmark, meta.Branch)
 	if err != nil {
 		return err
 	}
@@ -450,24 +553,37 @@ func ensureGhqClone(owner, repo string) (string, error) {
 	return path, nil
 }
 
-// fetchPRHead fetches the PR's head commit into a local branch. Using the
-// pull/N/head ref works for fork PRs too, where the head branch isn't on
-// origin. Skips the fetch if we already have the branch (git errors on a
-// colon-form fetch into an existing ref).
-func fetchPRHead(repoPath, branch string, number int) error {
-	if gitHasBranch(repoPath, branch) {
-		return nil
-	}
-	spec := fmt.Sprintf("pull/%d/head:%s", number, branch)
+// reviewBookmarkName is a repo-local reachability root for the exact PR head a
+// review workspace started from. The workspace itself is not enough: when a
+// tracked remote branch is force-pushed, jj can abandon the old head and rebase
+// the empty working-copy commit even though nobody touched that workspace.
+func reviewBookmarkName(rigID, repoName string) string {
+	return "rig-review/" + jjWorkspaceName(rigID, repoName)
+}
+
+// fetchReviewHead fetches the fork-safe pull ref directly into Rig's local
+// bookmark. The force is deliberate: this function is also the primitive an
+// explicit refresh uses to move an existing snapshot. Untracking after jj
+// imports the Git ref matters on installations that auto-track every new
+// bookmark; a review pin must not join the ordinary push set.
+func fetchReviewHead(repoPath, bookmark string, number int) error {
+	spec := fmt.Sprintf("+pull/%d/head:refs/heads/%s", number, bookmark)
 	cmd := exec.Command("git", "-C", repoPath, "fetch", "origin", spec, "--quiet")
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("fetching pull/%d/head: %w", number, err)
 	}
+	// The command also imports the colocated Git ref before changing tracking.
+	// No matching remote is already the desired state, so verify the outcome
+	// below instead of making that benign case an error.
+	_ = exec.Command("jj", "-R", repoPath, "bookmark", "untrack", bookmark, "--remote", "origin").Run()
+	tracked, err := exec.Command("jj", "-R", repoPath, "bookmark", "list",
+		"--tracked", "--remote", "origin", "-T", `name ++ "\n"`, bookmark).Output()
+	if err != nil {
+		return fmt.Errorf("checking review bookmark %s: %w", bookmark, err)
+	}
+	if strings.TrimSpace(string(tracked)) != "" {
+		return fmt.Errorf("review bookmark %s is still tracking origin", bookmark)
+	}
 	return nil
-}
-
-func gitHasBranch(repoPath, branch string) bool {
-	return exec.Command("git", "-C", repoPath,
-		"show-ref", "--verify", "--quiet", "refs/heads/"+branch).Run() == nil
 }
