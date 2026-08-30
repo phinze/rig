@@ -352,3 +352,23 @@ func runRecto(args []string) error {
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return cmd.Run()
 }
+
+// forgetRectoWorkspace asks Recto to remove its own authored state. The
+// executable is optional and the storage contract stays entirely on Recto's
+// side of this CLI boundary.
+func forgetRectoWorkspace(workspace string) error {
+	if _, err := exec.LookPath("recto"); err != nil {
+		return nil
+	}
+	out, err := exec.Command(
+		"recto", "state", "forget", "--workspace-root", workspace,
+	).CombinedOutput()
+	if err != nil {
+		detail := strings.TrimSpace(string(out))
+		if detail != "" {
+			return fmt.Errorf("%w: %s", err, detail)
+		}
+		return err
+	}
+	return nil
+}

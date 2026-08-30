@@ -362,6 +362,10 @@ lacked: stop the rig's iso session *by exact name* (the same
 `dev-<id>-<repo>` rig env emits). Never `iso stop --all-sessions` from
 a workspace dir — iso's project scope is basename-derived, so that
 would also stop the main checkout's container of a same-named repo.
+Recto state follows the same ownership rule through a different mechanism:
+Rig records the workspace roots before teardown, then calls
+`recto state forget` best-effort once their bytes are gone. Recto owns the XDG
+layout and hashing; Rig owns only the fact that the workspace lifecycle ended.
 
 Division of labor stays the same as `rig env`: rig owns layout,
 manifest, and teardown knowledge; nix-config owns scheduling. The hourly

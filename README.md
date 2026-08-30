@@ -29,6 +29,8 @@ full-screen Recto tab with its viewer state intact. `rig recto cloud` pulls a
 repo into the main hot seat, and `rig recto cloud focus path:42` promotes and
 drives it in one step. Repo tabs do not carry permanent shells, but splitting
 from a Recto inherits that repo's working directory when one is useful.
+Recto keeps authored drafts in its own XDG state store; `rig down` asks Recto's
+public CLI to forget each repo workspace without learning that private layout.
 Parking records the hot repo and current agent conversation before killing the
 session. When run inside that session, `rig park` opens the radar first so you
 pick the next hop instead of falling out to an outer shell. Waking rebuilds this

@@ -120,9 +120,11 @@ cannot disagree.
 External tools learn the current rig through `rig info --format=json`, never by
 parsing `.rig/manifest.toml`. The manifest is Rig's private persistence format;
 the JSON shape is the compatibility boundary. The API exposes the absolute rig
-root so companion tools can own sibling state namespaces for the rig's
-lifetime. Review rigs also expose the current repository's durable PR locator,
-so Recto can restore PR context without learning Rig's private layout.
+root as lifecycle identity. Review rigs also expose the current repository's
+durable PR locator, so Recto can restore PR context without learning Rig's
+private layout. Recto owns its authored state beneath XDG for standalone and
+Rig launches alike. Teardown asks `recto state forget` about each workspace on
+a best-effort basis; Rig never parses Recto's files or computes its state key.
 
 The agent is selectable with `--agent`, which takes either the long name or the
 short one it goes by in the picker: `cld`, `cdx`, `agy`. `RIG_AGENT` moves the

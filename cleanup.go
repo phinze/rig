@@ -38,12 +38,13 @@ type teardownJob struct {
 	// every one of them. A retried job with no way to tell the two apart will
 	// happily dismantle the replacement, which is not hypothetical: a job stuck
 	// since 14:34 forgot the jj workspace of a fresh rig created at 17:31.
-	RigCreated    time.Time           `json:"rig_created,omitzero"`
-	ISOWorkspaces []isoCleanup        `json:"iso_workspaces,omitempty"`
-	Compose       []string            `json:"compose_projects,omitempty"`
-	ForgetGroups  map[string][]string `json:"forget_groups,omitempty"`
-	ScratchDirs   []string            `json:"scratch_dirs,omitempty"`
-	path          string
+	RigCreated      time.Time           `json:"rig_created,omitzero"`
+	ISOWorkspaces   []isoCleanup        `json:"iso_workspaces,omitempty"`
+	Compose         []string            `json:"compose_projects,omitempty"`
+	ForgetGroups    map[string][]string `json:"forget_groups,omitempty"`
+	ScratchDirs     []string            `json:"scratch_dirs,omitempty"`
+	RectoWorkspaces []string            `json:"recto_workspaces,omitempty"`
+	path            string
 }
 
 // supersededByNewRig reports whether the basedir this job targets is now
@@ -256,6 +257,9 @@ func prepareTeardownJob(basedir string, m manifest) (*teardownJob, error) {
 			continue
 		}
 		p := filepath.Join(basedir, e.Name())
+		if _, ok := m.Repos[e.Name()]; ok {
+			job.RectoWorkspaces = append(job.RectoWorkspaces, resolvePath(p))
+		}
 		if dirExists(filepath.Join(p, ".iso")) {
 			job.ISOWorkspaces = append(job.ISOWorkspaces, isoCleanup{
 				Workspace: p,
@@ -283,6 +287,7 @@ func prepareTeardownJob(basedir string, m manifest) (*teardownJob, error) {
 	for source := range job.ForgetGroups {
 		sort.Strings(job.ForgetGroups[source])
 	}
+	sort.Strings(job.RectoWorkspaces)
 
 	if _, err := exec.LookPath("docker"); err == nil {
 		projects, err := discoverComposeProjects(basedir)
@@ -409,6 +414,12 @@ func executeTeardownJobForPlatform(job *teardownJob, platform string) error {
 	if err := removeQuarantined(job); err != nil {
 		return err
 	}
+	// Recto owns its XDG layout and hashing. Ask through its public CLI only
+	// after the rig bytes are gone, as close as possible to the final tmux kill
+	// on Darwin so a still-running viewer cannot recreate the document.
+	if err := forgetRectoWorkspaces(job); err != nil {
+		return err
+	}
 	if err := os.Remove(job.path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("removing teardown job: %w", err)
 	}
@@ -420,6 +431,24 @@ func executeTeardownJobForPlatform(job *teardownJob, platform string) error {
 				return fmt.Errorf("tmux kill-session %s: %w (also restoring teardown job: %v)", job.Session, err, persistErr)
 			}
 			return fmt.Errorf("tmux kill-session %s: %w", job.Session, err)
+		}
+	}
+	return nil
+}
+
+// forgetRectoWorkspaces is best-effort with respect to Recto but durable with
+// respect to our own progress. A missing or failing companion must never hold a
+// rig hostage; once attempted, each workspace is removed from the teardown job
+// so a retry cannot later target a newly-created workspace at the same path.
+func forgetRectoWorkspaces(job *teardownJob) error {
+	for len(job.RectoWorkspaces) > 0 {
+		workspace := job.RectoWorkspaces[0]
+		if err := forgetRectoWorkspace(workspace); err != nil {
+			fmt.Fprintf(os.Stderr, "rig: warning: could not forget Recto state for %s: %v\n", workspace, err)
+		}
+		job.RectoWorkspaces = job.RectoWorkspaces[1:]
+		if err := writeTeardownJob(job); err != nil {
+			return fmt.Errorf("recording forgotten Recto workspace: %w", err)
 		}
 	}
 	return nil

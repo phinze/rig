@@ -165,3 +165,45 @@ func assertMainRecto(t *testing.T, panes []rigTmuxPane, repo string) {
 		t.Errorf("main = %q with recto %q, want %q", main.WindowName, recto.PaneRepo, mainWindowName(repo))
 	}
 }
+
+func TestForgetRectoWorkspacesUsesPublicCLI(t *testing.T) {
+	root := t.TempDir()
+	bin := filepath.Join(root, "bin")
+	mustMkdir(t, bin)
+	log := filepath.Join(root, "recto.log")
+	mustWriteExec(t, filepath.Join(bin, "recto"), "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$RECTO_LOG\"\n")
+	t.Setenv("PATH", bin)
+	t.Setenv("RECTO_LOG", log)
+
+	job := &teardownJob{
+		Version:         teardownJobVersion,
+		RectoWorkspaces: []string{"/tmp/rig/alpha", "/tmp/rig/beta"},
+		path:            filepath.Join(root, "job.json"),
+	}
+	if err := writeTeardownJob(job); err != nil {
+		t.Fatal(err)
+	}
+	if err := forgetRectoWorkspaces(job); err != nil {
+		t.Fatal(err)
+	}
+	got := string(mustReadFile(t, log))
+	want := "state forget --workspace-root /tmp/rig/alpha\n" +
+		"state forget --workspace-root /tmp/rig/beta\n"
+	if got != want {
+		t.Errorf("recto calls = %q, want %q", got, want)
+	}
+	restored, err := readTeardownJob(job.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(restored.RectoWorkspaces) != 0 {
+		t.Errorf("persisted Recto workspaces = %v, want none", restored.RectoWorkspaces)
+	}
+}
+
+func TestForgetRectoWorkspaceAllowsRectoToBeAbsent(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	if err := forgetRectoWorkspace("/tmp/rig/repo"); err != nil {
+		t.Fatal(err)
+	}
+}
