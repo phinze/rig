@@ -19,7 +19,7 @@ and `jreview` fish functions, reshaped for where the work actually is:
 - **Sandbox-aware basedir.** The basedir doubles as the boundary for
   terminal agents (bwrap / `--allowed-paths` / whatever), so containment is
   structural, not bolted on.
-- **Metadata + .envrc at the basedir.** A `.rig.toml` is the source of
+- **Metadata + .envrc at the basedir.** A `.rig/manifest.toml` is the source of
   truth; the basedir `.envrc` and `rig env` project `RIG_ID`,
   `RIG_BASEDIR`, and per-workspace keys so downstream tools (agent
   context, jj templates, `rig down`) read from one place. Projection is for
@@ -47,7 +47,8 @@ sessions that predate the move, and those age out.
 
 ```
 ~/workspaces/proj-123-fix-auth/
-  .rig.toml          # identity, lifecycle, runtime resume hints, repos, branches
+  .rig/
+    manifest.toml    # identity, lifecycle, runtime resume hints, repos, branches
   .envrc             # exports RIG_BASEDIR, RIG_ID; rig env adds the rest
   api/               # jj workspace of phinze/api
   web/               # jj workspace of phinze/web

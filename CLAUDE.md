@@ -13,7 +13,7 @@ captures *how it currently works* as the code grows.
 
 `rig up PROJ-123` resolves a task from its tracker, creates a basedir under
 `~/workspaces/`, drops a jj workspace for the primary repo inside it, writes
-a `.rig.toml` and `.envrc`, and spawns a tmux session ready for an agent to
+a `.rig/manifest.toml` and `.envrc`, and spawns a tmux session ready for an agent to
 work in. `rig new` starts the same shape from a free-form kickoff when there is
 no ticket yet, followed by an optional textarea for pasted context that lands in
 `KICKOFF.md` at the rig root (esc skips it; piped stdin fills it non-
@@ -118,10 +118,11 @@ every launch site goes through it so creation, add, resume, and resurrection
 cannot disagree.
 
 External tools learn the current rig through `rig info --format=json`, never by
-parsing `.rig.toml`. The manifest is Rig's private persistence format; the JSON
-shape is the compatibility boundary. Review rigs expose the current repository's
-durable PR locator there so Recto can restore PR context after a restart without making
-Rig's naming and directory conventions part of Recto.
+parsing `.rig/manifest.toml`. The manifest is Rig's private persistence format;
+the JSON shape is the compatibility boundary. The API exposes the absolute rig
+root so companion tools can own sibling state namespaces for the rig's
+lifetime. Review rigs also expose the current repository's durable PR locator,
+so Recto can restore PR context without learning Rig's private layout.
 
 The agent is selectable with `--agent`, which takes either the long name or the
 short one it goes by in the picker: `cld`, `cdx`, `agy`. `RIG_AGENT` moves the
@@ -135,7 +136,7 @@ reads the same name, exporting it meant a rig silently seeded the picker for the
 next rig you made from inside it. The name now belongs to you, not to whichever
 rig you're standing in — which is what makes setting it in home-manager a real
 global default. If you ever want a rig's agent readable from inside it, read
-`.rig.toml`, or pick a name that doesn't feed back into the picker.
+`.rig/manifest.toml`, or pick a name that doesn't feed back into the picker.
 
 Codex additionally gates every unseen directory behind a trust prompt, which a
 rig trips by construction: a fresh basedir and a fresh workspace under it, every

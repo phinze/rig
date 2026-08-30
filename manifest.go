@@ -12,7 +12,10 @@ import (
 	"time"
 )
 
-const manifestName = ".rig.toml"
+const (
+	manifestName       = ".rig/manifest.toml"
+	legacyManifestName = ".rig.toml"
+)
 
 type manifest struct {
 	ID      string
@@ -119,7 +122,25 @@ func writeManifest(basedir string, m manifest) error {
 	writeTable(&b, "review_prs", m.ReviewPRs)
 	writeBranchTable(&b, "branches", m.Branches)
 	writeIntTable(&b, "prs", m.PRs)
-	return os.WriteFile(filepath.Join(basedir, manifestName), []byte(b.String()), 0o644)
+	path := filepath.Join(basedir, manifestName)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	temporary := fmt.Sprintf("%s.tmp-%d", path, os.Getpid())
+	if err := os.WriteFile(temporary, []byte(b.String()), 0o644); err != nil {
+		return err
+	}
+	if err := os.Rename(temporary, path); err != nil {
+		_ = os.Remove(temporary)
+		return err
+	}
+	// A successful mutation is also the migration boundary for rigs created
+	// before the manifest gained its own namespace. Read-only commands leave
+	// old rigs untouched; their next real update moves them forward.
+	if err := os.Remove(filepath.Join(basedir, legacyManifestName)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 // writeIntTable emits a sorted [name] table of key = number pairs, unquoted so
@@ -221,7 +242,11 @@ func parseTOMLString(s string) string {
 // fields and two simple tables rig itself emits. Swap for a real TOML library
 // if the schema grows further.
 func readManifest(basedir string) (manifest, error) {
-	f, err := os.Open(filepath.Join(basedir, manifestName))
+	path, err := findManifestPath(basedir)
+	if err != nil {
+		return manifest{}, err
+	}
+	f, err := os.Open(path)
 	if err != nil {
 		return manifest{}, err
 	}
@@ -409,7 +434,7 @@ func findBasedir(start string) (string, error) {
 		return "", err
 	}
 	for {
-		if _, err := os.Stat(filepath.Join(dir, manifestName)); err == nil {
+		if _, err := findManifestPath(dir); err == nil {
 			return dir, nil
 		}
 		parent := filepath.Dir(dir)
@@ -418,4 +443,17 @@ func findBasedir(start string) (string, error) {
 		}
 		dir = parent
 	}
+}
+
+// findManifestPath prefers the namespaced manifest and falls back to the
+// original root file. Only Rig knows this compatibility rule; API consumers
+// never need to learn either layout.
+func findManifestPath(basedir string) (string, error) {
+	for _, name := range []string{manifestName, legacyManifestName} {
+		path := filepath.Join(basedir, name)
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			return path, nil
+		}
+	}
+	return "", os.ErrNotExist
 }

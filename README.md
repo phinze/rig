@@ -6,7 +6,7 @@ and the data model is happy with "this task touches two repos."
 
 `rig up PROJ-123` resolves a task, builds a basedir under `~/workspaces/`, drops
 a [jj](https://github.com/jj-vcs/jj) workspace for the repo inside it, writes a
-`.rig.toml` and `.envrc`, and spawns a tmux session ready for an agent to work
+`.rig/manifest.toml` and `.envrc`, and spawns a tmux session ready for an agent to work
 in. `rig new` starts that same shape from a free-form kickoff when there is no
 ticket yet, with a second step for pasting in whatever context the one-liner
 leaves out. The same wizard opens inside `rig radar` on ctrl-n, without leaving
@@ -43,7 +43,7 @@ showing carries an agent bar that ctrl-o cycles through `cld`, `cdx`, and `agy`,
 and an invocation that prompts for nothing gets the bar on its own. `--agent`
 names one without being asked, and `RIG_AGENT` in your shell moves the starting
 position for every new rig. The
-choice is saved in `.rig.toml`; generated `CLAUDE.md`, `AGENTS.md`, and
+choice is saved in `.rig/manifest.toml`; generated `CLAUDE.md`, `AGENTS.md`, and
 Antigravity workspace rules carry the same live task context, and `ls`, `radar`,
 and `sweep` read all three agents' session activity.
 

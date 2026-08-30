@@ -71,7 +71,7 @@ func TestManifestQuotedTitleSurvivesRewrites(t *testing.T) {
 func TestManifestLegacyScalarBranch(t *testing.T) {
 	dir := t.TempDir()
 	raw := "id = \"mir-9\"\n\n[repos]\nrig = \"phinze/rig\"\n\n[branches]\nrig = \"phinze/legacy\"\n"
-	if err := os.WriteFile(filepath.Join(dir, manifestName), []byte(raw), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, legacyManifestName), []byte(raw), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	m, err := readManifest(dir)
@@ -80,6 +80,27 @@ func TestManifestLegacyScalarBranch(t *testing.T) {
 	}
 	if !slices.Equal(m.Branches["rig"], []string{"phinze/legacy"}) {
 		t.Errorf("legacy scalar branch = %v, want [phinze/legacy]", m.Branches["rig"])
+	}
+}
+
+func TestLegacyManifestMigratesOnWrite(t *testing.T) {
+	dir := t.TempDir()
+	legacy := filepath.Join(dir, legacyManifestName)
+	if err := os.WriteFile(legacy, []byte("id = \"mir-9\"\ntitle = \"old rig\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m, err := readManifest(dir)
+	if err != nil || m.Title != "old rig" {
+		t.Fatalf("legacy read = %+v, %v", m, err)
+	}
+	if err := writeManifest(dir, m); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, manifestName)); err != nil {
+		t.Errorf("namespaced manifest missing after write: %v", err)
+	}
+	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+		t.Errorf("legacy manifest remains after migration: %v", err)
 	}
 }
 

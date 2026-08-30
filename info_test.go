@@ -22,6 +22,10 @@ func TestRigContextExposesCurrentReviewRepo(t *testing.T) {
 	if got.SchemaVersion != 1 || got.ID != "pr-42" || got.Kind != "review" {
 		t.Fatalf("identity = %+v", got)
 	}
+	wantRoot, _ := filepath.Abs(base)
+	if got.Root != wantRoot {
+		t.Errorf("root = %q, want %q", got.Root, wantRoot)
+	}
 	if got.Repo != "cloud" || got.Repository != "fakeowner/cloud" {
 		t.Errorf("repository context = %+v", got)
 	}

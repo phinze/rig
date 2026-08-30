@@ -10,11 +10,12 @@ import (
 )
 
 // rigContext is the small, stable machine-facing view of the rig containing
-// cwd. Consumers should ask Rig for this instead of learning .rig.toml's
+// cwd. Consumers should ask Rig for this instead of learning `.rig/`'s
 // storage schema or walking Rig's directory layout themselves.
 type rigContext struct {
 	SchemaVersion int    `json:"schema_version"`
 	ID            string `json:"id"`
+	Root          string `json:"root"`
 	Kind          string `json:"kind,omitempty"`
 	Repo          string `json:"repo,omitempty"`
 	Repository    string `json:"repository,omitempty"`
@@ -47,7 +48,11 @@ func runInfo(args []string) error {
 }
 
 func rigContextFor(basedir, cwd string, m manifest) rigContext {
-	context := rigContext{SchemaVersion: 1, ID: m.ID, Kind: m.Kind}
+	root, err := filepath.Abs(basedir)
+	if err != nil {
+		root = basedir
+	}
+	context := rigContext{SchemaVersion: 1, ID: m.ID, Root: root, Kind: m.Kind}
 	rel, err := filepath.Rel(basedir, cwd)
 	if err != nil || rel == "." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return context

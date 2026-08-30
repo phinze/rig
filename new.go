@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -95,7 +94,7 @@ func prepareNewRig(kickoff string) (newRigTarget, error) {
 		return newRigTarget{}, err
 	}
 	if _, err := os.Stat(basedir); err == nil {
-		if _, manifestErr := os.Stat(filepath.Join(basedir, manifestName)); manifestErr == nil {
+		if _, manifestErr := findManifestPath(basedir); manifestErr == nil {
 			return newRigTarget{}, fmt.Errorf("rig %q already exists; run `rig switch %s` (or `rig wake %s` if parked), or use a different kickoff", rigID, rigID, rigID)
 		}
 		return newRigTarget{}, fmt.Errorf("basedir already exists: %s", basedir)

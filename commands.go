@@ -459,7 +459,11 @@ func listRigs() ([]rigInfo, error) {
 			continue
 		}
 		base := filepath.Join(root, e.Name())
-		fi, err := os.Stat(filepath.Join(base, manifestName))
+		manifestPath, err := findManifestPath(base)
+		if err != nil {
+			continue
+		}
+		fi, err := os.Stat(manifestPath)
 		if err != nil {
 			continue
 		}

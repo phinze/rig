@@ -164,7 +164,7 @@ func TestNew(t *testing.T) {
 
 	rigID := "investigate-flaky-radar-refresh"
 	basedir := filepath.Join(home, "workspaces", rigID)
-	raw := string(mustReadFile(t, filepath.Join(basedir, ".rig.toml")))
+	raw := string(mustReadFile(t, filepath.Join(basedir, manifestName)))
 	for _, want := range []string{
 		`id    = "investigate-flaky-radar-refresh"`,
 		`title = "Investigate flaky radar refresh"`,
@@ -342,7 +342,7 @@ func TestUpDown(t *testing.T) {
 	basedir := filepath.Join(home, "workspaces", "fake-1-do-the-thing")
 	wantFiles := []string{
 		basedir,
-		filepath.Join(basedir, ".rig.toml"),
+		filepath.Join(basedir, manifestName),
 		filepath.Join(basedir, ".envrc"),
 		filepath.Join(basedir, ".rig", "bin", "gh"),
 		// Agent-facing breadcrumbs, rendered from the manifest.
@@ -363,7 +363,7 @@ func TestUpDown(t *testing.T) {
 		t.Errorf("expected rig not to create %s, got %v", repoEnvrc, err)
 	}
 
-	manifest, err := os.ReadFile(filepath.Join(basedir, ".rig.toml"))
+	manifest, err := os.ReadFile(filepath.Join(basedir, manifestName))
 	if err != nil {
 		t.Fatalf("reading manifest: %v", err)
 	}
@@ -535,7 +535,7 @@ exit 1
 	basedir := filepath.Join(home, "workspaces", "pr-42-fix-the-thing")
 	for _, p := range []string{
 		basedir,
-		filepath.Join(basedir, ".rig.toml"),
+		filepath.Join(basedir, manifestName),
 		filepath.Join(basedir, "fakerepo", ".jj"),
 	} {
 		if _, err := os.Stat(p); err != nil {
@@ -543,7 +543,7 @@ exit 1
 		}
 	}
 
-	manifest := string(mustReadFile(t, filepath.Join(basedir, ".rig.toml")))
+	manifest := string(mustReadFile(t, filepath.Join(basedir, manifestName)))
 	if !strings.Contains(manifest, `id    = "pr-42"`) {
 		t.Errorf("manifest missing id:\n%s", manifest)
 	}
@@ -590,7 +590,7 @@ exit 1
 	if !strings.Contains(wakeURL, "woke pr-42") {
 		t.Errorf("wake by PR URL should wake the review rig:\n%s", wakeURL)
 	}
-	if m := string(mustReadFile(t, filepath.Join(basedir, ".rig.toml"))); strings.Contains(m, "parked = \"") {
+	if m := string(mustReadFile(t, filepath.Join(basedir, manifestName))); strings.Contains(m, "parked = \"") {
 		t.Errorf("manifest still parked after wake by URL:\n%s", m)
 	}
 
@@ -715,7 +715,7 @@ exit 1
 	// issue's path (mir-75-fix-the-thing), where `rig up MIR-75` would have built
 	// it, so claude --resume can find the earlier sessions.
 	basedir := filepath.Join(home, "workspaces", "mir-75-fix-the-thing")
-	manifest := string(mustReadFile(t, filepath.Join(basedir, ".rig.toml")))
+	manifest := string(mustReadFile(t, filepath.Join(basedir, manifestName)))
 	if !strings.Contains(manifest, `id    = "mir-75"`) {
 		t.Errorf("manifest id should be the issue id, not pr-42:\n%s", manifest)
 	}
@@ -828,7 +828,7 @@ func TestReap(t *testing.T) {
 
 	// Backdate the manifest well past the window the old judge used, so this
 	// asserts "reap does not collect rigs" rather than "the rig was too young".
-	manifestPath := filepath.Join(basedir, ".rig.toml")
+	manifestPath := filepath.Join(basedir, manifestName)
 	raw, err := os.ReadFile(manifestPath)
 	if err != nil {
 		t.Fatal(err)
@@ -959,7 +959,7 @@ func TestParkWake(t *testing.T) {
 	if !strings.Contains(parkOut, "parked fake-1") {
 		t.Errorf("park output missing confirmation:\n%s", parkOut)
 	}
-	if m := string(mustReadFile(t, filepath.Join(basedir, ".rig.toml"))); !strings.Contains(m, "parked = \"") ||
+	if m := string(mustReadFile(t, filepath.Join(basedir, manifestName))); !strings.Contains(m, "parked = \"") ||
 		!strings.Contains(m, `session_id = "resume-me"`) {
 		t.Errorf("manifest missing parked runtime hints:\n%s", m)
 	}
@@ -989,7 +989,7 @@ func TestParkWake(t *testing.T) {
 	if !strings.Contains(wakeOut, "woke fake-1") {
 		t.Errorf("wake output missing confirmation:\n%s", wakeOut)
 	}
-	if m := string(mustReadFile(t, filepath.Join(basedir, ".rig.toml"))); strings.Contains(m, "parked = \"") {
+	if m := string(mustReadFile(t, filepath.Join(basedir, manifestName))); strings.Contains(m, "parked = \"") {
 		t.Errorf("manifest still parked after wake:\n%s", m)
 	}
 	if !hasSession() {
@@ -1213,7 +1213,7 @@ func TestDownLeavesRecoverableTombstone(t *testing.T) {
 		t.Errorf("resurrect should report the session it resumed:\n%s", out)
 	}
 
-	if _, err := os.Stat(filepath.Join(basedir, ".rig.toml")); err != nil {
+	if _, err := os.Stat(filepath.Join(basedir, manifestName)); err != nil {
 		t.Errorf("resurrected rig has no manifest: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(basedir, "fakerepo", ".jj")); err != nil {
