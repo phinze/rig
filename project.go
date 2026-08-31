@@ -154,17 +154,21 @@ func runProject(args []string) error {
 		return fmt.Errorf("writing project rig instructions: %w", err)
 	}
 	session, err := spawnProjectSession(basedir, sessionSpec{
-		agent: pick.kind,
-		prompt: fmt.Sprintf(
-			"You are coordinating the Linear project %q. Start with `rig project status --format=json`, assess project health and the live task rigs, then show me what needs attention. Draft any Linear or GitHub writes before posting them.",
-			project.Name,
-		),
+		agent:  pick.kind,
+		prompt: projectKickoff(project.Name),
 	})
 	if err != nil {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "rig: project %s — %s\n", project.Name, basedir)
 	return attachOrReport(session)
+}
+
+func projectKickoff(name string) string {
+	return fmt.Sprintf(
+		"You are coordinating the Linear project %q. Start with `rig project status --format=json`. Reconcile what is done, stale in Linear, missing, or blocked against the live task rigs, then propose the next actions needed to finish the project. Confirm those actions with me before acting on another rig or shared project state. Draft any Linear or GitHub writes before posting them.",
+		name,
+	)
 }
 
 func projectRigID(name string) string { return taskSlug("project", name) }

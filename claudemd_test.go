@@ -123,12 +123,24 @@ func TestProjectRigInstructionsDescribeControlPlane(t *testing.T) {
 		Tracker: "linear", TrackerID: "project-uuid", TrackerURL: "https://linear.app/miren/project/byoi",
 	}
 	got := renderRigInstructions(dir, m)
-	for _, want := range []string{"project overview rig", "does not own a code checkout", "rig project status --format=json", m.TrackerURL, "Ordinary sweep will not collect it"} {
+	for _, want := range []string{
+		"project overview rig",
+		"does not own a code checkout",
+		"rig project status --format=json",
+		m.TrackerURL,
+		"path to completion",
+		"project collaborator, not an independent executor",
+		"confirmation before merging",
+		"Ordinary sweep will not collect it",
+	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("project instructions lack %q:\n%s", want, got)
 		}
 	}
 	if strings.Contains(got, "jj workspaces") || strings.Contains(got, "main tmux window holds") {
 		t.Errorf("project instructions inherited task-workspace guidance:\n%s", got)
+	}
+	if strings.Contains(got, "project-level health") {
+		t.Errorf("project instructions retain health-oriented default:\n%s", got)
 	}
 }

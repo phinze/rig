@@ -190,7 +190,11 @@ func TestProjectRigCreatesRepositorylessRuntimeAndJoinedStatus(t *testing.T) {
 	}
 	waitFor(t, 3*time.Second, "project agent launch", func() bool {
 		raw, _ := os.ReadFile(marker)
-		return strings.Contains(string(raw), "./AGENTS.md") && strings.Contains(string(raw), "rig project status")
+		args := string(raw)
+		return strings.Contains(args, "./AGENTS.md") &&
+			strings.Contains(args, "rig project status") &&
+			strings.Contains(args, "propose the next actions") &&
+			strings.Contains(args, "Confirm those actions with me")
 	})
 
 	status := exec.Command(rigBin, "project", "status", "--format=json")
