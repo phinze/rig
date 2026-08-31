@@ -111,11 +111,11 @@ full-screen Recto windows. `rig recto <repo> [recto args...]` promotes one and
 optionally drives it. Ad hoc shells are ordinary splits from a repo's Recto,
 not permanent empty panes.
 
-Every Recto uses Recto's default branch-point base, review rig or authoring rig,
-because a rig is one task and the task's diff is the whole stack rather than
-whatever commit is on top. `rectoCommand` is the single launch contract, and
-every launch site goes through it so creation, add, resume, and resurrection
-cannot disagree.
+Every Recto uses Recto's stack-aware default base. An authoring rig prefers a
+named stack boundary and falls back to the trunk branch point; an attached
+review uses GitHub's recorded base commit. `rectoCommand` is the single launch
+contract, and every launch site goes through it so creation, add, resume, and
+resurrection cannot disagree.
 
 External tools learn the current rig through `rig info --format=json`, never by
 parsing `.rig/manifest.toml`. The manifest is Rig's private persistence format;

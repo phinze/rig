@@ -521,9 +521,8 @@ exit 1
 	tmuxWrap := fmt.Sprintf("#!/bin/sh\nexec %s -L rig-e2e-review \"$@\"\n", realTmux)
 	mustWriteExec(t, filepath.Join(bin, "tmux"), tmuxWrap)
 
-	sleeper := "#!/bin/sh\nexec sleep infinity\n"
 	mustWriteExec(t, filepath.Join(bin, "recto"), "#!/bin/sh\nif [ \"$1\" = pr ]; then exit 0; fi\nexec sleep infinity\n")
-	mustWriteExec(t, filepath.Join(bin, "claude"), sleeper)
+	mustWriteExec(t, filepath.Join(bin, "claude"), "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$HOME/claude.args\"\nexec sleep infinity\n")
 
 	t.Cleanup(func() {
 		_ = exec.Command(realTmux, "-L", "rig-e2e-review", "kill-server").Run()
@@ -536,6 +535,14 @@ exit 1
 	reviewCmd.Env = env
 	if out, err := reviewCmd.CombinedOutput(); err != nil {
 		t.Fatalf("rig review: %v\n%s", err, out)
+	}
+	waitFor(t, 10*time.Second, "review agent to receive its prompt", func() bool {
+		_, err := os.Stat(filepath.Join(home, "claude.args"))
+		return err == nil
+	})
+	agentArgs := string(mustReadFile(t, filepath.Join(home, "claude.args")))
+	if !strings.Contains(agentArgs, "/review-pr 42 (fix the thing).") {
+		t.Errorf("review prompt did not carry the PR title:\n%s", agentArgs)
 	}
 
 	// Basedir slug derives from the PR title, not the branch name.

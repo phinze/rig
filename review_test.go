@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestReviewBookmarkPinsWorkspaceAcrossRewrittenFetch(t *testing.T) {
@@ -164,5 +165,40 @@ func TestExistingReviewRigAcceptsLegacySingleRepoManifest(t *testing.T) {
 	}
 	if found == nil {
 		t.Fatal("expected a legacy single-repo review manifest to match")
+	}
+}
+
+func TestReviewPickerHidesInFlightRigsAndKeepsParkedRigs(t *testing.T) {
+	root := t.TempDir()
+	active := filepath.Join(root, "active")
+	parked := filepath.Join(root, "parked")
+	for path, m := range map[string]manifest{
+		active: {ID: "pr-42", Kind: "review", Repos: map[string]string{"rfd": "fakeowner/rfd"}},
+		parked: {ID: "pr-43", Kind: "review", Repos: map[string]string{"rfd": "fakeowner/rfd"}},
+	} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeManifest(path, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rigs := []rigInfo{
+		{ID: "pr-42", Path: active},
+		{ID: "pr-43", Path: parked, Parked: time.Now()},
+	}
+	rows := []string{
+		"fakeowner/rfd\t#42\tActive review\thttps://github.com/fakeowner/rfd/pull/42",
+		"fakeowner/rfd\t#43\tParked review\thttps://github.com/fakeowner/rfd/pull/43",
+		"fakeowner/other\t#42\tSame number, other repo\thttps://github.com/fakeowner/other/pull/42",
+	}
+
+	got, err := withoutInFlightReviewRigs(rows, rigs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := rows[1:]
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("filtered rows:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }

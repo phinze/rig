@@ -321,8 +321,8 @@ func reviewPickupPR(pr *prRef, meta prMeta, pick *agentPick) error {
 		repo:     repo.Name,
 		agent:    pick.kind,
 		prompt: fmt.Sprintf(
-			"/review-pr %d — you are already on the PR branch in a dedicated jj workspace; skip branch verification",
-			pr.Number,
+			"/review-pr %d (%s). You are already on the PR branch in a dedicated jj workspace; skip branch verification.",
+			pr.Number, meta.Title,
 		),
 	}
 	session, err := spawnSession(basedir, repoDest, sess)
@@ -472,6 +472,17 @@ func pickReviewPR(pick *agentPick) (*prRef, error) {
 	if len(rows) == 0 || (len(rows) == 1 && rows[0] == "") {
 		return nil, fmt.Errorf("no open PRs awaiting your review")
 	}
+	rigs, err := listRigs()
+	if err != nil {
+		return nil, err
+	}
+	rows, err = withoutInFlightReviewRigs(rows, rigs)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("all open PRs awaiting your review already have rigs in flight")
+	}
 
 	sel, err := fzfSelect(rows, "Review PR: ", pick)
 	if err != nil {
@@ -481,9 +492,13 @@ func pickReviewPR(pick *agentPick) (*prRef, error) {
 		return nil, nil
 	}
 
-	cols := strings.SplitN(sel, "\t", 4)
+	return reviewPRFromPickerRow(sel)
+}
+
+func reviewPRFromPickerRow(row string) (*prRef, error) {
+	cols := strings.SplitN(row, "\t", 4)
 	if len(cols) < 2 {
-		return nil, fmt.Errorf("unexpected picker selection: %q", sel)
+		return nil, fmt.Errorf("unexpected picker selection: %q", row)
 	}
 	owner, repo, ok := strings.Cut(cols[0], "/")
 	if !ok {
@@ -494,6 +509,28 @@ func pickReviewPR(pick *agentPick) (*prRef, error) {
 		return nil, fmt.Errorf("unexpected PR number in selection: %q", cols[1])
 	}
 	return &prRef{Owner: owner, Repo: repo, Number: n}, nil
+}
+
+// withoutInFlightReviewRigs removes work already represented by an active
+// review rig. Parked reviews stay pickable: selecting one is an intentional
+// request to wake its existing workspace and conversation.
+func withoutInFlightReviewRigs(rows []string, rigs []rigInfo) ([]string, error) {
+	kept := make([]string, 0, len(rows))
+	for _, row := range rows {
+		pr, err := reviewPRFromPickerRow(row)
+		if err != nil {
+			return nil, err
+		}
+		found, err := existingReviewRig(rigs, pr)
+		if err != nil {
+			return nil, err
+		}
+		if found != nil && found.Parked.IsZero() {
+			continue
+		}
+		kept = append(kept, row)
+	}
+	return kept, nil
 }
 
 // prMeta is what a single `gh pr view` tells us about a PR at pickup time: its
