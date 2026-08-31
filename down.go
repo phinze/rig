@@ -196,8 +196,9 @@ func unmergedPRsBlocker(basedir string) string {
 	// Review rigs are exempt: an OPEN PR is the whole point of reviewing it, not
 	// a reason to keep the basedir. Their terminal condition ("you've posted a
 	// review") is enforced by the shared rigTeardownBlocker, so this eager
-	// all-PRs-merged gate would only ever wrongly refuse them.
-	if m.isReview() {
+	// all-PRs-merged gate would only ever wrongly refuse them. Project rigs own no
+	// repository work at all, so they are exempt for the same structural reason.
+	if !m.isAuthoring() {
 		return ""
 	}
 	subdirs := make([]string, 0, len(m.Repos))

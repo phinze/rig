@@ -21,6 +21,12 @@ func main() {
 		err = runUp(args)
 	case "new":
 		err = runNew(args)
+	case "project":
+		err = runProject(args)
+	case "dispatch":
+		err = runDispatch(args)
+	case "relay":
+		err = runRelay(args)
 	case "review":
 		err = runReview(args)
 	case "pr":
@@ -127,6 +133,18 @@ usage:
                             stdin supplies it without a prompt), then picks the
                             repo; the same TUI opens inside radar on ctrl-n;
                             starts at trunk with no branch recorded yet)
+  rig project [query|url|uuid] [--agent AGENT]
+                            create or enter a repositoryless Linear project rig
+                            (pick when omitted or ambiguous; stores the project
+                            UUID and runs an agent from the rig root)
+  rig project status [--format=json|table]
+                            join the current Linear project's issues to live
+                            rig, agent, PR, review, and CI state
+  rig dispatch <rig-or-issue> <prompt>
+                            wake a stopped or parked task rig and resume its
+                            agent with a new assignment, without switching to it
+  rig relay <discovery>     send a private local discovery from a Linear issue
+                            rig to that project's overview inbox
   rig review [pr-url] [--agent AGENT] [--refresh]
                             pitch a review rig for someone else's PR
                             (url, or fzf picker over review-requested PRs;

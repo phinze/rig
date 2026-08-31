@@ -46,12 +46,15 @@ func tombstoneRetentionLabel() string {
 // no query that finds the session again. That asymmetry is the whole design:
 // the tombstone is cheap to write and impossible to reconstruct.
 type tombstone struct {
-	Version int    `json:"version"`
-	ID      string `json:"id"`
-	Title   string `json:"title"`
-	Basedir string `json:"basedir"`
-	Kind    string `json:"kind,omitempty"`
-	Agent   string `json:"agent,omitempty"`
+	Version    int    `json:"version"`
+	ID         string `json:"id"`
+	Title      string `json:"title"`
+	Basedir    string `json:"basedir"`
+	Kind       string `json:"kind,omitempty"`
+	Agent      string `json:"agent,omitempty"`
+	Tracker    string `json:"tracker,omitempty"`
+	TrackerID  string `json:"tracker_id,omitempty"`
+	TrackerURL string `json:"tracker_url,omitempty"`
 	// Created is the rig's own birthday, carried over from the manifest; Died
 	// is when teardown ran. Both are needed to render "lived 3 days, died 2h
 	// ago", which is how you recognise a rig you'd forgotten the name of.
@@ -125,20 +128,23 @@ func recordTombstone(basedir string, m manifest, sources map[string]string) erro
 		agent = agentClaude
 	}
 	t := &tombstone{
-		Version:  tombstoneVersion,
-		ID:       m.ID,
-		Title:    m.Title,
-		Basedir:  resolvePath(basedir),
-		Kind:     m.Kind,
-		Agent:    string(agent),
-		Created:  m.Created,
-		Died:     time.Now(),
-		Parked:   !m.Parked.IsZero(),
-		Repos:    m.Repos,
-		Sources:  sources,
-		Branches: m.Branches,
-		PRs:      m.PRs,
-		Session:  agentSessionRef(home, basedir, agent),
+		Version:    tombstoneVersion,
+		ID:         m.ID,
+		Title:      m.Title,
+		Basedir:    resolvePath(basedir),
+		Kind:       m.Kind,
+		Agent:      string(agent),
+		Tracker:    m.Tracker,
+		TrackerID:  m.TrackerID,
+		TrackerURL: m.TrackerURL,
+		Created:    m.Created,
+		Died:       time.Now(),
+		Parked:     !m.Parked.IsZero(),
+		Repos:      m.Repos,
+		Sources:    sources,
+		Branches:   m.Branches,
+		PRs:        m.PRs,
+		Session:    agentSessionRef(home, basedir, agent),
 	}
 	return writeTombstone(t)
 }

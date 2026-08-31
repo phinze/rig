@@ -765,6 +765,45 @@ function, a radar row already knows its own next step, and the board can
 grow per-row verbs that call into the same policy instead of duplicating it.
 That's the right order — the pass earns the policy, the board borrows it.
 
+## Project overview rigs (`rig project`)
+
+A task rig answers "do this piece of work." A project overview rig answers a
+different question: "is the whole body of work still coherent and moving?"
+Trying to express that as a large task rig gives it the wrong ownership model.
+It does not own a branch, a jj workspace, or a Recto diff, and it should not
+reach sideways into task workspaces to make changes. It is a persistent control
+plane over the task rigs that do own those things.
+
+`rig project <query|url|uuid>` therefore creates a repositoryless rig whose
+agent starts at the basedir root. The manifest records `kind = "project"`, the
+Linear tracker, the project's UUID, and its human URL. UUID is load-bearing:
+the GraphQL schema exposes a project identifier field, but Linear workspaces can
+have that feature disabled. A name is presentation and a URL is navigation;
+neither should be lifecycle identity.
+
+The project's core read model is `rig project status --format=json`. It fetches
+the complete paginated Linear issue set, narrows the local rig inventory to
+those issue identities, and only then asks GitHub for their PR state. The result
+puts Linear scope, state, progress, health, and updates beside each task rig's
+agent attention, parked state, PR, review, and CI. New manifests carry explicit
+tracker identity; the join falls back to the historical `mir-123` local id so
+old rigs remain visible without migration.
+
+Two small commands close the orchestration loop. `rig dispatch` restores a
+stopped or parked task rig without navigating to it and includes the new
+assignment in the agent's resume command. It refuses a live agent process,
+because tmux cannot tell Rig whether that process is safely waiting for input.
+`rig relay` sends a project-relevant discovery in the other direction, through
+Rig's existing private notification store. It does not post to Linear. The
+project agent decides where the fact belongs and drafts the external write for
+approval, keeping Linear as the durable shared record without turning every
+half-formed observation into public activity.
+
+Project rigs have their own terminal condition too: explicit human teardown.
+Sweep keeps them in the quiet inventory but never checks them for collection.
+The ordinary tombstone captures their tracker identity and agent session, and
+resurrection rebuilds the repositoryless shape directly.
+
 ## Open questions
 
 - ~~**Language.**~~ Answered: Go. Fish was at its ceiling for this shape

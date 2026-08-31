@@ -41,6 +41,9 @@ func runAdd(args []string) error {
 	if err != nil {
 		return fmt.Errorf("reading manifest: %w", err)
 	}
+	if m.isProject() {
+		return fmt.Errorf("project rigs do not own repository workspaces")
+	}
 
 	repoPath, err := ensureGhqClone(owner, repo)
 	if err != nil {
@@ -173,6 +176,10 @@ type rigStatus struct {
 	ID          string     `json:"id"`
 	Slug        string     `json:"slug"`
 	Title       string     `json:"title"`
+	Kind        string     `json:"kind,omitempty"`
+	Tracker     string     `json:"tracker,omitempty"`
+	TrackerID   string     `json:"tracker_id,omitempty"`
+	TrackerURL  string     `json:"tracker_url,omitempty"`
 	Path        string     `json:"path"`
 	Created     time.Time  `json:"created"`
 	LastTouched time.Time  `json:"last_touched"`
@@ -232,6 +239,10 @@ func rigStatuses(rigs []rigInfo, home string, now time.Time) []rigStatus {
 			ID:          r.ID,
 			Slug:        r.Slug,
 			Title:       r.Title,
+			Kind:        r.Kind,
+			Tracker:     r.Tracker,
+			TrackerID:   r.TrackerID,
+			TrackerURL:  r.TrackerURL,
 			Path:        r.Path,
 			Created:     r.Created,
 			LastTouched: r.LastTouched,
@@ -411,6 +422,10 @@ type rigInfo struct {
 	ID          string
 	Slug        string // basedir directory name
 	Title       string
+	Kind        string
+	Tracker     string
+	TrackerID   string
+	TrackerURL  string
 	Path        string // absolute basedir path
 	Created     time.Time
 	LastTouched time.Time // durable MRU stamp; falls back to Created for legacy rigs
@@ -481,7 +496,12 @@ func listRigs() ([]rigInfo, error) {
 		if touched.IsZero() {
 			touched = created
 		}
-		rigs = append(rigs, rigInfo{ID: m.ID, Slug: e.Name(), Title: m.Title, Path: base, Created: created, LastTouched: touched, Parked: m.Parked, Repos: manifestRepos(m)})
+		rigs = append(rigs, rigInfo{
+			ID: m.ID, Slug: e.Name(), Title: m.Title, Kind: m.Kind,
+			Tracker: m.Tracker, TrackerID: m.TrackerID, TrackerURL: m.TrackerURL,
+			Path: base, Created: created, LastTouched: touched, Parked: m.Parked,
+			Repos: manifestRepos(m),
+		})
 	}
 	sort.Slice(rigs, func(i, j int) bool { return rigs[i].Created.Before(rigs[j].Created) })
 	return rigs, nil

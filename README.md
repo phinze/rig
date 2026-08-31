@@ -16,6 +16,16 @@ request.
 `rig add owner/repo` brings more repos under the same rig, `rig ls` / `rig cd`
 move between rigs in flight, and `rig down` breaks it all back down.
 
+`rig project <name-or-url>` creates a different, repositoryless rig for
+coordinating a whole Linear project. `rig project status` joins project scope
+and issue state to the live task rigs and their agents, PRs, reviews, and CI.
+From there, `rig dispatch MIR-123 <prompt>` can wake a parked task agent with a
+new assignment without switching sessions. Task agents send project-relevant
+discoveries back through the private local `rig relay` inbox, leaving the
+overview agent to connect them to sibling issues and draft any Linear update.
+Project rigs are persistent coordination context, so sweep shows but never
+collects them.
+
 `rig sweep` is the Monday-morning pass. It works out every rig's next step and
 draws them as a board you check off: merged work pre-checked to tear down,
 approved-and-green PRs offered to merge but left unchecked, and the rigs that

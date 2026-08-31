@@ -185,3 +185,28 @@ func TestAgentLaunchCommand(t *testing.T) {
 		}
 	}
 }
+
+func TestProjectAgentLaunchCommandUsesRootInstructions(t *testing.T) {
+	got := agentCodex.launchProjectCommand("assess the project")
+	want := "codex --dangerously-bypass-approvals-and-sandbox 'Read the project rig instructions in ./AGENTS.md first. assess the project'"
+	if got != want {
+		t.Errorf("project launch = %q, want %q", got, want)
+	}
+}
+
+func TestAgentResumeCommandsCarryDispatchPrompt(t *testing.T) {
+	prompt := "Run address-pr-review and handle the latest feedback."
+	cases := []struct {
+		agent agentKind
+		want  string
+	}{
+		{agentClaude, "claude --dangerously-skip-permissions --resume 'session-1' 'Run address-pr-review and handle the latest feedback.'"},
+		{agentCodex, "codex --dangerously-bypass-approvals-and-sandbox resume 'session-1' 'Run address-pr-review and handle the latest feedback.'"},
+		{agentAntigravity, "agy --dangerously-skip-permissions --conversation 'session-1' --prompt-interactive 'Run address-pr-review and handle the latest feedback.'"},
+	}
+	for _, tc := range cases {
+		if got := tc.agent.resumeCommandWithPrompt("session-1", prompt); got != tc.want {
+			t.Errorf("%s dispatch resume = %q, want %q", tc.agent, got, tc.want)
+		}
+	}
+}

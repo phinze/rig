@@ -788,3 +788,16 @@ func TestSweepRankOrdersTheWalk(t *testing.T) {
 		}
 	}
 }
+
+func TestPlanSweepKeepsProjectRigsAsPersistentContext(t *testing.T) {
+	dir := t.TempDir()
+	if err := writeManifest(dir, manifest{ID: "project-byoi", Title: "Bring Your Own Image", Kind: "project"}); err != nil {
+		t.Fatal(err)
+	}
+	rig := rigInfo{ID: "project-byoi", Title: "Bring Your Own Image", Kind: "project", Path: dir}
+	status := rigStatus{ID: rig.ID, Title: rig.Title, Kind: rig.Kind, Path: dir}
+	plans := planSweep([]rigInfo{rig}, []rigStatus{status}, t.TempDir(), map[string]bool{}, nil)
+	if len(plans) != 1 || plans[0].action != actionNone || plans[0].detail != "project overview" || plans[0].collect {
+		t.Fatalf("project sweep plan = %+v", plans)
+	}
+}

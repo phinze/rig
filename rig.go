@@ -206,6 +206,34 @@ func spawnSession(basedir, paneCwd string, sess sessionSpec) (string, error) {
 	return session, nil
 }
 
+// spawnProjectSession creates the repositoryless control-plane variant of a
+// rig session. Its agent starts at the basedir root and there is deliberately
+// no Recto split: a project rig observes task rigs rather than owning a diff.
+func spawnProjectSession(basedir string, sess sessionSpec) (string, error) {
+	session := tmuxSessionName(basedir)
+	if tmuxHasSession(session) {
+		return session, nil
+	}
+	agentPane, mainWindow, err := tmuxNewRigSession(session, mainWindowName(""), basedir)
+	if err != nil {
+		return "", fmt.Errorf("tmux new-session: %w", err)
+	}
+	if err := markRigMainWindow(mainWindow, ""); err != nil {
+		return "", fmt.Errorf("marking main window: %w", err)
+	}
+	if err := markRigPane(agentPane, rigPaneAgent, ""); err != nil {
+		return "", fmt.Errorf("marking agent pane: %w", err)
+	}
+	agentLine := sess.command
+	if agentLine == "" {
+		agentLine = sess.agent.launchProjectCommand(sess.prompt)
+	}
+	if err := tmuxSendKeys(agentPane, agentLine); err != nil {
+		return "", fmt.Errorf("tmux send-keys: %w", err)
+	}
+	return session, nil
+}
+
 // attachOrReport attaches to the session when stdin is a tty, otherwise prints
 // how to attach manually (e.g. when invoked from a script or test).
 func attachOrReport(session string) error {

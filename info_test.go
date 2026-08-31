@@ -34,6 +34,21 @@ func TestRigContextExposesCurrentReviewRepo(t *testing.T) {
 	}
 }
 
+func TestRigContextExposesProjectIdentityAtRoot(t *testing.T) {
+	base := filepath.Join("", "workspaces", "project-byoi")
+	m := manifest{
+		ID: "project-byoi", Kind: "project", Tracker: "linear",
+		TrackerID: "project-uuid", TrackerURL: "https://linear.app/miren/project/byoi",
+	}
+	got := rigContextFor(base, base, m)
+	if got.Kind != "project" || got.Tracker != "linear" || got.TrackerID != "project-uuid" || got.TrackerURL != m.TrackerURL {
+		t.Fatalf("project context = %+v", got)
+	}
+	if got.Repo != "" || got.Repository != "" || got.ReviewPR != "" {
+		t.Fatalf("repositoryless project grew repo context: %+v", got)
+	}
+}
+
 func TestRigContextKeepsManifestInternalsBehindCompatibilityAPI(t *testing.T) {
 	base := filepath.Join("", "workspaces", "pr-225-fix")
 	m := manifest{

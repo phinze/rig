@@ -134,21 +134,42 @@ func mainRepoFromPanes(basedir string, m manifest, panes []rigTmuxPane) string {
 	return ""
 }
 
-func rigResumeCommand(m manifest) string {
+func rigResumeCommand(m manifest, prompt ...string) string {
+	next := ""
+	if len(prompt) > 0 {
+		next = strings.TrimSpace(prompt[0])
+	}
 	if m.SessionID != "" {
-		return m.agentKind().resumeCommand(m.SessionID)
+		return m.agentKind().resumeCommandWithPrompt(m.SessionID, next)
+	}
+	if next != "" {
+		if m.isProject() {
+			return m.agentKind().launchProjectCommand(next)
+		}
+		return m.agentKind().launchCommand(next)
 	}
 	label := m.ID
 	if m.Title != "" {
 		label += " (" + m.Title + ")"
 	}
-	return m.agentKind().launchCommand("Resume work on this rig: " + label + ". Read the rig instructions and existing workspace state, then continue from where the previous session left off.")
+	promptText := "Resume work on this rig: " + label + ". Read the rig instructions and existing workspace state, then continue from where the previous session left off."
+	if m.isProject() {
+		return m.agentKind().launchProjectCommand(promptText)
+	}
+	return m.agentKind().launchCommand(promptText)
 }
 
 // ensureRigRuntime brings a rig back to the same carousel shape it had at
 // creation. It also repairs the common half-alive case where tmux survived but
 // the agent exited to its shell.
 func ensureRigRuntime(basedir string, m manifest) (string, error) {
+	return ensureRigRuntimeWithPrompt(basedir, m, "")
+}
+
+func ensureRigRuntimeWithPrompt(basedir string, m manifest, prompt string) (string, error) {
+	if m.isProject() {
+		return ensureProjectRuntime(basedir, m, prompt)
+	}
 	repo := m.MainRepo
 	if m.Repos[repo] == "" || !dirExists(filepath.Join(basedir, repo)) {
 		repo = firstRigRepo(basedir, m)
@@ -158,7 +179,7 @@ func ensureRigRuntime(basedir string, m manifest) (string, error) {
 	}
 	paneCwd := filepath.Join(basedir, repo)
 	session := tmuxSessionName(basedir)
-	command := rigResumeCommand(m)
+	command := rigResumeCommand(m, prompt)
 
 	if !tmuxHasSession(session) {
 		var err error
@@ -249,6 +270,79 @@ func ensureRigRuntime(basedir string, m manifest) (string, error) {
 		line := "cd " + shellQuote(paneCwd) + " && " + command
 		if err := tmuxSendKeys(agentPane.PaneID, line); err != nil {
 			return "", fmt.Errorf("resuming agent: %w", err)
+		}
+	}
+	if err := tmuxSelectPane(agentPane.PaneID); err != nil {
+		return "", err
+	}
+	return session, nil
+}
+
+// ensureProjectRuntime repairs the agent-only session used by a project rig.
+// It mirrors the agent half of ensureRigRuntime without inventing a fake repo
+// or starting Recto in a directory that has no jj workspace.
+func ensureProjectRuntime(basedir string, m manifest, prompt string) (string, error) {
+	session := tmuxSessionName(basedir)
+	command := rigResumeCommand(m, prompt)
+	if !tmuxHasSession(session) {
+		return spawnProjectSession(basedir, sessionSpec{agent: m.agentKind(), command: command})
+	}
+
+	panes, err := tmuxRigPanes(session)
+	if err != nil {
+		return "", err
+	}
+	var mainWindow, agentPane rigTmuxPane
+	for _, p := range panes {
+		if p.WindowRole == rigWindowMain || (mainWindow.WindowID == "" && p.WindowIdx == "0") {
+			mainWindow = p
+		}
+		if p.PaneRole == rigPaneAgent {
+			agentPane = p
+		}
+	}
+	if mainWindow.WindowID == "" {
+		return "", fmt.Errorf("project rig session %s has no main window", session)
+	}
+	if agentPane.PaneID == "" {
+		for _, p := range panes {
+			if p.WindowID == mainWindow.WindowID && p.PaneRole != rigPaneRecto {
+				agentPane = p
+				break
+			}
+		}
+	}
+	if agentPane.PaneID == "" {
+		pane, err := tmuxSplitShell(mainWindow.WindowID, basedir)
+		if err != nil {
+			return "", fmt.Errorf("restoring project agent pane: %w", err)
+		}
+		agentPane = rigTmuxPane{PaneID: pane, WindowID: mainWindow.WindowID, Command: filepath.Base(os.Getenv("SHELL"))}
+	}
+	if err := markRigMainWindow(mainWindow.WindowID, ""); err != nil {
+		return "", err
+	}
+	if err := tmuxRenameWindow(mainWindow.WindowID, mainWindowName("")); err != nil {
+		return "", err
+	}
+	if err := markRigPane(agentPane.PaneID, rigPaneAgent, ""); err != nil {
+		return "", err
+	}
+
+	selfCaller := agentPane.PaneID == os.Getenv("TMUX_PANE")
+	rigCaller := filepath.Base(strings.TrimSpace(agentPane.Command)) == filepath.Base(os.Args[0])
+	if selfCaller && (rigCaller || isShellCommand(agentPane.Command)) {
+		if err := os.Chdir(basedir); err != nil {
+			return "", err
+		}
+		if err := syscall.Exec("/bin/sh", []string{"sh", "-c", "exec " + command}, os.Environ()); err != nil {
+			return "", fmt.Errorf("resuming project agent in current pane: %w", err)
+		}
+	}
+	if isShellCommand(agentPane.Command) {
+		line := "cd " + shellQuote(basedir) + " && " + command
+		if err := tmuxSendKeys(agentPane.PaneID, line); err != nil {
+			return "", fmt.Errorf("resuming project agent: %w", err)
 		}
 	}
 	if err := tmuxSelectPane(agentPane.PaneID); err != nil {

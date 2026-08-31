@@ -187,6 +187,25 @@ func TestManifestKindRoundTrip(t *testing.T) {
 	}
 }
 
+func TestManifestProjectIdentityRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	m := manifest{
+		ID: "project-bring-your-own-image", Title: "Bring Your Own Image", Kind: "project",
+		Tracker: "linear", TrackerID: "2371b91f-53ba-4c7d-aa0b-7a1174451379",
+		TrackerURL: "https://linear.app/miren/project/bring-your-own-image",
+	}
+	if err := writeManifest(dir, m); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.isProject() || got.isAuthoring() || got.Tracker != m.Tracker || got.TrackerID != m.TrackerID || got.TrackerURL != m.TrackerURL {
+		t.Fatalf("project identity did not round-trip: %+v", got)
+	}
+}
+
 func TestManifestAgentRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	if err := writeManifest(dir, manifest{ID: "mir-7", Agent: "codex"}); err != nil {

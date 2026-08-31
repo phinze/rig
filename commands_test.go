@@ -124,6 +124,8 @@ func TestEncodeRigsJSON(t *testing.T) {
 		ID:          "mir-75",
 		Slug:        "mir-75-add-zig-stack",
 		Title:       "add zig stack",
+		Tracker:     "linear",
+		TrackerID:   "MIR-75",
 		Path:        "/home/phinze/workspaces/mir-75-add-zig-stack",
 		Created:     time.Unix(1_699_999_000, 0).UTC(),
 		LastTouched: touched,
@@ -146,6 +148,8 @@ func TestEncodeRigsJSON(t *testing.T) {
 		"slug":         "mir-75-add-zig-stack",
 		"session_live": true,
 		"agent":        "working",
+		"tracker":      "linear",
+		"tracker_id":   "MIR-75",
 		"last_touched": touched.Format(time.RFC3339),
 	} {
 		if got[k] != want {

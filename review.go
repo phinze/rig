@@ -399,6 +399,10 @@ func authorPickupPR(pr *prRef, meta prMeta, pick *agentPick) error {
 	}
 
 	m := manifest{ID: rigID, Title: meta.Title, Agent: string(pick.kind), MainRepo: pr.Repo} // kind "" = authoring
+	if tk, ok := primaryLinkedLinearTask(linked); ok {
+		m.Tracker = "linear"
+		m.TrackerID = tk.Identifier
+	}
 	if err := createBasedir(basedir, m); err != nil {
 		return err
 	}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -69,13 +70,14 @@ func TestSpawnSessionAgents(t *testing.T) {
 	t.Cleanup(func() { _ = exec.Command(realTmux, "-L", "rig-agent-e2e", "kill-server").Run() })
 
 	cases := []struct {
-		agent  agentKind
-		binary string
-		flag   string
+		agent       agentKind
+		binary      string
+		flag        string
+		instruction string
 	}{
-		{agentClaude, "claude", "--dangerously-skip-permissions"},
-		{agentCodex, "codex", "--dangerously-bypass-approvals-and-sandbox"},
-		{agentAntigravity, "agy", "--prompt-interactive"},
+		{agentClaude, "claude", "--dangerously-skip-permissions", ""},
+		{agentCodex, "codex", "--dangerously-bypass-approvals-and-sandbox", "../AGENTS.md"},
+		{agentAntigravity, "agy", "--prompt-interactive", "../AGENTS.md"},
 	}
 	for _, c := range cases {
 		cwd := filepath.Join(home, string(c.agent), "repo")
@@ -102,6 +104,107 @@ func TestSpawnSessionAgents(t *testing.T) {
 		if !strings.Contains(args, c.flag) || !strings.Contains(args, "test prompt") {
 			t.Errorf("%s args = %q, want %s and prompt", c.agent, args, c.flag)
 		}
+		if c.instruction != "" && !strings.Contains(args, c.instruction) {
+			t.Errorf("%s args = %q, want task instructions at %s", c.agent, args, c.instruction)
+		}
+	}
+}
+
+func TestProjectRigCreatesRepositorylessRuntimeAndJoinedStatus(t *testing.T) {
+	realTmux, err := exec.LookPath("tmux")
+	if err != nil {
+		t.Skip("tmux not installed")
+	}
+	home := t.TempDir()
+	bin := filepath.Join(home, "bin")
+	rigBin := filepath.Join(home, "rig")
+	marker := filepath.Join(home, "codex.args")
+	mustMkdir(t, bin)
+	mustMkdir(t, filepath.Join(home, ".codex"))
+	build := exec.Command("go", "build", "-o", rigBin, ".")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+	t.Setenv("HOME", home)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Query string `json:"query"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(req.Query, "searchProjects") {
+			_, _ = w.Write([]byte(`{"data":{"searchProjects":{"nodes":[{"id":"2371b91f-53ba-4c7d-aa0b-7a1174451379","name":"Bring Your Own Image","url":"https://linear.app/miren/project/byoi","status":{"name":"In Progress","type":"started"}}]}}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":{"project":{"id":"2371b91f-53ba-4c7d-aa0b-7a1174451379","name":"Bring Your Own Image","url":"https://linear.app/miren/project/byoi","health":null,"updatedAt":"2026-08-31T18:00:00Z","targetDate":"2026-09-15","progress":0.5,"scope":2,"status":{"name":"In Progress","type":"started"},"lead":{"name":"Paul"},"currentProgress":{"scopeCount":2,"startedIssueCount":1,"completedIssueCount":1,"addedIssueCountToday":0},"lastUpdate":null,"issues":{"nodes":[{"identifier":"MIR-1","title":"First issue","url":"https://linear/MIR-1","updatedAt":"2026-08-31T18:00:00Z","priority":0,"estimate":null,"state":{"name":"In Progress","type":"started"},"assignee":{"name":"Paul"},"projectMilestone":null}],"pageInfo":{"hasNextPage":false,"endCursor":"cursor"}}}}}`))
+	}))
+	defer server.Close()
+
+	tmuxWrap := fmt.Sprintf("#!/bin/sh\nexec %s -L rig-project-e2e -f /dev/null \"$@\"\n", realTmux)
+	mustWriteExec(t, filepath.Join(bin, "tmux"), tmuxWrap)
+	codex := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$*\" > %s\nexec sleep infinity\n", shellQuote(marker))
+	mustWriteExec(t, filepath.Join(bin, "codex"), codex)
+	t.Cleanup(func() { _ = exec.Command(realTmux, "-L", "rig-project-e2e", "kill-server").Run() })
+	env := append(os.Environ(),
+		"HOME="+home,
+		"PATH="+bin+":"+os.Getenv("PATH"),
+		"SHELL=/bin/sh",
+		"HISTFILE=/dev/null",
+		"LINEAR_API_TOKEN=test-token",
+		"RIG_LINEAR_GRAPHQL_ENDPOINT="+server.URL,
+	)
+
+	create := exec.Command(rigBin, "project", "Bring Your Own Image", "--agent", "codex")
+	create.Dir, create.Env = home, env
+	if out, err := create.CombinedOutput(); err != nil {
+		t.Fatalf("rig project: %v\n%s", err, out)
+	}
+	basedir := filepath.Join(home, "workspaces", "project-bring-your-own-image")
+	manifestText := string(mustReadFile(t, filepath.Join(basedir, manifestName)))
+	for _, want := range []string{`kind  = "project"`, `tracker = "linear"`, `tracker_id = "2371b91f-53ba-4c7d-aa0b-7a1174451379"`} {
+		if !strings.Contains(manifestText, want) {
+			t.Errorf("project manifest missing %q:\n%s", want, manifestText)
+		}
+	}
+	entries, err := os.ReadDir(basedir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() && entry.Name() != ".rig" && entry.Name() != ".agents" && entry.Name() != ".direnv" {
+			t.Errorf("repositoryless project rig grew directory %s", entry.Name())
+		}
+	}
+
+	session := tmuxSessionName(basedir)
+	layout, err := exec.Command(realTmux, "-L", "rig-project-e2e", "list-panes", "-s", "-t", session, "-F",
+		"#{pane_current_path}\t#{@rig-window-role}\t#{@rig-pane-role}").CombinedOutput()
+	if err != nil {
+		t.Fatalf("reading project layout: %v\n%s", err, layout)
+	}
+	if got := strings.TrimSpace(string(layout)); got != basedir+"\tmain\tagent" {
+		t.Errorf("project layout = %q, want one root agent pane", got)
+	}
+	waitFor(t, 3*time.Second, "project agent launch", func() bool {
+		raw, _ := os.ReadFile(marker)
+		return strings.Contains(string(raw), "./AGENTS.md") && strings.Contains(string(raw), "rig project status")
+	})
+
+	status := exec.Command(rigBin, "project", "status", "--format=json")
+	status.Dir, status.Env = basedir, env
+	out, err := status.Output()
+	if err != nil {
+		t.Fatalf("project status: %v", err)
+	}
+	var snapshot projectSnapshot
+	if err := json.Unmarshal(out, &snapshot); err != nil {
+		t.Fatalf("project status JSON: %v\n%s", err, out)
+	}
+	if snapshot.Project.Name != "Bring Your Own Image" || len(snapshot.Issues) != 1 || snapshot.Issues[0].Identifier != "MIR-1" {
+		t.Fatalf("project status = %+v", snapshot)
 	}
 }
 

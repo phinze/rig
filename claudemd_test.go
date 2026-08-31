@@ -49,6 +49,9 @@ func TestWriteRigClaudeMD(t *testing.T) {
 	if !strings.Contains(got, dir) || !strings.Contains(got, "This rig is your home") {
 		t.Errorf("missing home anchor in:\n%s", got)
 	}
+	if !strings.Contains(got, "rig relay <discovery>") || !strings.Contains(got, "does not post to Linear") {
+		t.Errorf("missing project-discovery relay guidance in:\n%s", got)
+	}
 }
 
 // A title-less rig (e.g. a GH issue with no resolved title yet) should still
@@ -110,5 +113,22 @@ func TestWriteRigAgentInstructions(t *testing.T) {
 		if !strings.Contains(string(raw), "# Rig MIR-10") {
 			t.Errorf("%s lacks rig context", name)
 		}
+	}
+}
+
+func TestProjectRigInstructionsDescribeControlPlane(t *testing.T) {
+	dir := t.TempDir()
+	m := manifest{
+		ID: "project-byoi", Title: "Bring Your Own Image", Kind: "project",
+		Tracker: "linear", TrackerID: "project-uuid", TrackerURL: "https://linear.app/miren/project/byoi",
+	}
+	got := renderRigInstructions(dir, m)
+	for _, want := range []string{"project overview rig", "does not own a code checkout", "rig project status --format=json", m.TrackerURL, "Ordinary sweep will not collect it"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("project instructions lack %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "jj workspaces") || strings.Contains(got, "main tmux window holds") {
+		t.Errorf("project instructions inherited task-workspace guidance:\n%s", got)
 	}
 }

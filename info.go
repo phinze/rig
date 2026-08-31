@@ -17,6 +17,9 @@ type rigContext struct {
 	ID            string `json:"id"`
 	Root          string `json:"root"`
 	Kind          string `json:"kind,omitempty"`
+	Tracker       string `json:"tracker,omitempty"`
+	TrackerID     string `json:"tracker_id,omitempty"`
+	TrackerURL    string `json:"tracker_url,omitempty"`
 	Repo          string `json:"repo,omitempty"`
 	Repository    string `json:"repository,omitempty"`
 	ReviewPR      string `json:"review_pr,omitempty"`
@@ -52,7 +55,10 @@ func rigContextFor(basedir, cwd string, m manifest) rigContext {
 	if err != nil {
 		root = basedir
 	}
-	context := rigContext{SchemaVersion: 1, ID: m.ID, Root: root, Kind: m.Kind}
+	context := rigContext{
+		SchemaVersion: 1, ID: m.ID, Root: root, Kind: m.Kind,
+		Tracker: m.Tracker, TrackerID: m.TrackerID, TrackerURL: m.TrackerURL,
+	}
 	rel, err := filepath.Rel(basedir, cwd)
 	if err != nil || rel == "." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return context

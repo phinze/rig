@@ -106,14 +106,30 @@ func extractAgentFlag(args []string) (*agentPick, []string, error) {
 // CLIs: codex takes a subcommand (its bypass flag is global, so it precedes
 // it), claude and antigravity take flags.
 func (a agentKind) resumeCommand(sessionID string) string {
+	return a.resumeCommandWithPrompt(sessionID, "")
+}
+
+// resumeCommandWithPrompt reopens a conversation and optionally gives it its
+// next assignment in the same invocation. This is the safe handoff path for a
+// parked rig: the prompt arrives as part of agent startup rather than being
+// typed into a process whose input state Rig cannot know.
+func (a agentKind) resumeCommandWithPrompt(sessionID, prompt string) string {
 	quoted := shellQuote(sessionID)
+	promptArg := ""
+	if prompt != "" {
+		promptArg = " " + shellQuote(prompt)
+	}
 	switch a {
 	case agentCodex:
-		return "codex --dangerously-bypass-approvals-and-sandbox resume " + quoted
+		return "codex --dangerously-bypass-approvals-and-sandbox resume " + quoted + promptArg
 	case agentAntigravity:
-		return "agy --dangerously-skip-permissions --conversation " + quoted
+		line := "agy --dangerously-skip-permissions --conversation " + quoted
+		if prompt != "" {
+			line += " --prompt-interactive" + promptArg
+		}
+		return line
 	default:
-		return "claude --dangerously-skip-permissions --resume " + quoted
+		return "claude --dangerously-skip-permissions --resume " + quoted + promptArg
 	}
 }
 
@@ -121,6 +137,20 @@ func (a agentKind) launchCommand(prompt string) string {
 	if a != agentClaude {
 		prompt = "Read the rig instructions in ../AGENTS.md first. " + prompt
 	}
+	return a.launchPromptCommand(prompt)
+}
+
+// launchProjectCommand is the repositoryless sibling of launchCommand. Task
+// agents start one directory below their rig instructions; project agents
+// start at the rig root, so their explicit breadcrumb is ./AGENTS.md.
+func (a agentKind) launchProjectCommand(prompt string) string {
+	if a != agentClaude {
+		prompt = "Read the project rig instructions in ./AGENTS.md first. " + prompt
+	}
+	return a.launchPromptCommand(prompt)
+}
+
+func (a agentKind) launchPromptCommand(prompt string) string {
 	quoted := shellQuote(prompt)
 	switch a {
 	case agentCodex:

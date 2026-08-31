@@ -15,15 +15,18 @@ func TestTombstoneRoundTrip(t *testing.T) {
 	now := time.Now()
 
 	fresh := &tombstone{
-		Version: tombstoneVersion,
-		ID:      "mir-1",
-		Title:   "do the thing",
-		Basedir: "/home/x/workspaces/mir-1",
-		Agent:   string(agentCodex),
-		Died:    now.Add(-2 * time.Hour),
-		Repos:   map[string]string{"runtime": "mirendev/runtime"},
-		Sources: map[string]string{"runtime": "/home/x/src/runtime"},
-		Session: &sessionRef{Agent: "codex", ID: "019fc0a3"},
+		Version:    tombstoneVersion,
+		ID:         "mir-1",
+		Title:      "do the thing",
+		Basedir:    "/home/x/workspaces/mir-1",
+		Agent:      string(agentCodex),
+		Tracker:    "linear",
+		TrackerID:  "MIR-1",
+		TrackerURL: "https://linear.app/example/issue/MIR-1",
+		Died:       now.Add(-2 * time.Hour),
+		Repos:      map[string]string{"runtime": "mirendev/runtime"},
+		Sources:    map[string]string{"runtime": "/home/x/src/runtime"},
+		Session:    &sessionRef{Agent: "codex", ID: "019fc0a3"},
 	}
 	if err := writeTombstone(fresh); err != nil {
 		t.Fatal(err)
@@ -59,6 +62,9 @@ func TestTombstoneRoundTrip(t *testing.T) {
 	}
 	if got[0].Session == nil || got[0].Session.ID != "019fc0a3" {
 		t.Errorf("session ref lost in round trip: %+v", got[0].Session)
+	}
+	if got[0].Tracker != fresh.Tracker || got[0].TrackerID != fresh.TrackerID || got[0].TrackerURL != fresh.TrackerURL {
+		t.Errorf("tracker identity lost in round trip: %+v", got[0])
 	}
 	if !got[0].resurrectable() {
 		t.Error("tombstone with a session id should be resurrectable")

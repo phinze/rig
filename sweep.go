@@ -440,6 +440,13 @@ func planSweep(rigs []rigInfo, statuses []rigStatus, home string, fetched map[st
 			plans = append(plans, sweepPlan{rig: r, status: s, detail: fmt.Sprintf("reading manifest: %v", err)})
 			continue
 		}
+		// A project rig is durable coordination context, not an authoring rig
+		// whose empty workspace means it failed to produce a PR. Keep it visible
+		// in the quiet group but never offer it for collection.
+		if m.isProject() {
+			plans = append(plans, sweepPlan{rig: r, status: s, action: actionNone, detail: "project overview"})
+			continue
+		}
 		// Note any PR we can see right now, so this rig stays recognisable as one
 		// that shipped after GitHub deletes the branch. Best-effort: a failure
 		// here costs nothing but a repeat next sweep, and must never fail a scan.

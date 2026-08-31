@@ -69,17 +69,42 @@ func prepareResurrect(id string, nonblocking bool, report io.Writer) (string, er
 	}
 
 	m := manifest{
-		ID:       t.ID,
-		Title:    t.Title,
-		Kind:     t.Kind,
-		Agent:    t.Agent,
-		Created:  time.Now(),
-		Repos:    t.Repos,
-		Branches: t.Branches,
-		PRs:      t.PRs,
+		ID:         t.ID,
+		Title:      t.Title,
+		Kind:       t.Kind,
+		Agent:      t.Agent,
+		Tracker:    t.Tracker,
+		TrackerID:  t.TrackerID,
+		TrackerURL: t.TrackerURL,
+		Created:    time.Now(),
+		Repos:      t.Repos,
+		Branches:   t.Branches,
+		PRs:        t.PRs,
 	}
 	if err := createBasedir(t.Basedir, m); err != nil {
 		return "", err
+	}
+	if m.isProject() {
+		if err := writeRigAgentInstructions(t.Basedir, m); err != nil {
+			return "", err
+		}
+		agent, err := parseAgent(t.Agent)
+		if err != nil {
+			agent = agentClaude
+		}
+		sess := sessionSpec{agent: agent}
+		if t.resurrectable() {
+			sess.command = agent.resumeCommand(t.Session.ID)
+		} else {
+			fmt.Fprintf(report, "rig: no session recorded for %s — rebuilding overview only\n", t.ID)
+			sess.prompt = fmt.Sprintf("This project overview rig (%s) was rebuilt from a tombstone. Start with `rig project status --format=json` and ask me for any missing context.", t.ID)
+		}
+		session, err := spawnProjectSession(t.Basedir, sess)
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprintf(report, "rig: resurrected %s — %s\n", t.ID, t.Basedir)
+		return session, nil
 	}
 
 	// Rebuild workspaces in a stable order so the primary repo (the one the

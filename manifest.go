@@ -21,6 +21,17 @@ type manifest struct {
 	ID      string
 	Title   string
 	Created time.Time
+	// Tracker and TrackerID are the durable external identity behind this rig.
+	// Linear issue rigs record their issue identifier; project rigs record the
+	// project's UUID because Linear project identifiers are an optional feature.
+	// Empty preserves ticketless and legacy rigs without pretending their local
+	// id is a tracker key.
+	Tracker   string
+	TrackerID string
+	// TrackerURL is the human-facing locator when the tracked object has one.
+	// Project rigs keep it so agents and status output never have to reconstruct
+	// a Linear URL from a name or UUID.
+	TrackerURL string
 	// Touched is the last deliberate interaction with the rig: creation,
 	// entering it, parking it, or waking it. Unlike agent activity and fetched
 	// review state, it only moves when the user acts, so radar can use it as a
@@ -43,8 +54,9 @@ type manifest struct {
 	// guards their local commits. "review" is a `rig review` pickup of someone
 	// else's PR: the workspace holds the author's commits fetched read-only, so
 	// there's nothing of yours to merge and the rig is done once you've posted a
-	// review, never gated on the PR itself merging. Absent on rigs predating this
-	// field, which read as authoring — the safe default.
+	// review, never gated on the PR itself merging. "project" is a persistent,
+	// repositoryless control rig over a tracker project. Absent on rigs
+	// predating this field, which read as authoring — the safe default.
 	Kind string
 	// ReviewPRs maps a repo's subdir to the durable GitHub locator a review rig
 	// is reviewing there. The workspace branch says which code was fetched, but
@@ -93,10 +105,28 @@ type manifest struct {
 // condition is "review posted" rather than "work merged".
 func (m manifest) isReview() bool { return m.Kind == "review" }
 
+// isProject reports whether this is a long-lived tracker-project control rig,
+// rather than work on one issue or a review of one pull request.
+func (m manifest) isProject() bool { return m.Kind == "project" }
+
+// isAuthoring makes the legacy default explicit. Code that branches on a
+// terminal condition should use these predicates rather than assuming every
+// non-review rig owns commits; project rigs deliberately own no workspace.
+func (m manifest) isAuthoring() bool { return !m.isReview() && !m.isProject() }
+
 func writeManifest(basedir string, m manifest) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "id    = %q\n", m.ID)
 	fmt.Fprintf(&b, "title = %q\n", m.Title)
+	if m.Tracker != "" {
+		fmt.Fprintf(&b, "tracker = %q\n", m.Tracker)
+	}
+	if m.TrackerID != "" {
+		fmt.Fprintf(&b, "tracker_id = %q\n", m.TrackerID)
+	}
+	if m.TrackerURL != "" {
+		fmt.Fprintf(&b, "tracker_url = %q\n", m.TrackerURL)
+	}
 	if m.Kind != "" {
 		fmt.Fprintf(&b, "kind  = %q\n", m.Kind)
 	}
@@ -281,6 +311,12 @@ func readManifest(basedir string) (manifest, error) {
 				m.ID = val
 			case "title":
 				m.Title = val
+			case "tracker":
+				m.Tracker = val
+			case "tracker_id":
+				m.TrackerID = val
+			case "tracker_url":
+				m.TrackerURL = val
 			case "kind":
 				m.Kind = val
 			case "agent":

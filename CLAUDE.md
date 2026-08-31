@@ -38,6 +38,24 @@ state, defaulting to the rig containing cwd when no query is given.
 `rig add owner/repo` brings additional repos under the same rig. `rig down`
 breaks it back down.
 
+`rig project <query|url|uuid>` creates or enters a repositoryless overview rig
+for a Linear project. Its agent runs from the rig root, with no fake checkout or
+Recto, and `rig project status --format=json` joins the project's complete issue
+set to matching local rigs plus their agent, PR, review, and CI state. Project
+UUID is the durable identity because Linear's human project identifiers are an
+optional workspace feature. The status query paginates issues rather than
+assuming a project fits in one API page.
+
+Project coordination stays explicit. `rig dispatch MIR-123 <prompt>` wakes a
+stopped or parked task rig in the background and supplies the resumed agent's
+next prompt; it refuses an already-running agent rather than guessing whether
+the process is at an input boundary. `rig relay <discovery>` travels the other
+way, posting a private local notification from a Linear issue rig to its
+project rig. The overview agent can then draft the durable Linear comment,
+relationship, issue, or project update. Sweep renders project rigs as quiet
+context but never offers them for collection; explicit `down` and tombstone
+resurrection still work.
+
 `rig sweep` is the pass over every rig that proposes each one's next step. It's
 plan-then-stream: a Bubble Tea board of checkable actions, then the TUI exits and
 the real gh and teardown output streams. It reuses `parkedDisposition` for state

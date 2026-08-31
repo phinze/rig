@@ -150,7 +150,7 @@ func rigTeardownBlocker(basedir string, fetched map[string]bool) string {
 	// commit accounting above is intentionally lazy, but it cannot see a
 	// disjoint secondary PR whose commits are no longer reachable from @. Reap
 	// and explicit down must share this eager final gate.
-	if !m.isReview() {
+	if m.isAuthoring() {
 		return unmergedPRsBlocker(basedir)
 	}
 	return ""
