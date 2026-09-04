@@ -37,6 +37,21 @@ own title slugified and printing both says the same sentence twice in one row �
 has since moved on keeps its id. That cap is load-bearing and not cosmetic: the
 collapse loop drops the PR tail before the id, so one 60-character kickoff slug
 used to take every PR and CI glyph on the board with it.
+A rig with one live agent folds that agent into its row so Enter lands on the
+exact pane, but the row keeps its own subject: `agentTitleAddition` decides
+whether the agent's session title adds anything, and only what it adds trails
+the subject, faint. That test exists because Codex names a session by restating
+the row — "Review PR 1153" on a row whose id is pr-1153, bare "MIR-1777" on a
+row whose id is mir-1777 — and folding those over the title meant nine of eleven
+live rows stopped saying which rig they were. The test is structural rather than
+a list of agent verbs to maintain: these titles are all `<verb> <identity>`, so
+ignore one leading word and ask whether any word left is new. A one-word title
+is therefore all verb and adds nothing, and a title whose only new word *is* the
+verb reads as an echo — both fall back to the subject, which is the safe
+direction to be wrong in. The activity spends only the slack the subject leaves,
+after `columns()` has already handed out the id and tail, so it can never take
+width from either and a row with no room simply doesn't show it.
+
 Parking captures the carousel's hot repo and the selected agent's conversation;
 when invoked inside that session, it opens the radar to pick the next hop before
 killing it. Wake reconstructs the full repo-rooted agent + Recto layout and

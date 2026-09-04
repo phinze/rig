@@ -10,6 +10,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 func TestRadarActionFailureStaysInCurrentModel(t *testing.T) {
@@ -161,8 +162,13 @@ func TestRadarCurrentRigKeepsRigIdentity(t *testing.T) {
 		t.Fatalf("rigRows = %+v, want current and other for PR enrichment", m.rigRows())
 	}
 	items := m.displayItems()
-	if len(items) < 2 || items[1].row.Title != "live task context" || !items[1].label {
-		t.Fatalf("current display = %+v, want folded non-selectable live context", items)
+	// The row keeps its own subject and carries the agent's context alongside
+	// it, rather than being renamed by whatever the agent called its session.
+	if len(items) < 2 || items[1].row.Title != "durable title" || !items[1].label {
+		t.Fatalf("current display = %+v, want the durable title on a non-selectable row", items)
+	}
+	if items[1].row.activity != "task context" {
+		t.Fatalf("current activity = %q, want the agent context trailing the subject", items[1].row.activity)
 	}
 	for _, row := range m.rows() {
 		if row.Slug == "current" {
@@ -815,10 +821,10 @@ func TestStripAgentGlyph(t *testing.T) {
 	}
 }
 
-// A rig with one agent collapses to one rig-shaped choice: the live context wins
-// as its title, but Enter still carries the rig metadata and jumps to the exact
-// pane. The stable rig title remains in the parent's fuzzy haystack, so filtering
-// by it still surfaces the synthesized row.
+// A rig with one agent collapses to one rig-shaped choice. The rig keeps its own
+// title — that is what tells you which rig it is — and the agent's context
+// trails it when it adds something. Enter still carries the rig metadata and
+// jumps to the exact pane, which was always the useful half of the fold.
 func TestDisplayItemsSingleRigAgent(t *testing.T) {
 	m := radarModel{inflight: []rigStatus{{
 		Slug: "a", ID: "mir-1", Title: "build the thing", Path: "/work/a",
@@ -829,8 +835,11 @@ func TestDisplayItemsSingleRigAgent(t *testing.T) {
 	if len(items) != 2 || items[0].header != "IN FLIGHT" {
 		t.Fatalf("items = %+v, want header plus one collapsed row", items)
 	}
-	if items[1].child || items[1].label || items[1].row.Title != "Plan the saga" {
-		t.Errorf("display row = %+v, want selectable rig-shaped row with live context", items[1])
+	if items[1].child || items[1].label || items[1].row.Title != "build the thing" {
+		t.Errorf("display row = %+v, want a selectable rig-shaped row keeping its subject", items[1])
+	}
+	if items[1].row.activity != "the saga" {
+		t.Errorf("activity = %q, want the agent's context trailing the subject", items[1].row.activity)
 	}
 	rows := m.rows()
 	if len(rows) != 1 || !rows[0].child || rows[0].session != "s:0.1" || rows[0].Slug != "a" {
@@ -838,14 +847,21 @@ func TestDisplayItemsSingleRigAgent(t *testing.T) {
 	}
 
 	m.filter = "build"
-	if rows := m.rows(); len(rows) != 1 || rows[0].Title != "Plan the saga" {
-		t.Fatalf("rows filtered by stable rig title = %+v, want collapsed live-context row", rows)
+	if rows := m.rows(); len(rows) != 1 || rows[0].Title != "build the thing" {
+		t.Fatalf("rows filtered by rig title = %+v, want the collapsed row", rows)
+	}
+	// The agent's context is in the haystack too, so filtering by what the agent
+	// is doing still finds the rig it's doing it in.
+	m.filter = "saga"
+	if rows := m.rows(); len(rows) != 1 || rows[0].Slug != "a" {
+		t.Fatalf("rows filtered by agent context = %+v, want the collapsed row", rows)
 	}
 
 	m.inflight[0].agents[0].Context = ""
 	m.filter = ""
-	if got := m.displayItems()[1].row.Title; got != "build the thing" {
-		t.Errorf("empty live context title = %q, want stable rig title", got)
+	row := m.displayItems()[1].row
+	if row.Title != "build the thing" || row.activity != "" {
+		t.Errorf("contextless row = %q / %q, want the rig title and no activity", row.Title, row.activity)
 	}
 }
 
@@ -1515,6 +1531,71 @@ func TestRadarRigKindFallsBackToTheID(t *testing.T) {
 	} {
 		if got := rigKindOf(row); got != rigKindLoose {
 			t.Errorf("%s = %v, want loose", row.ID, got)
+		}
+	}
+}
+
+func TestAgentTitleAdditionDropsIdentityEchoes(t *testing.T) {
+	// Every one of these is a live pane title from a real board. Codex names a
+	// session by restating the row, and radar used to show that instead of the
+	// rig's subject.
+	for _, tc := range []struct{ id, title, context string }{
+		{"pr-1153", "Add miren top for cluster-wide resource usage", "Review PR 1153"},
+		{"mir-1777", "Report runtime-owned app health alongside entity sync", "MIR-1777"},
+		{"mir-1689", "Expose coordinator startup as staged boot outputs", "Plan MIR-1689 staged boot outputs"},
+		{"mir-1690", "Adopt the boot graph for distributed runner startup", "Plan MIR-1690 boot graph"},
+		{"mir-1762", "Exercise entity sync through garden, toys, and club", "MIR-1762 entity sync"},
+		{"project-boot-dependency-graph", "Boot dependency graph", "Reconcile Boot dependency graph"},
+		{"project-app-deploy-visibility-in-miren-cloud", "App & Deploy Visibility in Miren Cloud", "Assess Miren Cloud visibility"},
+		{"rig-qol-improvements", "rig qol improvements", "Rig QOL improvements"},
+		// Grammar alone is not new information.
+		{"pr-1153", "Add miren top", "Review the PR for 1153"},
+		// Nothing to say at all.
+		{"mir-1", "Some title", ""},
+		{"mir-1", "Some title", "Reviewing"},
+	} {
+		s := rigStatus{ID: tc.id, Title: tc.title}
+		if got := agentTitleAddition(s, tc.context); got != "" {
+			t.Errorf("%s: %q added %q, want it read as an echo", tc.id, tc.context, got)
+		}
+	}
+}
+
+func TestAgentTitleAdditionKeepsRealNews(t *testing.T) {
+	for _, tc := range []struct{ id, title, context, want string }{
+		{"project-bring-your-own-image", "Bring Your Own Image", "Assess image project health", "image project health"},
+		{"lets-try-depot-ci-again", "lets try depot ci again", "Review Depot CI kickoff", "Depot CI kickoff"},
+		{"mir-1", "Fix the parser", "Debugging a flaky integration test", "a flaky integration test"},
+		// The id is trimmed off what trails, since the id column already says it.
+		{"mir-1391", "Make ReconcileController coalesce work and reconcile current state", "Plan MIR-1391 reconciliation", "reconciliation"},
+	} {
+		s := rigStatus{ID: tc.id, Title: tc.title}
+		if got := agentTitleAddition(s, tc.context); got != tc.want {
+			t.Errorf("%s: %q added %q, want %q", tc.id, tc.context, got, tc.want)
+		}
+	}
+}
+
+func TestRadarActivityNeverCrowdsOutTheSubject(t *testing.T) {
+	long := "Report runtime-owned app health alongside entity sync"
+	row := rigStatus{
+		ID: "mir-1777", Slug: "mir-1777", Title: long, Tracker: "linear",
+		agents: []agentChild{{Target: "s:0", Context: "Benchmarking the resnapshot path end to end"}},
+	}
+	for _, width := range []int{60, 90, 200} {
+		m := radarModel{width: width, inflight: []rigStatus{row}, prs: map[string][]rigPR{"mir-1777": {}}}
+		view := m.View()
+		// However tight the board gets, the row still says which rig it is.
+		if !strings.Contains(view, "Report runtime") {
+			t.Errorf("width %d dropped the subject:\n%s", width, view)
+		}
+		for _, line := range strings.Split(view, "\n") {
+			if !strings.Contains(line, "Report runtime") {
+				continue // the footer has always run its own width; not this row's problem
+			}
+			if w := lipgloss.Width(line); w > width {
+				t.Errorf("width %d produced a %d-cell row: %q", width, w, line)
+			}
 		}
 	}
 }
