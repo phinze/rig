@@ -1393,3 +1393,128 @@ func TestRadarParkRefusesHistoryRows(t *testing.T) {
 		t.Errorf("park marked pending for a rig that doesn't exist: %v", m.parkPending)
 	}
 }
+
+func TestRadarIDCellSuppressesTitleEcho(t *testing.T) {
+	// A `rig new` rig's id is its title slugified, so drawing both prints the
+	// same sentence twice in one row.
+	title := "brainstorming a way to embed a presentation into circulate"
+	loose := rigStatus{ID: kickoffID(title), Title: title}
+	if cell := newRadarIDCell(loose); !cell.empty() {
+		t.Errorf("loose rig drew its own title back as an id: %q", cell.plain())
+	}
+	// An authoring rig picked up from an unlinked PR is also kind-loose, but
+	// its id says something the title doesn't, so it survives.
+	pr := rigStatus{ID: "pr-1153", Title: "Add miren top for cluster-wide resource usage"}
+	cell := newRadarIDCell(pr)
+	if cell.id != "pr-1153" || cell.glyph != "" {
+		t.Errorf("unlinked PR pickup = %q (glyph %q), want a bare pr-1153", cell.id, cell.glyph)
+	}
+}
+
+func TestRadarIDCellMarksKind(t *testing.T) {
+	for name, tc := range map[string]struct {
+		row  rigStatus
+		want rigKind
+	}{
+		"ticket":  {rigStatus{ID: "mir-1689", Title: "Expose coordinator startup", Tracker: "linear", TrackerID: "MIR-1689"}, rigKindTicket},
+		"review":  {rigStatus{ID: "pr-1153", Title: "Add miren top", Kind: "review"}, rigKindReview},
+		"project": {rigStatus{ID: "project-boot-dependency-graph", Title: "Boot dependency graph", Kind: "project", Tracker: "linear"}, rigKindProject},
+	} {
+		if got := radarRigKind(tc.row); got != tc.want {
+			t.Errorf("%s: radarRigKind = %v, want %v", name, got, tc.want)
+		}
+		want := radarKindGlyph(tc.want)
+		if got := newRadarIDCell(tc.row).glyph; got != want {
+			t.Errorf("%s: glyph = %q, want %q", name, got, want)
+		}
+	}
+	// Every kind that draws a glyph draws a distinct one, or the marker tells
+	// you nothing it didn't already.
+	seen := map[string]rigKind{}
+	for _, k := range []rigKind{rigKindTicket, rigKindReview, rigKindProject} {
+		g := radarKindGlyph(k)
+		if g == "" {
+			t.Errorf("kind %v has no glyph", k)
+		}
+		if prev, dup := seen[g]; dup {
+			t.Errorf("kinds %v and %v share glyph %q", prev, k, g)
+		}
+		seen[g] = k
+	}
+	if radarKindGlyph(rigKindLoose) != "" {
+		t.Error("a loose rig should draw no kind glyph")
+	}
+}
+
+func TestRadarIDCellSkipsBareAndTombstones(t *testing.T) {
+	if cell := newRadarIDCell(rigStatus{bare: true, session: "shell", Title: "shell"}); !cell.empty() {
+		t.Errorf("bare session drew an id cell: %q", cell.plain())
+	}
+	stone := rigStatus{ID: "mir-1755", Title: "Forced server shutdown", stone: &tombstone{ID: "mir-1755"}}
+	cell := newRadarIDCell(stone)
+	if cell.id != "mir-1755" || cell.glyph != "" {
+		t.Errorf("tombstone cell = %q (glyph %q), want a bare id", cell.id, cell.glyph)
+	}
+}
+
+func TestRadarIDCellClipsLongIDs(t *testing.T) {
+	long := rigStatus{ID: "project-app-deploy-visibility-in-miren-cloud", Title: "App & Deploy Visibility", Kind: "project", Tracker: "linear"}
+	cell := newRadarIDCell(long)
+	if !cell.clipped {
+		t.Fatal("long id was not clipped")
+	}
+	if w := len([]rune(cell.id)); w != radarMaxID {
+		t.Errorf("clipped id is %d runes, want %d", w, radarMaxID)
+	}
+}
+
+func TestRadarLongIDDoesNotStarveThePRTail(t *testing.T) {
+	// The collapse loop drops the tail before the id, so an uncapped id column
+	// meant one long kickoff slug took every PR and CI glyph on the board down
+	// with it. This is that board.
+	kickoff := "brainstorming a way to embed a presentation plus quiz into circulate on member signup"
+	hog := rigStatus{ID: kickoffID(kickoff), Slug: "hog", Title: kickoff}
+	prs := []rigPR{{Repo: "mirendev/miren", Branch: "top", prInfo: prInfo{Number: 1153, State: "OPEN", Checks: "passing"}}}
+	review := rigStatus{
+		ID: "pr-1153", Slug: "pr-1153", Kind: "review",
+		Title: "Add miren top for cluster-wide resource usage",
+		PRs:   prs,
+	}
+	m := radarModel{
+		width:    100,
+		inflight: []rigStatus{hog, review},
+		prs: map[string][]rigPR{
+			"hog":     {},
+			"pr-1153": prs,
+		},
+	}
+	cols := m.columns(m.displayItems())
+	if cols.wTail == 0 {
+		t.Fatalf("PR tail collapsed on a 100-column board: %+v", cols)
+	}
+	if cols.wID > radarMaxID {
+		t.Errorf("id column is %d wide, want at most %d", cols.wID, radarMaxID)
+	}
+	if view := m.View(); !strings.Contains(view, "#1153") {
+		t.Errorf("PR tail is missing from the board:\n%s", view)
+	}
+}
+
+func TestRadarRigKindFallsBackToTheID(t *testing.T) {
+	// Rigs made before the manifest recorded a tracker still read as tickets,
+	// or the marker looks unreliable rather than absent.
+	legacy := rigStatus{ID: "mir-1364", Title: "deploy Chatto on Miren guide"}
+	if got := radarRigKind(legacy); got != rigKindTicket {
+		t.Errorf("trackerless mir-1364 = %v, want ticket", got)
+	}
+	// But rig's own reserved PR id is not a team prefix.
+	for _, row := range []rigStatus{
+		{ID: "pr-1153", Title: "Add miren top"},
+		{ID: "lets-try-depot-ci-again", Title: "lets try depot ci again"},
+		{ID: "fix-500-errors", Title: "fix 500 errors"},
+	} {
+		if got := radarRigKind(row); got != rigKindLoose {
+			t.Errorf("%s = %v, want loose", row.ID, got)
+		}
+	}
+}

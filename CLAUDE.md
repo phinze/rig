@@ -29,6 +29,17 @@ Both action sections are ordered by the same durable last-touched timestamp,
 which is also the age shown in the first column; background agent and PR updates
 never move rows. ctrl-p toggles the selected rig between sections without
 leaving the board; Enter on a parked rig still wakes and enters it.
+Sections are the row's *state*, so a row's *kind* rides the id cell instead: a
+glyph from a family the state glyphs don't use, then the id clipped to
+`radarMaxID`. A loose `rig new` rig draws neither, because its id is only its
+own title slugified and printing both says the same sentence twice in one row —
+`kickoffID` is asked directly rather than matched by shape, so a rig whose title
+has since moved on keeps its id. That cap is load-bearing and not cosmetic: the
+collapse loop drops the PR tail before the id, so one 60-character kickoff slug
+used to take every PR and CI glyph on the board with it. `radarRigKind` falls
+back to the id when the manifest records no tracker, since rigs made before that
+field existed are still in flight, and it excludes `pr-` explicitly because
+rig's own reserved PR id otherwise parses as a team prefix.
 Parking captures the carousel's hot repo and the selected agent's conversation;
 when invoked inside that session, it opens the radar to pick the next hop before
 killing it. Wake reconstructs the full repo-rooted agent + Recto layout and

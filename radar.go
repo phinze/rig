@@ -1513,6 +1513,118 @@ func radarStateStyle(state string) lipgloss.Style {
 	}
 }
 
+// rigKind is what a rig is *about*, as distinct from what it's doing. The
+// board's glyph column is already spent on state (agent attention, review
+// disposition), so kind rides the id cell instead. Without it a ticket rig, a
+// review rig and a project rig read as three identical rows whose ids merely
+// happen to be shaped differently, and you learn the shapes instead of seeing
+// the kinds.
+type rigKind int
+
+const (
+	rigKindLoose rigKind = iota // `rig new`: a kickoff, no tracker
+	rigKindTicket
+	rigKindReview
+	rigKindProject
+)
+
+func radarRigKind(s rigStatus) rigKind {
+	switch s.Kind {
+	case "review":
+		return rigKindReview
+	case "project":
+		return rigKindProject
+	}
+	if s.Tracker != "" {
+		return rigKindTicket
+	}
+	// Rigs made before the manifest recorded a tracker have none, and several
+	// are usually still in flight. Leaving those unmarked would make the marker
+	// read as unreliable rather than absent, so fall back to the id, which for
+	// a Linear pickup is the issue identifier and nothing else. "pr-<n>" is
+	// rig's own reserved id for a PR-derived rig rather than a team prefix, so
+	// it's the one shape this must not read as an issue.
+	if !strings.HasPrefix(s.ID, "pr-") && leadingIssueID(s.ID) == s.ID {
+		return rigKindTicket
+	}
+	return rigKindLoose
+}
+
+// radarKindGlyph marks the id cell with its kind. The shapes come from families
+// the state glyphs don't use — a tag for a ticket, octicon's pull-request for a
+// review (its git-merge sibling already means merged), a sitemap for a
+// project's umbrella of issues — so kind and state never trade places at a
+// glance. A loose rig draws nothing: absence is its marker, and a glyph on
+// every row buys less than the two columns it would cost in a popup.
+func radarKindGlyph(k rigKind) string {
+	switch k {
+	case rigKindTicket:
+		return "\uf02b"
+	case rigKindReview:
+		return "\uf407"
+	case rigKindProject:
+		return "\uf0e8"
+	}
+	return ""
+}
+
+// radarMaxID caps the id cell. Ticket and review ids are short by construction;
+// the ones that run long are a slugified restatement of the title sitting two
+// columns to the left, so clipping costs nothing — and uncapped, one such row
+// sets a width every other row pays for. The collapse loop drops the tail
+// before the id, so a single 56-character kickoff slug was quietly taking every
+// PR and CI glyph on the board with it.
+const radarMaxID = 20
+
+// radarIDCell is the id as the board draws it: a kind glyph, then the id
+// clipped to radarMaxID. It comes back empty for a row with nothing to say —
+// a bare tmux session, or a `rig new` rig whose id is only its own title
+// slugified, where drawing it means printing the title twice in one row.
+type radarIDCell struct {
+	glyph   string
+	id      string // as displayed, so possibly clipped
+	clipped bool
+}
+
+func newRadarIDCell(s rigStatus) radarIDCell {
+	if s.bare || s.ID == "" {
+		return radarIDCell{}
+	}
+	clip := func() radarIDCell {
+		return radarIDCell{id: radarTruncate(s.ID, radarMaxID), clipped: len(s.ID) > radarMaxID}
+	}
+	// A tombstone carries no manifest to read a kind from, and its tail already
+	// answers the only live question about it.
+	if s.stone != nil {
+		return clip()
+	}
+	kind := radarRigKind(s)
+	// kickoffID is the function that produced this id, so asking it is an exact
+	// test for "the id is the title" rather than a guess about slug shapes. A
+	// rig whose title has since moved on fails the test and keeps its id, which
+	// is the right way round to be wrong.
+	if kind == rigKindLoose && s.ID == kickoffID(s.Title) {
+		return radarIDCell{}
+	}
+	cell := clip()
+	cell.glyph = radarKindGlyph(kind)
+	return cell
+}
+
+func (c radarIDCell) empty() bool { return c.glyph == "" && c.id == "" }
+
+// plain is the cell as it occupies space, which is what the width math and the
+// selected row's unstyled render both need.
+func (c radarIDCell) plain() string {
+	switch {
+	case c.glyph == "":
+		return c.id
+	case c.id == "":
+		return c.glyph
+	}
+	return c.glyph + " " + c.id
+}
+
 // radarGlyph is the fixed-width status cell: one glyph whose shape and color
 // carry the row's state, so the PR fan-out landing never shifts the layout.
 // In-flight rigs read agent attention; parked rigs read review disposition.
@@ -1696,7 +1808,7 @@ func (m radarModel) columns(items []radarLine) radarColumns {
 		if it.header != "" || it.child {
 			continue
 		}
-		wID = max(wID, lipgloss.Width(it.row.ID))
+		wID = max(wID, lipgloss.Width(newRadarIDCell(it.row).plain()))
 		wAge = max(wAge, lipgloss.Width(age(m.touchedAt(it.row))))
 		wTitle = max(wTitle, lipgloss.Width(it.row.Title))
 		wTail = max(wTail, m.radarTailWidth(it.row))
@@ -1832,13 +1944,19 @@ func (m radarModel) View() string {
 		// hands that width straight to its title instead of leaving a hole. The id
 		// is faint — low-value detail — and bolds its matched runes when filtering.
 		var rightPlain, rightStyled []string
-		if cols.wID > 0 && s.ID != "" {
-			cell := radarFaintStyle.Render(s.ID)
-			if m.filter != "" {
+		if idCell := newRadarIDCell(s); cols.wID > 0 && !idCell.empty() {
+			// Match bolding is scoped to the id's own runes, so it can only be
+			// drawn against the id in full. A clipped one renders plain rather
+			// than bolding runes that have shifted out from under their hits.
+			styled := radarFaintStyle.Render(idCell.id)
+			if m.filter != "" && !idCell.clipped {
 				idHits, _ := radarMatchFields(m.filter, s)
-				cell = highlightRunesBase(s.ID, idHits, &radarFaintStyle)
+				styled = highlightRunesBase(idCell.id, idHits, &radarFaintStyle)
 			}
-			rightPlain, rightStyled = append(rightPlain, s.ID), append(rightStyled, cell)
+			if idCell.glyph != "" {
+				styled = radarFaintStyle.Render(idCell.glyph) + " " + styled
+			}
+			rightPlain, rightStyled = append(rightPlain, idCell.plain()), append(rightStyled, styled)
 		}
 		if cols.wTail > 0 {
 			for _, seg := range radarTailSegs(s, fetched) {
