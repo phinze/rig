@@ -135,6 +135,20 @@ review uses GitHub's recorded base commit. `rectoCommand` is the single launch
 contract, and every launch site goes through it so creation, add, resume, and
 resurrection cannot disagree.
 
+Every invocation goes through `resolveCommand` before dispatch, so any
+unambiguous prefix works and a typo comes back with the nearest names rather
+than the whole usage block. Three rules there are load-bearing. Exact beats
+prefix, which is what keeps `rig pr` meaning pr rather than project and means
+adding a longer command can never steal a name that already works. The
+`__`-prefixed internals are exact-match only on both sides: they never resolve
+from an abbreviation, and they never turn up as a typo suggestion, because
+they're invoked by other processes and nobody should learn they exist. And
+`help` resolves by its full name alone rather than joining the prefix
+namespace, so it doesn't spend the letter `h` that history wants. Distance is
+Damerau-Levenshtein rather than plain Levenshtein because a transposition is
+the typo people actually make; plain Levenshtein puts `hlep` two edits from
+help and would never suggest it.
+
 External tools learn the current rig through `rig info --format=json`, never by
 parsing `.rig/manifest.toml`. The manifest is Rig's private persistence format;
 the JSON shape is the compatibility boundary. The API exposes the absolute rig

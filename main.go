@@ -13,9 +13,19 @@ func main() {
 		os.Exit(2)
 	}
 
-	cmd, args := os.Args[1], os.Args[2:]
+	typed, args := os.Args[1], os.Args[2:]
 
-	var err error
+	// Resolve before dispatching so the switch only ever sees canonical names.
+	// A shorthand or a typo dies here with a pointed message rather than the
+	// whole usage block: eighty lines of help buries the one line that says
+	// which command you meant.
+	cmd, err := resolveCommand(typed)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "rig: %v\n", err)
+		fmt.Fprintln(os.Stderr, "try `rig help` for the full list")
+		os.Exit(2)
+	}
+
 	switch cmd {
 	case "up":
 		err = runUp(args)
@@ -41,7 +51,7 @@ func main() {
 		err = runLs(args)
 	case "notify":
 		err = runNotify(args)
-	case "switch", "cd": // cd is a retained alias
+	case "switch": // reached as `cd` too, a retained alias
 		err = runSwitch(args)
 	case "radar":
 		err = runRadar(args)
@@ -90,11 +100,12 @@ func main() {
 		} else {
 			err = executeTeardownJobFile(args[0], false)
 		}
-	case "-h", "--help", "help":
+	case "help":
 		usage()
 	default:
-		fmt.Fprintf(os.Stderr, "rig: unknown command %q\n\n", cmd)
-		usage()
+		// resolveCommand only ever returns a name this switch handles, so
+		// reaching here means the two lists drifted apart.
+		fmt.Fprintf(os.Stderr, "rig: command %q has no handler\n", cmd)
 		os.Exit(2)
 	}
 
@@ -206,5 +217,8 @@ usage:
                             (eval'd by the direnv stdlib; silent outside a rig)
   rig info --format=json    print stable machine-readable context for the
                             current rig and repository
+
+any unambiguous prefix works: rig swe is sweep, rig swi is switch, rig sw is
+neither and says so. A misspelling suggests the nearest names instead.
 `)
 }
