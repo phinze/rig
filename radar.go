@@ -908,12 +908,6 @@ func (m radarModel) displayItems() []radarLine {
 	var items []radarLine
 	if m.currentRow != nil {
 		current := *m.currentRow
-		// Match the useful title folding of a one-agent rig without turning the
-		// current row into a destination. Multiple agents keep the durable rig
-		// title because there is no single context to stand in for the session.
-		if !current.bare && len(current.agents) == 1 {
-			current.activity = agentTitleAddition(current, current.agents[0].Context)
-		}
 		items = append(items,
 			radarLine{header: "CURRENT"},
 			radarLine{row: current, label: true},
@@ -929,10 +923,11 @@ func (m radarModel) displayItems() []radarLine {
 		if !p.bare && len(p.agents) == 1 {
 			c := p.agents[0]
 			display := p
-			// The subject stays; the agent's title trails it only when it adds
-			// something. Enter still targets the agent's pane either way — the
-			// fold's navigation was always the half that was right.
-			display.activity = agentTitleAddition(p, c.Context)
+			// The subject stays — that is what tells you which rig this is. The
+			// agent's title rides along verbatim for the cursor row to show, and
+			// Enter targets the agent's pane, which was always the useful half of
+			// the fold.
+			display.activity = strings.TrimSpace(c.Context)
 			action := display
 			action.child = true
 			action.session = c.Target
@@ -1176,89 +1171,6 @@ const agentPlaceholder = "Claude Code"
 
 func isAgentPlaceholder(title string) bool {
 	return title == agentPlaceholder || title == "Codex" || title == "Antigravity"
-}
-
-// agentTitleAddition is what an agent's session title contributes beyond the row
-// it sits on, or "" when it contributes nothing at all. isAgentPlaceholder is
-// the same idea against a fixed list; this is that test made aware of the row.
-//
-// Radar folds a lone agent's title into its rig row for freshness, and Codex
-// writes those titles by restating the identity the row already carries:
-// "Review PR 1153" on a row whose id is pr-1153, "MIR-1777" on a row whose id is
-// mir-1777. The fold was trading a rig's subject for its own id — nine of eleven
-// live rows did exactly that — so the title column stopped telling you which rig
-// was which, which is the one thing it exists for.
-//
-// The test is structural rather than a vocabulary of verbs to maintain: these
-// titles are all "<verb> <identity>", so ignore one leading word and ask whether
-// any word left is new. That's also what makes the leading word the right thing
-// to drop from what's displayed — it's the same word on every row, and it's why
-// two adjacent rows read as "Review…"/"Review…" instead of showing their
-// difference. A title whose only new word *is* that leading verb reads as an
-// echo and the row falls back to its subject, which is the safe direction to be
-// wrong in.
-func agentTitleAddition(s rigStatus, context string) string {
-	_, rest, ok := strings.Cut(strings.TrimSpace(context), " ")
-	if !ok {
-		// No second word means the whole title was the leading verb, so by this
-		// structure there is no identity half and nothing to add. "Reviewing" on
-		// its own tells you no more than the working dot already did.
-		return ""
-	}
-	rest = dropLeadingID(strings.TrimSpace(rest), s.ID)
-	if rest == "" {
-		return ""
-	}
-	known := titleTokens(s.ID)
-	for tok := range titleTokens(s.Title) {
-		known[tok] = true
-	}
-	for tok := range titleTokens(rest) {
-		if !known[tok] && !titleStopwords[tok] {
-			return rest
-		}
-	}
-	return ""
-}
-
-// dropLeadingID trims a rig id the agent restated at the front of its title,
-// so "Plan MIR-1391 reconciliation" trails as "reconciliation" beside a row
-// whose id column already says mir-1391. The match is the whole id literally,
-// never a word of it: on a rig called project-bring-your-own-image, trimming
-// leading words that merely appear in the id would eat "image project" off
-// "image project health" and leave a fragment.
-func dropLeadingID(rest, id string) string {
-	if id == "" || len(rest) < len(id) {
-		return rest
-	}
-	if !strings.EqualFold(rest[:len(id)], id) {
-		return rest
-	}
-	return strings.TrimSpace(rest[len(id):])
-}
-
-// titleTokens lowercases a phrase and splits it on everything that isn't a
-// letter or digit, so "MIR-1777" and "mir-1777" agree and "#1153" and "1153" do
-// too. Comparing words rather than substrings is what keeps "boot" in a title
-// from matching "bootstrap" in a session name.
-func titleTokens(s string) map[string]bool {
-	out := map[string]bool{}
-	for _, tok := range strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
-	}) {
-		out[tok] = true
-	}
-	return out
-}
-
-// titleStopwords are grammar, not vocabulary. They're here so a title that only
-// adds articles and prepositions ("Review the PR for 1153") still reads as the
-// echo it is; deliberately not a list of agent verbs, which would need feeding
-// every time an agent learned a new way to say "looking at".
-var titleStopwords = map[string]bool{
-	"a": true, "an": true, "and": true, "the": true, "of": true, "for": true,
-	"to": true, "in": true, "on": true, "with": true, "from": true, "at": true,
-	"this": true, "that": true, "its": true, "it": true, "is": true, "or": true,
 }
 
 // stripAgentGlyph peels Claude Code's leading state glyph off a pane title,
@@ -2034,17 +1946,6 @@ func (m radarModel) View() string {
 			budget = max(8, budget)
 		}
 		title := radarTruncateTitle(s.Title, budget)
-		// The activity spends only the slack the subject left behind, and it
-		// spends it last: columns() never reserved a cell for it, so it can't
-		// take width from the id or the PR tail, and a row whose subject already
-		// fills the line simply doesn't show it. Below radarMinActivity there's
-		// no room to say anything, so it says nothing rather than an ellipsis.
-		activity := ""
-		if s.activity != "" {
-			if room := budget - lipgloss.Width(title) - 3; room >= radarMinActivity {
-				activity = radarTruncate(s.activity, room)
-			}
-		}
 
 		if selected {
 			// One style over the whole line: inner color resets would chew
@@ -2052,8 +1953,15 @@ func (m radarModel) View() string {
 			// reverse-video already marks it, no match bolding needed.
 			var b strings.Builder
 			fmt.Fprintf(&b, "▸ %s%-*s  %s  %s", m.kindCell(s, cols), cols.wAge, age(m.touchedAt(s)), glyph, title)
-			if activity != "" {
-				b.WriteString(" · " + activity)
+			// Only the cursor row says what its agent is on. Every other row is
+			// pure identity, which is the question a switcher's list answers;
+			// this is the one row you've already picked out and are deciding
+			// about, and it's the only one with attention to spend. The title is
+			// shown verbatim — radar makes no judgment about what an agent chose
+			// to call its session, it just doesn't let that name stand in for
+			// the rig's own.
+			if room := budget - lipgloss.Width(title) - 3; s.activity != "" && room >= radarMinActivity {
+				b.WriteString(" · " + radarTruncate(s.activity, room))
 			}
 			if rw > 0 {
 				b.WriteString("  " + strings.Join(rightPlain, "  "))
@@ -2073,9 +1981,6 @@ func (m radarModel) View() string {
 		b.WriteString(padRight(age(m.touchedAt(s)), cols.wAge) + "  ")
 		b.WriteString(gstyle.Render(glyph) + "  ")
 		b.WriteString(titleCell)
-		if activity != "" {
-			b.WriteString(radarFaintStyle.Render(" · " + activity))
-		}
 		if rw > 0 {
 			b.WriteString("  " + strings.Join(rightStyled, "  "))
 		}

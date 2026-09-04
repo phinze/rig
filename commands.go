@@ -212,10 +212,9 @@ type rigStatus struct {
 	session  string
 	childKey string
 	agents   []agentChild
-	// activity is what the row's lone agent is doing right now, and only when
-	// that says something the subject doesn't already. It trails the title
-	// faint and is the first thing dropped when the row runs out of room: the
-	// subject identifies the rig, the activity is colour on top of it.
+	// activity is the agent title of a row's lone agent, carried verbatim.
+	// Only the cursor row draws it; every other row is pure identity, so this
+	// never competes with the subject for width.
 	activity string
 	// stone marks a row that isn't a rig at all any more: it's a tombstone from
 	// the history section, and Enter on it resurrects rather than switches.

@@ -167,8 +167,9 @@ func TestRadarCurrentRigKeepsRigIdentity(t *testing.T) {
 	if len(items) < 2 || items[1].row.Title != "durable title" || !items[1].label {
 		t.Fatalf("current display = %+v, want the durable title on a non-selectable row", items)
 	}
-	if items[1].row.activity != "task context" {
-		t.Fatalf("current activity = %q, want the agent context trailing the subject", items[1].row.activity)
+	// The CURRENT row is never the cursor row, so it carries no activity at all.
+	if items[1].row.activity != "" {
+		t.Fatalf("current activity = %q, want nothing on a non-selectable row", items[1].row.activity)
 	}
 	for _, row := range m.rows() {
 		if row.Slug == "current" {
@@ -838,8 +839,8 @@ func TestDisplayItemsSingleRigAgent(t *testing.T) {
 	if items[1].child || items[1].label || items[1].row.Title != "build the thing" {
 		t.Errorf("display row = %+v, want a selectable rig-shaped row keeping its subject", items[1])
 	}
-	if items[1].row.activity != "the saga" {
-		t.Errorf("activity = %q, want the agent's context trailing the subject", items[1].row.activity)
+	if items[1].row.activity != "Plan the saga" {
+		t.Errorf("activity = %q, want the agent's title carried verbatim", items[1].row.activity)
 	}
 	rows := m.rows()
 	if len(rows) != 1 || !rows[0].child || rows[0].session != "s:0.1" || rows[0].Slug != "a" {
@@ -1534,63 +1535,58 @@ func TestRadarRigKindFallsBackToTheID(t *testing.T) {
 	}
 }
 
-func TestAgentTitleAdditionDropsIdentityEchoes(t *testing.T) {
-	// Every one of these is a live pane title from a real board. Codex names a
-	// session by restating the row, and radar used to show that instead of the
-	// rig's subject.
-	for _, tc := range []struct{ id, title, context string }{
-		{"pr-1153", "Add miren top for cluster-wide resource usage", "Review PR 1153"},
-		{"mir-1777", "Report runtime-owned app health alongside entity sync", "MIR-1777"},
-		{"mir-1689", "Expose coordinator startup as staged boot outputs", "Plan MIR-1689 staged boot outputs"},
-		{"mir-1690", "Adopt the boot graph for distributed runner startup", "Plan MIR-1690 boot graph"},
-		{"mir-1762", "Exercise entity sync through garden, toys, and club", "MIR-1762 entity sync"},
-		{"project-boot-dependency-graph", "Boot dependency graph", "Reconcile Boot dependency graph"},
-		{"project-app-deploy-visibility-in-miren-cloud", "App & Deploy Visibility in Miren Cloud", "Assess Miren Cloud visibility"},
-		{"rig-qol-improvements", "rig qol improvements", "Rig QOL improvements"},
-		// Grammar alone is not new information.
-		{"pr-1153", "Add miren top", "Review the PR for 1153"},
-		// Nothing to say at all.
-		{"mir-1", "Some title", ""},
-		{"mir-1", "Some title", "Reviewing"},
-	} {
-		s := rigStatus{ID: tc.id, Title: tc.title}
-		if got := agentTitleAddition(s, tc.context); got != "" {
-			t.Errorf("%s: %q added %q, want it read as an echo", tc.id, tc.context, got)
-		}
+// Radar makes no judgment about what an agent called its session; it just never
+// lets that name stand in for the rig's own. Identity on every row, the agent's
+// title only on the row you've already picked out.
+func TestRadarActivityRidesTheCursorRowOnly(t *testing.T) {
+	subject := "Report runtime-owned app health alongside entity sync"
+	rows := []rigStatus{
+		{ID: "mir-1777", Slug: "a", Title: subject, Tracker: "linear",
+			agents: []agentChild{{Target: "s:0", Context: "MIR-1777"}}},
+		{ID: "mir-1762", Slug: "b", Title: "Exercise entity sync", Tracker: "linear",
+			agents: []agentChild{{Target: "s:1", Context: "Plan the saga"}}},
+	}
+	m := radarModel{width: 120, inflight: rows, prs: map[string][]rigPR{"a": nil, "b": nil}}
+
+	view := m.View()
+	if !strings.Contains(view, subject) {
+		t.Fatalf("subject missing from the board:\n%s", view)
+	}
+	// Cursor is on the first row: it shows its agent's title, however little
+	// that title says, and the second row shows none of its own.
+	if !strings.Contains(view, subject+" · MIR-1777") {
+		t.Errorf("cursor row did not carry its agent title:\n%s", view)
+	}
+	if strings.Contains(view, "Plan the saga") {
+		t.Errorf("a row that isn't the cursor drew its agent title:\n%s", view)
+	}
+
+	m.cursor = 1
+	view = m.View()
+	if !strings.Contains(view, "Exercise entity sync · Plan the saga") {
+		t.Errorf("moving the cursor did not move the activity:\n%s", view)
+	}
+	if strings.Contains(view, subject+" · ") {
+		t.Errorf("the old cursor row kept its agent title:\n%s", view)
 	}
 }
 
-func TestAgentTitleAdditionKeepsRealNews(t *testing.T) {
-	for _, tc := range []struct{ id, title, context, want string }{
-		{"project-bring-your-own-image", "Bring Your Own Image", "Assess image project health", "image project health"},
-		{"lets-try-depot-ci-again", "lets try depot ci again", "Review Depot CI kickoff", "Depot CI kickoff"},
-		{"mir-1", "Fix the parser", "Debugging a flaky integration test", "a flaky integration test"},
-		// The id is trimmed off what trails, since the id column already says it.
-		{"mir-1391", "Make ReconcileController coalesce work and reconcile current state", "Plan MIR-1391 reconciliation", "reconciliation"},
-	} {
-		s := rigStatus{ID: tc.id, Title: tc.title}
-		if got := agentTitleAddition(s, tc.context); got != tc.want {
-			t.Errorf("%s: %q added %q, want %q", tc.id, tc.context, got, tc.want)
-		}
-	}
-}
-
+// Whatever an agent writes, the row it sits on still says which rig it is.
 func TestRadarActivityNeverCrowdsOutTheSubject(t *testing.T) {
-	long := "Report runtime-owned app health alongside entity sync"
 	row := rigStatus{
-		ID: "mir-1777", Slug: "mir-1777", Title: long, Tracker: "linear",
-		agents: []agentChild{{Target: "s:0", Context: "Benchmarking the resnapshot path end to end"}},
+		ID: "mir-1777", Slug: "a", Tracker: "linear",
+		Title:  "Report runtime-owned app health alongside entity sync",
+		agents: []agentChild{{Target: "s:0", Context: strings.Repeat("a very long agent title ", 12)}},
 	}
-	for _, width := range []int{60, 90, 200} {
-		m := radarModel{width: width, inflight: []rigStatus{row}, prs: map[string][]rigPR{"mir-1777": {}}}
+	for _, width := range []int{50, 80, 200} {
+		m := radarModel{width: width, inflight: []rigStatus{row}, prs: map[string][]rigPR{"a": nil}}
 		view := m.View()
-		// However tight the board gets, the row still says which rig it is.
 		if !strings.Contains(view, "Report runtime") {
 			t.Errorf("width %d dropped the subject:\n%s", width, view)
 		}
 		for _, line := range strings.Split(view, "\n") {
 			if !strings.Contains(line, "Report runtime") {
-				continue // the footer has always run its own width; not this row's problem
+				continue // the footer has always run its own width
 			}
 			if w := lipgloss.Width(line); w > width {
 				t.Errorf("width %d produced a %d-cell row: %q", width, w, line)

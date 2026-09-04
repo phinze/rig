@@ -42,19 +42,24 @@ has since moved on keeps its id. That cap is load-bearing and not cosmetic: the
 collapse loop drops the PR tail before the id, so one 60-character kickoff slug
 used to take every PR and CI glyph on the board with it.
 A rig with one live agent folds that agent into its row so Enter lands on the
-exact pane, but the row keeps its own subject: `agentTitleAddition` decides
-whether the agent's session title adds anything, and only what it adds trails
-the subject, faint. That test exists because Codex names a session by restating
-the row — "Review PR 1153" on a row whose id is pr-1153, bare "MIR-1777" on a
-row whose id is mir-1777 — and folding those over the title meant nine of eleven
-live rows stopped saying which rig they were. The test is structural rather than
-a list of agent verbs to maintain: these titles are all `<verb> <identity>`, so
-ignore one leading word and ask whether any word left is new. A one-word title
-is therefore all verb and adds nothing, and a title whose only new word *is* the
-verb reads as an echo — both fall back to the subject, which is the safe
-direction to be wrong in. The activity spends only the slack the subject leaves,
-after `columns()` has already handed out the id and tail, so it can never take
-width from either and a row with no room simply doesn't show it.
+exact pane, but the row keeps its own subject. It used to take the agent's tmux
+pane title instead, and Codex names a session by restating the row it's sitting
+on — "Review PR 1153" on a row whose id is pr-1153, bare "MIR-1777" on a row
+whose id is mir-1777 — so nine of eleven live rows had stopped saying which rig
+they were.
+
+Radar makes no judgment about what an agent chose to call its session; it just
+never lets that name stand in for the rig's own. Every row is pure identity,
+which is the question a switcher's list answers, and only the row under the
+cursor also shows its agent's title, verbatim. That's the one row you've already
+picked out and are deciding about, and the only one with attention to spend. An
+earlier version tried to decide per row whether an agent's title added anything
+— ignore one leading word, ask whether any word left is new — and that worked on
+the titles Codex writes today, which is exactly the problem: agents can put
+whatever they like there, and the rule failed silently when they did. Do not
+reach for that again. The cursor row spends only the slack the subject leaves,
+after `columns()` has handed out the id and tail, so it can never take width
+from either.
 
 Parking captures the carousel's hot repo and the selected agent's conversation;
 when invoked inside that session, it opens the radar to pick the next hop before
