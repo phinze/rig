@@ -1421,13 +1421,12 @@ func TestRadarIDCellSuppressesTitleEcho(t *testing.T) {
 	// An authoring rig picked up from an unlinked PR is also kind-loose, but
 	// its id says something the title doesn't, so it survives.
 	pr := rigStatus{ID: "pr-1153", Title: "Add miren top for cluster-wide resource usage"}
-	cell := newRadarIDCell(pr)
-	if cell.id != "pr-1153" || cell.glyph != "" {
-		t.Errorf("unlinked PR pickup = %q (glyph %q), want a bare pr-1153", cell.id, cell.glyph)
+	if cell := newRadarIDCell(pr); cell.id != "pr-1153" {
+		t.Errorf("unlinked PR pickup = %q, want pr-1153", cell.id)
 	}
 }
 
-func TestRadarIDCellMarksKind(t *testing.T) {
+func TestRadarKindMarksTheLeftEdge(t *testing.T) {
 	for name, tc := range map[string]struct {
 		row  rigStatus
 		want rigKind
@@ -1440,8 +1439,9 @@ func TestRadarIDCellMarksKind(t *testing.T) {
 			t.Errorf("%s: rigKindOf = %v, want %v", name, got, tc.want)
 		}
 		want := rigKindGlyph(tc.want)
-		if got := newRadarIDCell(tc.row).glyph; got != want {
-			t.Errorf("%s: glyph = %q, want %q", name, got, want)
+		m := radarModel{width: 120, inflight: []rigStatus{tc.row}, prs: map[string][]rigPR{tc.row.Slug: nil}}
+		if got := m.kindCell(tc.row, m.columns(m.displayItems())); got != want+" " {
+			t.Errorf("%s: left-edge cell = %q, want %q", name, got, want+" ")
 		}
 	}
 	// Every kind that draws a glyph draws a distinct one, or the marker tells
@@ -1467,9 +1467,8 @@ func TestRadarIDCellSkipsBareAndTombstones(t *testing.T) {
 		t.Errorf("bare session drew an id cell: %q", cell.plain())
 	}
 	stone := rigStatus{ID: "mir-1755", Title: "Forced server shutdown", stone: &tombstone{ID: "mir-1755"}}
-	cell := newRadarIDCell(stone)
-	if cell.id != "mir-1755" || cell.glyph != "" {
-		t.Errorf("tombstone cell = %q (glyph %q), want a bare id", cell.id, cell.glyph)
+	if cell := newRadarIDCell(stone); cell.id != "mir-1755" {
+		t.Errorf("tombstone cell = %q, want a bare id", cell.id)
 	}
 }
 
@@ -1597,5 +1596,41 @@ func TestRadarActivityNeverCrowdsOutTheSubject(t *testing.T) {
 				t.Errorf("width %d produced a %d-cell row: %q", width, w, line)
 			}
 		}
+	}
+}
+
+// Kind holds the same hard-left edge on radar that it holds on ls and sweep, and
+// pads a kindless row so the age column beneath never drifts.
+func TestRadarKindColumnKeepsTheGridAligned(t *testing.T) {
+	rows := []rigStatus{
+		{ID: "mir-1689", Slug: "a", Title: "Expose coordinator startup", Tracker: "linear"},
+		{ID: "pr-1153", Slug: "b", Title: "Add miren top", Kind: "review"},
+		{Slug: "c", Title: "lets try depot ci again", ID: kickoffID("lets try depot ci again")},
+	}
+	m := radarModel{width: 120, inflight: rows, prs: map[string][]rigPR{"a": nil, "b": nil, "c": nil}}
+	if got := m.columns(m.displayItems()).wKind; got != 2 {
+		t.Fatalf("kind column = %d, want 2", got)
+	}
+	ageAt := -1
+	for _, want := range []string{"Expose coordinator", "Add miren top", "lets try depot"} {
+		for _, line := range strings.Split(m.View(), "\n") {
+			if !strings.Contains(line, want) {
+				continue
+			}
+			at := runeIndex(line, "0m")
+			if ageAt < 0 {
+				ageAt = at
+			} else if at != ageAt {
+				t.Errorf("row %q starts its age at %d, want %d", want, at, ageAt)
+			}
+			break
+		}
+	}
+
+	// A board with no kinds anywhere spends no width on the marker.
+	loose := []rigStatus{{Slug: "c", Title: "lets try depot ci again", ID: kickoffID("lets try depot ci again")}}
+	lm := radarModel{width: 120, inflight: loose, prs: map[string][]rigPR{"c": nil}}
+	if got := lm.columns(lm.displayItems()).wKind; got != 0 {
+		t.Errorf("all-loose board reserved %d columns for kind, want 0", got)
 	}
 }

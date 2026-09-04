@@ -1608,12 +1608,13 @@ func radarStateStyle(state string) lipgloss.Style {
 // PR and CI glyph on the board with it.
 const radarMaxID = 20
 
-// radarIDCell is the id as the board draws it: a kind glyph, then the id
-// clipped to radarMaxID. It comes back empty for a row with nothing to say —
+// radarIDCell is the id as the board draws it, clipped to radarMaxID. Kind used
+// to lead it and now rides the left edge instead, where ls and sweep put it and
+// where the eye is already scanning. It comes back empty for a row with nothing
+// to say —
 // a bare tmux session, or a `rig new` rig whose id is only its own title
 // slugified, where drawing it means printing the title twice in one row.
 type radarIDCell struct {
-	glyph   string
 	id      string // as displayed, so possibly clipped
 	clipped bool
 }
@@ -1638,24 +1639,14 @@ func newRadarIDCell(s rigStatus) radarIDCell {
 	if kind == rigKindLoose && s.ID == kickoffID(s.Title) {
 		return radarIDCell{}
 	}
-	cell := clip()
-	cell.glyph = rigKindGlyph(kind)
-	return cell
+	return clip()
 }
 
-func (c radarIDCell) empty() bool { return c.glyph == "" && c.id == "" }
+func (c radarIDCell) empty() bool { return c.id == "" }
 
 // plain is the cell as it occupies space, which is what the width math and the
 // selected row's unstyled render both need.
-func (c radarIDCell) plain() string {
-	switch {
-	case c.glyph == "":
-		return c.id
-	case c.id == "":
-		return c.glyph
-	}
-	return c.glyph + " " + c.id
-}
+func (c radarIDCell) plain() string { return c.id }
 
 // radarGlyph is the fixed-width status cell: one glyph whose shape and color
 // carry the row's state, so the PR fan-out landing never shifts the layout.
@@ -1809,6 +1800,7 @@ func radarTailSegs(s rigStatus, fetched bool) []tailSeg {
 // from parent rows so children never widen a column, and a fetch landing swaps a
 // glyph in place without shifting anything.
 type radarColumns struct {
+	wKind                    int // 0 when no row on the board has a kind, and then it vanishes
 	wID, wAge, wTitle, wTail int
 	titleAt                  int
 }
@@ -1845,13 +1837,27 @@ func (m radarModel) columns(items []radarLine) radarColumns {
 		wTitle = max(wTitle, lipgloss.Width(it.row.Title))
 		wTail = max(wTail, m.radarTailWidth(it.row))
 	}
+	// Kind sits on the hard-left edge just inside the cursor gutter, the same
+	// place ls and sweep put it. It collapses to nothing when no row on the
+	// board has a kind to show, so an all-loose board spends no width on a
+	// marker it would never draw.
+	wKind := 0
+	for _, it := range items {
+		if it.header != "" || it.child {
+			continue
+		}
+		if rigKindGlyph(rigKindOf(it.row)) != "" && it.row.stone == nil {
+			wKind = 2
+			break
+		}
+	}
 	const gutter, gap, glyph = 2, 2, 1
 	// Left frame, always present; the title starts here and fills rightward.
-	titleAt := gutter + wAge + gap + glyph + gap
+	titleAt := gutter + wKind + wAge + gap + glyph + gap
 
 	// Unknown width (not yet sized): everything at its desired width, no drops.
 	if m.width <= 0 {
-		return radarColumns{wID, wAge, wTitle, wTail, titleAt}
+		return radarColumns{wKind, wID, wAge, wTitle, wTail, titleAt}
 	}
 
 	// Collapse the right-hand detail — tail before id — until the title clears
@@ -1887,7 +1893,24 @@ func (m radarModel) columns(items []radarLine) radarColumns {
 		wTail = 0
 	}
 	wTitle = max(8, min(wTitle, m.width-titleAt-need()))
-	return radarColumns{wID, wAge, wTitle, wTail, titleAt}
+	return radarColumns{wKind, wID, wAge, wTitle, wTail, titleAt}
+}
+
+// kindCell is the left-edge kind marker: the glyph and a space, padded to the
+// same two cells for a row that has no kind so the age column beneath stays
+// aligned, and empty when the column collapsed. A history row is deliberately
+// blank — a tombstone carries no manifest to read a kind from, and its glyph
+// and tail already answer the only live question about it.
+func (m radarModel) kindCell(s rigStatus, cols radarColumns) string {
+	if cols.wKind == 0 {
+		return ""
+	}
+	if s.stone == nil {
+		if g := rigKindGlyph(rigKindOf(s)); g != "" {
+			return g + " "
+		}
+	}
+	return "  "
 }
 
 func (m radarModel) View() string {
@@ -1985,9 +2008,6 @@ func (m radarModel) View() string {
 				idHits, _ := radarMatchFields(m.filter, s)
 				styled = highlightRunesBase(idCell.id, idHits, &radarFaintStyle)
 			}
-			if idCell.glyph != "" {
-				styled = radarFaintStyle.Render(idCell.glyph) + " " + styled
-			}
 			rightPlain, rightStyled = append(rightPlain, idCell.plain()), append(rightStyled, styled)
 		}
 		if cols.wTail > 0 {
@@ -2031,7 +2051,7 @@ func (m radarModel) View() string {
 			// through a wrapping reverse, so the selected row goes plain — the
 			// reverse-video already marks it, no match bolding needed.
 			var b strings.Builder
-			fmt.Fprintf(&b, "▸ %-*s  %s  %s", cols.wAge, age(m.touchedAt(s)), glyph, title)
+			fmt.Fprintf(&b, "▸ %s%-*s  %s  %s", m.kindCell(s, cols), cols.wAge, age(m.touchedAt(s)), glyph, title)
 			if activity != "" {
 				b.WriteString(" · " + activity)
 			}
@@ -2049,6 +2069,7 @@ func (m radarModel) View() string {
 		}
 		var b strings.Builder
 		b.WriteString("  ")
+		b.WriteString(radarFaintStyle.Render(m.kindCell(s, cols)))
 		b.WriteString(padRight(age(m.touchedAt(s)), cols.wAge) + "  ")
 		b.WriteString(gstyle.Render(glyph) + "  ")
 		b.WriteString(titleCell)

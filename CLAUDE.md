@@ -29,10 +29,14 @@ Both action sections are ordered by the same durable last-touched timestamp,
 which is also the age shown in the first column; background agent and PR updates
 never move rows. ctrl-p toggles the selected rig between sections without
 leaving the board; Enter on a parked rig still wakes and enters it.
-Sections are the row's *state*, so a row's *kind* rides beside the id instead: a
-glyph from a family the state glyphs don't use, then the id clipped to
-`radarMaxID`. A loose `rig new` rig draws neither, because its id is only its
-own title slugified and printing both says the same sentence twice in one row —
+Sections are the row's *state*, so a row's *kind* gets a marker of its own on the
+hard-left edge, just inside the cursor gutter: a glyph from a family the state
+glyphs don't use, on the edge the eye is already scanning and the same one `ls`
+and `sweep` use. It rode the id cell first, which put it on the right where you
+had to go looking for it while the left column read as an undifferentiated
+column of dots. The id itself is clipped to `radarMaxID`, and a loose `rig new`
+rig draws no id at all, because its id is only its own title slugified and
+printing both says the same sentence twice in one row —
 `kickoffID` is asked directly rather than matched by shape, so a rig whose title
 has since moved on keeps its id. That cap is load-bearing and not cosmetic: the
 collapse loop drops the PR tail before the id, so one 60-character kickoff slug
@@ -172,10 +176,11 @@ Damerau-Levenshtein rather than plain Levenshtein because a transposition is
 the typo people actually make; plain Levenshtein puts `hlep` two edits from
 help and would never suggest it.
 
-Kind itself lives in `kind.go`, not in any one board, because all three draw it:
-radar on the id cell, `ls` and `sweep` in a column on the hard-left edge just
-inside the checkbox. Only radar suppresses a loose rig's id, since there the id
-is right-hand detail while in `ls` it's the handle you copy into `rig switch`.
+Kind itself lives in `kind.go`, not in any one board, because all three draw it
+on the same hard-left edge: inside sweep's checkbox, inside radar's cursor
+gutter, first on an `ls` row. Only radar suppresses a loose rig's id, since
+there the id is right-hand detail while in `ls` it's the handle you copy into
+`rig switch`.
 `rigKindOf` falls back to the id looking like an issue identifier when the
 manifest records no tracker, because rigs made before that field existed are
 still in flight and a marker that skips them reads as unreliable rather than
