@@ -1420,10 +1420,10 @@ func TestRadarIDCellMarksKind(t *testing.T) {
 		"review":  {rigStatus{ID: "pr-1153", Title: "Add miren top", Kind: "review"}, rigKindReview},
 		"project": {rigStatus{ID: "project-boot-dependency-graph", Title: "Boot dependency graph", Kind: "project", Tracker: "linear"}, rigKindProject},
 	} {
-		if got := radarRigKind(tc.row); got != tc.want {
-			t.Errorf("%s: radarRigKind = %v, want %v", name, got, tc.want)
+		if got := rigKindOf(tc.row); got != tc.want {
+			t.Errorf("%s: rigKindOf = %v, want %v", name, got, tc.want)
 		}
-		want := radarKindGlyph(tc.want)
+		want := rigKindGlyph(tc.want)
 		if got := newRadarIDCell(tc.row).glyph; got != want {
 			t.Errorf("%s: glyph = %q, want %q", name, got, want)
 		}
@@ -1432,7 +1432,7 @@ func TestRadarIDCellMarksKind(t *testing.T) {
 	// you nothing it didn't already.
 	seen := map[string]rigKind{}
 	for _, k := range []rigKind{rigKindTicket, rigKindReview, rigKindProject} {
-		g := radarKindGlyph(k)
+		g := rigKindGlyph(k)
 		if g == "" {
 			t.Errorf("kind %v has no glyph", k)
 		}
@@ -1441,7 +1441,7 @@ func TestRadarIDCellMarksKind(t *testing.T) {
 		}
 		seen[g] = k
 	}
-	if radarKindGlyph(rigKindLoose) != "" {
+	if rigKindGlyph(rigKindLoose) != "" {
 		t.Error("a loose rig should draw no kind glyph")
 	}
 }
@@ -1504,7 +1504,7 @@ func TestRadarRigKindFallsBackToTheID(t *testing.T) {
 	// Rigs made before the manifest recorded a tracker still read as tickets,
 	// or the marker looks unreliable rather than absent.
 	legacy := rigStatus{ID: "mir-1364", Title: "deploy Chatto on Miren guide"}
-	if got := radarRigKind(legacy); got != rigKindTicket {
+	if got := rigKindOf(legacy); got != rigKindTicket {
 		t.Errorf("trackerless mir-1364 = %v, want ticket", got)
 	}
 	// But rig's own reserved PR id is not a team prefix.
@@ -1513,7 +1513,7 @@ func TestRadarRigKindFallsBackToTheID(t *testing.T) {
 		{ID: "lets-try-depot-ci-again", Title: "lets try depot ci again"},
 		{ID: "fix-500-errors", Title: "fix 500 errors"},
 	} {
-		if got := radarRigKind(row); got != rigKindLoose {
+		if got := rigKindOf(row); got != rigKindLoose {
 			t.Errorf("%s = %v, want loose", row.ID, got)
 		}
 	}

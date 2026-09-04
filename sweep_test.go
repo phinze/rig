@@ -480,7 +480,10 @@ func TestSweepBoardSubjectAndWhyShareOneGrid(t *testing.T) {
 		if line == "" {
 			t.Fatalf("no row for %s in:\n%s", tc.id, view)
 		}
-		s, w := strings.Index(line, tc.subject), strings.Index(line, tc.why)
+		// Rune offsets, not byte offsets: the kind marker is a multi-byte glyph
+		// on a ticket row and two spaces on a loose one, so byte positions would
+		// disagree about a grid that lines up perfectly on screen.
+		s, w := runeIndex(line, tc.subject), runeIndex(line, tc.why)
 		if s < 0 || w < 0 {
 			t.Fatalf("row %s = %q, want it to carry both %q and %q", tc.id, line, tc.subject, tc.why)
 		}
@@ -799,5 +802,59 @@ func TestPlanSweepKeepsProjectRigsAsPersistentContext(t *testing.T) {
 	plans := planSweep([]rigInfo{rig}, []rigStatus{status}, t.TempDir(), map[string]bool{}, nil)
 	if len(plans) != 1 || plans[0].action != actionNone || plans[0].detail != "project overview" || plans[0].collect {
 		t.Fatalf("project sweep plan = %+v", plans)
+	}
+}
+
+// runeIndex is strings.Index counted in runes, which is what a column position
+// means on a board that draws glyphs.
+func runeIndex(s, sub string) int {
+	i := strings.Index(s, sub)
+	if i < 0 {
+		return -1
+	}
+	return len([]rune(s[:i]))
+}
+
+// Kind rides the same hard-left edge on every board. It has to pad a loose rig
+// rather than skip it, or the id column beneath drifts row to row.
+func TestSweepBoardMarksKindWithoutBreakingTheGrid(t *testing.T) {
+	m := newSweepModel(testPlans(), false)
+	m.width, m.showAll = 160, true
+	c := m.columns()
+	if c.kind != 2 {
+		t.Fatalf("kind column = %d, want 2 (the fixtures include ticket rigs)", c.kind)
+	}
+
+	idAt := -1
+	for _, id := range []string{"mir-982", "old-rig", "mir-1364", "mir-822"} {
+		line := ""
+		for l := range strings.SplitSeq(m.View(), "\n") {
+			if strings.Contains(l, id) {
+				line = l
+				break
+			}
+		}
+		if line == "" {
+			t.Fatalf("no row for %s", id)
+		}
+		at := runeIndex(line, id)
+		if idAt < 0 {
+			idAt = at
+			continue
+		}
+		if at != idAt {
+			t.Errorf("row %s starts its id at %d, want %d", id, at, idAt)
+		}
+	}
+
+	// A board of nothing but loose rigs spends no columns on a marker it would
+	// never draw.
+	loose := testPlans()
+	for i := range loose {
+		loose[i].status.Kind, loose[i].status.Tracker = "", ""
+		loose[i].status.ID = "loose-kickoff"
+	}
+	if got := newSweepModel(loose, false).columns().kind; got != 0 {
+		t.Errorf("all-loose board reserved %d columns for kind, want 0", got)
 	}
 }

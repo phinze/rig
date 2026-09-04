@@ -637,8 +637,9 @@ func reportSweep(plans []sweepPlan) {
 		case actionWake:
 			next = "rig wake " + p.status.ID
 		}
-		fmt.Fprintf(w, "  %s\t%s\t%s\t%s\t%s\t%s\n",
-			p.status.ID, sweepRefs(p), sweepSubject(p), p.detail, sweepMeta(p), next)
+		fmt.Fprintf(w, "  %s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			rigKindGlyph(rigKindOf(p.status)), p.status.ID, sweepRefs(p),
+			sweepSubject(p), p.detail, sweepMeta(p), next)
 	}
 	_ = w.Flush()
 }
@@ -972,6 +973,7 @@ const (
 // their own alignment. The fixed columns size to their content (capped); the
 // subject takes whatever's left.
 type sweepCols struct {
+	kind    int // 0 when every row on the board is a loose rig, and then it vanishes
 	id      int
 	ref     int // 0 when no row on the board has a PR, and then the column vanishes
 	subject int // 0 means no terminal width yet: don't clip, don't pad
@@ -982,6 +984,9 @@ type sweepCols struct {
 func (m sweepModel) columns() sweepCols {
 	var c sweepCols
 	measure := func(p sweepPlan) {
+		if rigKindGlyph(rigKindOf(p.status)) != "" {
+			c.kind = 2
+		}
 		c.id = max(c.id, lipgloss.Width(p.status.ID))
 		c.ref = max(c.ref, lipgloss.Width(sweepRefs(p)))
 		c.why = max(c.why, lipgloss.Width(p.detail))
@@ -1004,10 +1009,10 @@ func (m sweepModel) columns() sweepCols {
 	return c
 }
 
-// leadWidth is everything left of the subject: the checkbox, the id, and the
-// refs when any row has them.
+// leadWidth is everything left of the subject: the checkbox, the kind marker,
+// the id, and the refs when any row has them.
 func (c sweepCols) leadWidth() int {
-	w := 1 + 3 + 1 + c.id + 2
+	w := 1 + 3 + 1 + c.kind + c.id + 2
 	if c.ref > 0 {
 		w += c.ref + 2
 	}
@@ -1059,7 +1064,14 @@ func sweepMeta(p sweepPlan) string {
 // what keeps the id column aligned across rows you can act on and rows you
 // can't.
 func (m sweepModel) sweepLine(box string, p sweepPlan, c sweepCols) (lead, subject, why, meta string) {
-	lead = " " + box + " " + padRight(sweepClip(p.status.ID, c.id), c.id) + "  "
+	// Kind sits between the checkbox and the id, on the same hard-left edge ls
+	// puts it. rigKindCell pads a loose rig to the same two cells rather than
+	// omitting them, which is what keeps the id column beneath it aligned.
+	lead = " " + box + " "
+	if c.kind > 0 {
+		lead += rigKindCell(p.status)
+	}
+	lead += padRight(sweepClip(p.status.ID, c.id), c.id) + "  "
 	if c.ref > 0 {
 		lead += padRight(sweepRefs(p), c.ref) + "  "
 	}

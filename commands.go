@@ -145,10 +145,18 @@ func runLs(args []string) error {
 		if mark := rigNotifyMark(s); mark != "" {
 			title = mark + " " + title
 		}
+		// Kind leads the row rather than riding the id, because the id here is
+		// the handle you copy into `rig switch` and a glyph glued to its front
+		// gets caught in the selection. On the left it also gives the table a
+		// hard edge to scan down, which is what a kind marker is for. The cell
+		// is the bare glyph: tabwriter owns the padding, and a loose rig's empty
+		// cell collapses the column to nothing when no row on the board has a
+		// kind to show.
+		kind := rigKindGlyph(rigKindOf(s))
 		if full {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", s.ID, age(s.Created), agentMarker(s), prMarker(s), title)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", kind, s.ID, age(s.Created), agentMarker(s), prMarker(s), title)
 		} else {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", s.ID, age(s.Created), agentMarker(s), title)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", kind, s.ID, age(s.Created), agentMarker(s), title)
 		}
 	}
 	return w.Flush()
