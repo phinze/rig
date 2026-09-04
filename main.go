@@ -158,10 +158,12 @@ usage:
                             rig to that project's overview inbox
   rig review [pr-url] [--agent AGENT] [--refresh]
                             pitch a review rig for someone else's PR
-                            (url, or fzf picker over review-requested PRs;
-                            a URL that turns out to be yours routes to up;
-                            --refresh explicitly advances an existing review
-                            workspace to the PR's current head)
+                            (url, or fzf picker over the PRs awaiting your
+                            review plus the review rigs you already have, each
+                            marked live or parked; picking a marked one goes
+                            there. A URL that turns out to be yours routes to
+                            up; --refresh explicitly advances an existing
+                            review workspace to the PR's current head)
   rig pr                    open one of the rig's PRs in the browser
                             (across added repos and tracked/current branches;
                             when several match, pick one with fzf)

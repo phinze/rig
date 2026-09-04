@@ -169,6 +169,18 @@ private layout. Recto owns its authored state beneath XDG for standalone and
 Rig launches alike. Teardown asks `recto state forget` about each workspace on
 a best-effort basis; Rig never parses Recto's files or computes its state key.
 
+`rig review`'s no-arg picker is the union of the PRs awaiting your review and
+the review rigs you already have, each row marked `live rig` or `parked rig`.
+The two sets diverge in both directions, which is the whole reason for the
+union: GitHub drops the review request the instant you submit a review, so a
+rig you are still working in falls out of the search and becomes unreachable
+from the command that made it. Rows are marked rather than subtracted, because
+subtracting them ended a busy week at "all of them already have rigs" — a dead
+end whose one useful action was the thing it had just hidden. A rig that cannot
+name its PR (no recorded locator, no `pr-<n>` id) is dropped from the picker
+rather than guessed at: a row that lands you in the wrong review is worse than
+a row that isn't there.
+
 A review rig also pins each fetched `pull/N/head` with a reserved, untracked
 `rig-review/…` bookmark in the shared jj repository. The bookmark is the
 reachability root a workspace registration is not: force-pushing and fetching a

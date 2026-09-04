@@ -7,15 +7,16 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
 
 // runReview is the review half of the pickup pair: point it at someone else's
 // PR and it drops a read-only rig around it. A URL may turn out to be your own
-// PR, in which case pickupPR reroutes you to authoring (up); the no-arg picker
-// only ever offers review-requested PRs, which are others' by construction, so
-// it skips straight to the review pickup.
+// PR, in which case pickupPR reroutes you to authoring (up). The no-arg picker
+// offers review-requested PRs and your existing review rigs, both of which are
+// others' work by construction, so it skips straight to the review pickup.
 func runReview(args []string) error {
 	refresh := false
 	filtered := args[:0]
@@ -459,36 +460,46 @@ func parsePRURL(s string) *prRef {
 	return &prRef{Owner: m[1], Repo: m[2], Number: n}
 }
 
-// pickReviewPR opens an fzf picker over the open PRs awaiting your review. These
-// are others' work by construction (you don't request review from yourself), so
-// callers skip the authorship check and go straight to the review pickup.
+// reviewCandidate is one row of the review picker: a PR, plus what rig (if
+// any) is already standing on it. The rig half is why the picker can offer a
+// PR that GitHub no longer lists.
+type reviewCandidate struct {
+	pr    prRef
+	title string
+	rig   string // "" | "live rig" | "parked rig"
+}
+
+// pickReviewPR opens an fzf picker over the reviews available to you: the open
+// PRs awaiting your review, plus every review rig you already have. The second
+// half matters because the two sets diverge in both directions. GitHub drops
+// the review request the moment you submit a review, so a rig you are still
+// working in falls out of the search and becomes unreachable from the command
+// that made it; and a PR you have already picked up should say so rather than
+// look like fresh work.
+//
+// Rows are marked rather than removed. The picker used to subtract the PRs it
+// had rigs for, which meant a busy week ended at "all open PRs awaiting your
+// review already have rigs in flight" — a dead end whose one useful action,
+// going to one of those rigs, was the thing it had just hidden. Selecting a
+// marked row lands in the existing rig by way of attachExistingReviewRig, which
+// the caller already runs on every pick.
+//
 // Returns nil (no error) when the picker is cancelled.
 func pickReviewPR(pick *agentPick) (*prRef, error) {
-	out, err := exec.Command("gh", "search", "prs",
-		"--review-requested=@me", "--state=open",
-		"--json", "repository,number,title,url",
-		"--jq", `.[] | "\(.repository.nameWithOwner)\t#\(.number)\t\(.title)\t\(.url)"`,
-	).Output()
-	if err != nil {
-		return nil, fmt.Errorf("gh search prs: %w", err)
-	}
-	rows := strings.Split(strings.TrimSpace(string(out)), "\n")
-	if len(rows) == 0 || (len(rows) == 1 && rows[0] == "") {
-		return nil, fmt.Errorf("no open PRs awaiting your review")
-	}
 	rigs, err := listRigs()
 	if err != nil {
 		return nil, err
 	}
-	rows, err = withoutInFlightReviewRigs(rows, rigs)
+	requested, err := reviewRequestedCandidates()
 	if err != nil {
 		return nil, err
 	}
-	if len(rows) == 0 {
-		return nil, fmt.Errorf("all open PRs awaiting your review already have rigs in flight")
+	candidates := mergeReviewCandidates(requested, reviewRigCandidates(rigs))
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("no open PRs awaiting your review, and no review rigs in flight")
 	}
 
-	sel, err := fzfSelect(rows, "Review PR: ", pick)
+	sel, err := fzfSelect(reviewPickerRows(candidates), "Review PR: ", pick)
 	if err != nil {
 		return nil, err
 	}
@@ -497,6 +508,181 @@ func pickReviewPR(pick *agentPick) (*prRef, error) {
 	}
 
 	return reviewPRFromPickerRow(sel)
+}
+
+// reviewRequestedCandidates asks GitHub for the open PRs waiting on your
+// review. An empty result isn't an error here: the local review rigs are the
+// other half of the picker and may well carry it alone.
+func reviewRequestedCandidates() ([]reviewCandidate, error) {
+	out, err := exec.Command("gh", "search", "prs",
+		"--review-requested=@me", "--state=open",
+		"--json", "repository,number,title,url",
+		"--jq", `.[] | "\(.repository.nameWithOwner)\t#\(.number)\t\(.title)"`,
+	).Output()
+	if err != nil {
+		return nil, fmt.Errorf("gh search prs: %w", err)
+	}
+	return parseReviewSearchRows(string(out)), nil
+}
+
+// parseReviewSearchRows turns gh's tab-delimited search output into candidates,
+// skipping anything malformed. A row rig can't read is a row it can't act on
+// either, and one bad line shouldn't cost you the whole picker.
+func parseReviewSearchRows(out string) []reviewCandidate {
+	var candidates []reviewCandidate
+	for _, row := range strings.Split(strings.TrimSpace(out), "\n") {
+		cols := strings.SplitN(strings.TrimSpace(row), "\t", 3)
+		if len(cols) < 3 {
+			continue
+		}
+		owner, repo, ok := strings.Cut(cols[0], "/")
+		if !ok || owner == "" || repo == "" {
+			continue
+		}
+		n, err := strconv.Atoi(strings.TrimPrefix(cols[1], "#"))
+		if err != nil {
+			continue
+		}
+		candidates = append(candidates, reviewCandidate{
+			pr: prRef{Owner: owner, Repo: repo, Number: n}, title: cols[2],
+		})
+	}
+	return candidates
+}
+
+// reviewRigCandidates turns the local review rigs into picker rows, most
+// recently touched first. A rig that can't name its PR is dropped rather than
+// guessed at: a row that lands you in the wrong review is worse than a row
+// that isn't there.
+func reviewRigCandidates(rigs []rigInfo) []reviewCandidate {
+	ordered := make([]rigInfo, 0, len(rigs))
+	for _, r := range rigs {
+		if r.Kind == "review" {
+			ordered = append(ordered, r)
+		}
+	}
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return ordered[i].LastTouched.After(ordered[j].LastTouched)
+	})
+	out := make([]reviewCandidate, 0, len(ordered))
+	for _, r := range ordered {
+		pr := reviewRigPR(r)
+		if pr == nil {
+			continue
+		}
+		mark := "live rig"
+		if !r.Parked.IsZero() {
+			mark = "parked rig"
+		}
+		out = append(out, reviewCandidate{pr: *pr, title: r.Title, rig: mark})
+	}
+	return out
+}
+
+// reviewRigPR recovers the PR a review rig stands on. The manifest's recorded
+// locator is authoritative; rigs older than that field fall back to the pr-<n>
+// id plus the repository the rig reviews, which is the same pair
+// existingReviewRig matches on from the other direction.
+func reviewRigPR(r rigInfo) *prRef {
+	m, err := readManifest(r.Path)
+	if err != nil {
+		return nil
+	}
+	// A rig can hold several repos, and map order is random, so walk the
+	// recorded locators in a fixed order or a multi-repo review resolves to a
+	// different PR on different runs. The main repo leads because that's the
+	// review the rig is actually about; anything else it holds was added for
+	// research.
+	keys := make([]string, 0, len(m.ReviewPRs))
+	for subdir := range m.ReviewPRs {
+		keys = append(keys, subdir)
+	}
+	sort.Strings(keys)
+	if m.MainRepo != "" {
+		sort.SliceStable(keys, func(i, j int) bool {
+			return keys[i] == m.MainRepo && keys[j] != m.MainRepo
+		})
+	}
+	for _, subdir := range keys {
+		if pr := parsePRURL(m.ReviewPRs[subdir]); pr != nil {
+			return pr
+		}
+	}
+	if !strings.HasPrefix(r.ID, "pr-") {
+		return nil
+	}
+	n, err := strconv.Atoi(strings.TrimPrefix(r.ID, "pr-"))
+	if err != nil {
+		return nil
+	}
+	subdirs := make([]string, 0, len(m.Repos))
+	for subdir := range m.Repos {
+		subdirs = append(subdirs, subdir)
+	}
+	sort.Strings(subdirs) // a multi-repo rig must resolve the same way twice
+	for _, subdir := range subdirs {
+		if len(m.Branches[subdir]) == 0 && len(m.Repos) != 1 {
+			continue
+		}
+		if owner, repo, ok := strings.Cut(m.Repos[subdir], "/"); ok {
+			return &prRef{Owner: owner, Repo: repo, Number: n}
+		}
+	}
+	return nil
+}
+
+// mergeReviewCandidates folds the rig rows into the GitHub rows on PR identity,
+// keeping GitHub's title (it's the current one) and the rig's mark. Fresh work
+// leads, because "what haven't I started" is what the picker is usually asked;
+// rows you already have a rig for follow, most recently touched first.
+func mergeReviewCandidates(requested, fromRigs []reviewCandidate) []reviewCandidate {
+	key := func(pr prRef) string {
+		return fmt.Sprintf("%s/%s#%d", strings.ToLower(pr.Owner), strings.ToLower(pr.Repo), pr.Number)
+	}
+	marks := make(map[string]string, len(fromRigs))
+	for _, c := range fromRigs {
+		marks[key(c.pr)] = c.rig
+	}
+
+	var fresh, held []reviewCandidate
+	seen := map[string]bool{}
+	for _, c := range requested {
+		k := key(c.pr)
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		if mark, ok := marks[k]; ok {
+			c.rig = mark
+			held = append(held, c)
+			continue
+		}
+		fresh = append(fresh, c)
+	}
+	for _, c := range fromRigs {
+		if k := key(c.pr); !seen[k] {
+			seen[k] = true
+			held = append(held, c)
+		}
+	}
+	return append(fresh, held...)
+}
+
+// reviewPickerRows renders candidates for fzf. The rig mark rides the title
+// column rather than taking one of its own: fzfSelect shows only the first
+// three, and a fourth column would push the title out of sight. Riding there
+// also makes the mark searchable, so typing "parked" narrows to exactly those.
+func reviewPickerRows(candidates []reviewCandidate) []string {
+	rows := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		title := c.title
+		if c.rig != "" {
+			title += "  · " + c.rig
+		}
+		rows = append(rows, fmt.Sprintf("%s/%s\t#%d\t%s\t%s",
+			c.pr.Owner, c.pr.Repo, c.pr.Number, title, c.pr.URL()))
+	}
+	return rows
 }
 
 func reviewPRFromPickerRow(row string) (*prRef, error) {
@@ -513,28 +699,6 @@ func reviewPRFromPickerRow(row string) (*prRef, error) {
 		return nil, fmt.Errorf("unexpected PR number in selection: %q", cols[1])
 	}
 	return &prRef{Owner: owner, Repo: repo, Number: n}, nil
-}
-
-// withoutInFlightReviewRigs removes work already represented by an active
-// review rig. Parked reviews stay pickable: selecting one is an intentional
-// request to wake its existing workspace and conversation.
-func withoutInFlightReviewRigs(rows []string, rigs []rigInfo) ([]string, error) {
-	kept := make([]string, 0, len(rows))
-	for _, row := range rows {
-		pr, err := reviewPRFromPickerRow(row)
-		if err != nil {
-			return nil, err
-		}
-		found, err := existingReviewRig(rigs, pr)
-		if err != nil {
-			return nil, err
-		}
-		if found != nil && found.Parked.IsZero() {
-			continue
-		}
-		kept = append(kept, row)
-	}
-	return kept, nil
 }
 
 // prMeta is what a single `gh pr view` tells us about a PR at pickup time: its

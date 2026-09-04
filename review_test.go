@@ -168,7 +168,7 @@ func TestExistingReviewRigAcceptsLegacySingleRepoManifest(t *testing.T) {
 	}
 }
 
-func TestReviewPickerHidesInFlightRigsAndKeepsParkedRigs(t *testing.T) {
+func TestReviewPickerMarksRigsInsteadOfHidingThem(t *testing.T) {
 	root := t.TempDir()
 	active := filepath.Join(root, "active")
 	parked := filepath.Join(root, "parked")
@@ -184,21 +184,121 @@ func TestReviewPickerHidesInFlightRigsAndKeepsParkedRigs(t *testing.T) {
 		}
 	}
 	rigs := []rigInfo{
-		{ID: "pr-42", Path: active},
-		{ID: "pr-43", Path: parked, Parked: time.Now()},
+		{ID: "pr-42", Kind: "review", Path: active, Title: "Active review"},
+		{ID: "pr-43", Kind: "review", Path: parked, Title: "Parked review", Parked: time.Now()},
 	}
-	rows := []string{
-		"fakeowner/rfd\t#42\tActive review\thttps://github.com/fakeowner/rfd/pull/42",
-		"fakeowner/rfd\t#43\tParked review\thttps://github.com/fakeowner/rfd/pull/43",
-		"fakeowner/other\t#42\tSame number, other repo\thttps://github.com/fakeowner/other/pull/42",
-	}
+	requested := parseReviewSearchRows(strings.Join([]string{
+		"fakeowner/rfd\t#42\tActive review",
+		"fakeowner/rfd\t#43\tParked review",
+		"fakeowner/other\t#42\tSame number, other repo",
+	}, "\n"))
 
-	got, err := withoutInFlightReviewRigs(rows, rigs)
-	if err != nil {
+	got := mergeReviewCandidates(requested, reviewRigCandidates(rigs))
+
+	// Fresh work leads; a PR whose number collides with a rig's in a different
+	// repo is fresh work, not that rig.
+	if len(got) != 3 {
+		t.Fatalf("got %d candidates, want 3: %+v", len(got), got)
+	}
+	if got[0].pr.Repo != "other" || got[0].rig != "" {
+		t.Errorf("first row = %+v, want the unrigged fakeowner/other#42", got[0])
+	}
+	marks := map[int]string{}
+	for _, c := range got {
+		if c.pr.Repo == "rfd" {
+			marks[c.pr.Number] = c.rig
+		}
+	}
+	if marks[42] != "live rig" || marks[43] != "parked rig" {
+		t.Errorf("rig marks = %v, want 42 live and 43 parked", marks)
+	}
+	// Every PR that had a rig is still reachable: nothing was subtracted.
+	for _, row := range reviewPickerRows(got) {
+		if pr, err := reviewPRFromPickerRow(row); err != nil {
+			t.Errorf("rendered row %q does not parse back: %v", row, err)
+		} else if pr.Number == 0 {
+			t.Errorf("row %q lost its PR number", row)
+		}
+	}
+}
+
+// A review rig survives in the picker after GitHub drops the review request,
+// which it does the moment you submit a review. That rig is otherwise
+// unreachable from the command that created it.
+func TestReviewPickerKeepsRigsGitHubNoLongerLists(t *testing.T) {
+	basedir := t.TempDir()
+	m := manifest{
+		ID: "pr-99", Kind: "review",
+		Repos:     map[string]string{"rfd": "fakeowner/rfd"},
+		ReviewPRs: map[string]string{"rfd": "https://github.com/fakeowner/rfd/pull/99"},
+	}
+	if err := writeManifest(basedir, m); err != nil {
 		t.Fatal(err)
 	}
-	want := rows[1:]
-	if strings.Join(got, "\n") != strings.Join(want, "\n") {
-		t.Errorf("filtered rows:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	rigs := []rigInfo{{ID: "pr-99", Kind: "review", Path: basedir, Title: "Reviewed already"}}
+
+	got := mergeReviewCandidates(nil, reviewRigCandidates(rigs))
+	if len(got) != 1 {
+		t.Fatalf("got %d candidates, want the rig's PR: %+v", len(got), got)
+	}
+	if got[0].pr.Owner != "fakeowner" || got[0].pr.Repo != "rfd" || got[0].pr.Number != 99 {
+		t.Errorf("recovered %+v, want fakeowner/rfd#99", got[0].pr)
+	}
+	if got[0].rig != "live rig" {
+		t.Errorf("mark = %q, want live rig", got[0].rig)
+	}
+}
+
+// Older review rigs predate the recorded locator, so the pr-<n> id plus the
+// reviewed repository has to reconstruct it.
+func TestReviewRigPRFallsBackToTheID(t *testing.T) {
+	basedir := t.TempDir()
+	m := manifest{ID: "pr-42", Kind: "review", Repos: map[string]string{"rfd": "fakeowner/rfd"}}
+	if err := writeManifest(basedir, m); err != nil {
+		t.Fatal(err)
+	}
+	pr := reviewRigPR(rigInfo{ID: "pr-42", Kind: "review", Path: basedir})
+	if pr == nil {
+		t.Fatal("legacy review rig could not name its PR")
+	}
+	if pr.Owner != "fakeowner" || pr.Repo != "rfd" || pr.Number != 42 {
+		t.Errorf("recovered %+v, want fakeowner/rfd#42", *pr)
+	}
+
+	// A rig that can't name a PR is dropped, never guessed at.
+	bare := t.TempDir()
+	if err := writeManifest(bare, manifest{ID: "some-kickoff", Kind: "review"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := reviewRigPR(rigInfo{ID: "some-kickoff", Kind: "review", Path: bare}); got != nil {
+		t.Errorf("unidentifiable review rig produced %+v", *got)
+	}
+}
+
+// A multi-repo review rig records a locator per repo, and map order is random.
+// The main repo is the review the rig is about; the others were added for
+// research and must never win the coin toss.
+func TestReviewRigPRPrefersTheMainRepoDeterministically(t *testing.T) {
+	basedir := t.TempDir()
+	m := manifest{
+		ID: "pr-42", Kind: "review", MainRepo: "rfd",
+		Repos: map[string]string{"rfd": "fakeowner/rfd", "cloud": "fakeowner/cloud"},
+		ReviewPRs: map[string]string{
+			"rfd":   "https://github.com/fakeowner/rfd/pull/42",
+			"cloud": "https://github.com/fakeowner/cloud/pull/7",
+		},
+	}
+	if err := writeManifest(basedir, m); err != nil {
+		t.Fatal(err)
+	}
+	r := rigInfo{ID: "pr-42", Kind: "review", Path: basedir}
+	for i := 0; i < 20; i++ {
+		pr := reviewRigPR(r)
+		if pr == nil {
+			t.Fatal("multi-repo review rig could not name its PR")
+		}
+		if pr.Repo != "rfd" || pr.Number != 42 {
+			t.Fatalf("resolved %+v on run %d, want fakeowner/rfd#42", *pr, i)
+		}
 	}
 }
