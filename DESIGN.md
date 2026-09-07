@@ -113,14 +113,48 @@ job (climbing rig, fishing rig, sound rig):
 - `rig reap` — retry stranded teardown jobs and stop orphaned tmux/iso
   scopes. Janitorial only; it does not decide which rigs live or die.
 - `rig env` — print the identity exports for the direnv stdlib to eval.
+- `rig config [setting [value]]` — read or write standing preferences. No
+  argument lists every setting with its value and where that value came from.
 
 ## Agent choice
 
 `rig up`, `rig new`, and `rig review` accept `--agent`, by long name
 (`claude|codex|antigravity`) or by the three-letter one the picker uses
-(`cld|cdx|agy`). `RIG_AGENT` supplies the default when the flag is absent, with
-Claude retained as the compatibility fallback beneath it. Rig launches the
-selected terminal agent in the left pane and saves the choice in the manifest.
+(`cld|cdx|agy`). When the flag is absent the default comes from `RIG_AGENT`,
+then `rig config agent`, then Claude as the compatibility fallback beneath both.
+Rig launches the selected terminal agent in the left pane and saves the choice
+in the manifest.
+
+That's ordinary precedence, narrowest scope first, and the stored setting is the
+one you're expected to use day to day. It exists because the environment turned
+out to be the wrong home for a preference that moves: set in home-manager,
+changing your default is a rebuild plus a fresh shell, which is fine annually
+and absurd for a choice that tracks whichever provider's limits you drained this
+week.
+
+Putting the file *above* the env var was tried first and reverted. The argument
+for it was that `RIG_AGENT` has always meant "what new rigs start on" rather
+than "use codex for this one," making it a standing preference wearing an
+override's clothes, so the spelling you can change without a rebuild should win.
+That's true of one person's shell config and not of the mechanism, and it would
+have made `RIG_AGENT=cdx rig new` a silent no-op. In the normal order the env
+var earns its place as the per-shell override between the flag and the file.
+`rig config` names its source in every line it prints, and says so explicitly
+when a file value is losing to an env var, which is what keeps that outcome
+legible rather than mysterious.
+
+A sticky default that simply remembered your last choice was considered and
+rejected. It's the same shape as the `rig env` mistake below — an incidental
+one-off silently becoming a standing preference — and it fails worse here,
+because `--agent` is documented as "this rig, this one time" and would have to
+be exempted from the learning to keep that promise. A preference should change
+when you say so.
+
+The read is deliberately confined to `defaultAgent`, and `parseAgent` stays a
+pure parser that reads nothing. An existing rig records an empty `agent` field
+to mean Claude, so a parser that consulted your preference for an empty string
+would make changing that preference relabel every rig and tombstone written
+before the field existed, and resurrect one into an agent it never ran.
 
 `RIG_AGENT` is read, never written. It used to be both: `rig env` projected each
 rig's manifest agent into its environment, on the general principle that the
@@ -129,7 +163,7 @@ But nothing downstream ever read it — unlike `RIG_PORT`, `GH_REPO`, and
 `ISO_SESSION`, each of which exists for a specific consumer — and sharing a name
 with the input side meant a rig made its own agent the starting position for the
 next rig you created from inside it. Dropping the export leaves the name to mean
-one thing: the agent you'd like new rigs to start on, set once in your shell.
+one thing: the agent you'd like new rigs to start on.
 
 The choice is also pickable, and deliberately not as a screen of its own. Every
 prompt a creation command already puts up — the kickoff line, the context
@@ -151,8 +185,8 @@ both an exact id and `--repo`) has nothing to ride along on, so there the bar
 becomes its own one-line prompt rather than letting the default pass silently.
 It runs past every resume check, so re-running `rig review <url>` on a rig you
 already have still just attaches. Naming `--agent` skips it outright; having
-`RIG_AGENT` set does not, because a standing preference for what new rigs start
-on isn't the same statement as "this one should use Codex." It renders the same
+a standing preference does not, because what new rigs start on isn't the same
+statement as "this one should use Codex." It renders the same
 generated
 context as `CLAUDE.md`, `AGENTS.md`, and `.agents/rules/rig.md`, leaving those
 files at the basedir so they do not become jj changes inside a repo workspace.

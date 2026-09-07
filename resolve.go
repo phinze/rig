@@ -15,13 +15,20 @@ var commandNames = []string{
 	"up", "new", "project", "dispatch", "relay", "review", "pr", "track",
 	"add", "recto", "ls", "notify", "switch", "radar", "park", "wake",
 	"resume", "waiting", "sweep", "down", "reap", "history", "resurrect",
-	"env", "info",
+	"env", "info", "config",
 }
 
 // commandAliases are retained spellings that stand in for a canonical command.
-// They join the prefix namespace rather than sitting beside it, so `rig c`
-// reaches switch by way of cd.
-var commandAliases = map[string]string{"cd": "switch"}
+// They join the prefix namespace rather than sitting beside it, so `rig cd`
+// and `rig c` both reach switch.
+//
+// `c` is spelled out rather than left to the prefix pass because it used to
+// work by accident: nothing else began with that letter, so `c` abbreviated
+// `cd`. Adding config would have made it ambiguous and quietly broken a
+// working abbreviation, so it's pinned here instead — an exact alias match
+// resolves before the prefix pass runs, which is what keeps config from
+// contesting a letter it never had.
+var commandAliases = map[string]string{"cd": "switch", "c": "switch"}
 
 // hiddenCommands are the internals other processes invoke: the per-rig gh shim,
 // the pickers' state round-trips, and the durable teardown worker. Exact spelling
@@ -127,6 +134,12 @@ func nearestCommands(input string) []string {
 		consider(name, name)
 	}
 	for alias, canon := range commandAliases {
+		// A one-letter alias is within one edit of most single characters, so
+		// suggesting from it would answer every unknown letter with the same
+		// command. Abbreviations that short are for typing, not for guessing.
+		if len(alias) < 2 {
+			continue
+		}
 		consider(alias, canon)
 	}
 	consider("help", "help")

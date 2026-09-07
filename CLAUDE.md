@@ -225,18 +225,57 @@ only path that advances the pin and working copy to a new head. Teardown deletes
 the pin after forgetting the workspace.
 
 The agent is selectable with `--agent`, which takes either the long name or the
-short one it goes by in the picker: `cld`, `cdx`, `agy`. `RIG_AGENT` moves the
-starting position, with Claude as the fallback beneath it. Rig writes equivalent
+short one it goes by in the picker: `cld`, `cdx`, `agy`. Beneath that the
+ordinary precedence applies, narrowest scope first: `RIG_AGENT` for this shell,
+then `rig config agent` for this user, then Claude. Rig writes equivalent
 generated instructions and tracks session activity for all three.
+
+The standing preference moved out of the environment because setting it there
+meant a home-manager rebuild and a fresh shell to change it, which is fine
+annually and absurd for a choice that tracks whichever provider's limits you
+drained this week. Inverting the middle two so the file beat the env var was
+tried and reverted: `RIG_AGENT` really is a standing preference in this
+particular shell config, but that's a fact about one machine rather than about
+the mechanism, and putting the file on top would have made `RIG_AGENT=cdx rig
+new` a silent no-op. Left in the normal order, that spelling has a real job as
+the per-shell override between the flag and the file, and `rig config` names the
+source of every value it prints so a file losing to a stale env var says so
+instead of just looking broken.
+
+`defaultAgent` is deliberately a different function from `parseAgent`, and that
+boundary is load-bearing rather than tidy. An existing rig records an empty
+`agent` field to *mean* Claude (`manifest.agentKind`, and every tombstone
+through `recordTombstone`), so a `parseAgent("")` that consulted your preference
+would make changing it retroactively relabel every rig created before the field
+existed — and resurrect one, a week later, into an agent it never ran.
+`parseAgent` reads nothing; only `defaultAgent` consults a preference, and only
+new rigs call it.
 
 `rig env` deliberately does not export `RIG_AGENT`, though it once did. Every
 other key it projects has a downstream consumer (`RIG_PORT` a dev server,
-`GH_REPO` gh, `ISO_SESSION` iso); that one had none, and because `parseAgent`
+`GH_REPO` gh, `ISO_SESSION` iso); that one had none, and because the input side
 reads the same name, exporting it meant a rig silently seeded the picker for the
-next rig you made from inside it. The name now belongs to you, not to whichever
-rig you're standing in — which is what makes setting it in home-manager a real
-global default. If you ever want a rig's agent readable from inside it, read
+next rig you made from inside it. The name belongs to you, not to whichever rig
+you're standing in. If you ever want a rig's agent readable from inside it, read
 `.rig/manifest.toml`, or pick a name that doesn't feed back into the picker.
+
+The `config` namespace exists ahead of its second setting on purpose. Rig's
+top-level commands are the verbs of the workflow, so a bare `rig agent` would be
+the first noun among them and would spend a name in the prefix namespace for
+every preference that ever gets one. It does cost the letter `c`, which used to
+abbreviate `cd` only because nothing else started with it; `c` is pinned as an
+explicit alias for switch now, since an exact alias match resolves before the
+prefix pass. That also means one-letter aliases had to be excluded from typo
+suggestions, or every unknown single letter would come back suggesting switch.
+
+Settings live under `~/.config/rig/`, not beside the state in
+`~/.local/state/rig/`. Everything in the state dir is derived — something rig
+did, written down — and losing it loses work; a setting is a statement you made,
+and losing it costs you a preference. Note that this puts a real developer
+preference in the path of the test suite: `isolateRigConfig` pins
+`XDG_CONFIG_HOME`, and the e2e env blocks pin it the same way they already pin
+`XDG_STATE_HOME`, so running `rig config agent claude` once can't start failing
+the suite for whoever did it.
 
 Codex additionally gates every unseen directory behind a trust prompt, which a
 rig trips by construction: a fresh basedir and a fresh workspace under it, every

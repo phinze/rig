@@ -26,8 +26,10 @@ func TestResolveCommandUniquePrefix(t *testing.T) {
 		"rec":   "recto",
 		"rel":   "relay",
 		"h":     "history",
-		"c":     "switch", // through the cd alias
+		"c":     "switch", // pinned as its own alias, see below
 		"cd":    "switch",
+		"co":    "config",
+		"conf":  "config",
 	} {
 		got, err := resolveCommand(input)
 		if err != nil {
@@ -121,5 +123,30 @@ func TestEveryCommandNameResolvesToItself(t *testing.T) {
 		if err != nil || got != name {
 			t.Errorf("resolveCommand(%q) = %q, %v; want itself", name, got, err)
 		}
+	}
+}
+
+// `c` reached switch by accident before config existed: nothing else began with
+// that letter, so it abbreviated `cd`. Adding a second c-command would have made
+// it ambiguous and broken a working abbreviation, so it's an alias now — and an
+// exact alias match resolves before the prefix pass, which is what keeps config
+// from contesting it.
+func TestResolveCommandConfigDoesNotTakeTheCLetter(t *testing.T) {
+	got, err := resolveCommand("c")
+	if err != nil || got != "switch" {
+		t.Fatalf("resolveCommand(c) = %q, %v; want switch", got, err)
+	}
+}
+
+// A one-letter alias sits within a single edit of most single characters, so
+// letting it into the suggestion pass would answer every unknown letter with
+// the same command.
+func TestResolveCommandDoesNotSuggestFromOneLetterAliases(t *testing.T) {
+	_, err := resolveCommand("x")
+	if err == nil {
+		t.Fatal("resolveCommand(x) should not resolve")
+	}
+	if strings.Contains(err.Error(), "switch") {
+		t.Errorf("error = %v; a stray letter should not suggest switch", err)
 	}
 }

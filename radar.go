@@ -607,11 +607,7 @@ func (m radarModel) handleBoardKey(key string) (radarModel, tea.Cmd) {
 			m.setFilter(string(r[:len(r)-1]))
 		}
 	case "ctrl+n":
-		agent, err := parseAgent("")
-		if err != nil {
-			agent = agentClaude
-		}
-		wizard, err := newRigWizardModel("", "", agent)
+		wizard, err := newRigWizardModel("", "", defaultAgent())
 		if err != nil {
 			return m, nil // an empty kickoff has no preflight error
 		}

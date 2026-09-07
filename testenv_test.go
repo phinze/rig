@@ -34,3 +34,12 @@ func setHermeticGit(t *testing.T) {
 		t.Setenv(k, v)
 	}
 }
+
+// isolateRigConfig points the settings file at a scratch directory. Every test
+// that resolves a new rig's agent needs it, because the config file is a real
+// preference on a real developer's machine: without this, running `rig config
+// agent claude` once would start failing the suite for whoever did it.
+func isolateRigConfig(t *testing.T) {
+	t.Helper()
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+}

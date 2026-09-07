@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"strings"
 )
 
@@ -46,10 +45,13 @@ func agentStep(a agentKind, delta int) agentKind {
 	return agentClaude
 }
 
+// parseAgent maps a spelling to an agent. It is a pure parser and deliberately
+// consults nothing: an empty name means Claude, because that is what an empty
+// `agent` field in a manifest or tombstone has always meant. The standing
+// preference lives in defaultAgent instead, which is what keeps changing your
+// default from retroactively relabelling every rig recorded before the field
+// existed.
 func parseAgent(name string) (agentKind, error) {
-	if name == "" {
-		name = os.Getenv("RIG_AGENT")
-	}
 	if name == "" {
 		return agentClaude, nil
 	}
@@ -66,12 +68,12 @@ func parseAgent(name string) (agentKind, error) {
 }
 
 // extractAgentFlag removes --agent NAME (or --agent=NAME) from a command's
-// arguments and resolves it against RIG_AGENT. The flag wins over the env var,
-// and naming one explicitly is also what suppresses the interactive pick: you
-// don't get asked what you just said. RIG_AGENT only moves the starting
-// position: it's a standing preference from your shell, which is a different
-// statement from "this rig, this one time" — so it seeds the bar and still
-// lets you see it.
+// arguments and resolves it against the standing default. The flag wins, and
+// naming one explicitly is also what suppresses the interactive pick: you don't
+// get asked what you just said. The default only moves the starting position:
+// it's a preference about new rigs in general, which is a different statement
+// from "this rig, this one time" — so it seeds the bar and still lets you see
+// it.
 func extractAgentFlag(args []string) (*agentPick, []string, error) {
 	name := ""
 	var rest []string
@@ -91,11 +93,14 @@ func extractAgentFlag(args []string) (*agentPick, []string, error) {
 		}
 		rest = append(rest, a)
 	}
+	if name == "" {
+		return newAgentPick(defaultAgent(), false), rest, nil
+	}
 	agent, err := parseAgent(name)
 	if err != nil {
 		return nil, nil, err
 	}
-	return newAgentPick(agent, name != ""), rest, nil
+	return newAgentPick(agent, true), rest, nil
 }
 
 // resumeCommand reopens an existing conversation by id, which is how a

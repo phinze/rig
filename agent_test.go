@@ -10,6 +10,7 @@ import (
 )
 
 func TestExtractAgentFlag(t *testing.T) {
+	isolateRigConfig(t)
 	t.Setenv("RIG_AGENT", "codex")
 	pick, rest, err := extractAgentFlag([]string{"FAKE-1", "--agent", "agy", "--repo", "o/r"})
 	if err != nil {
@@ -25,8 +26,8 @@ func TestExtractAgentFlag(t *testing.T) {
 		t.Errorf("rest = %q", got)
 	}
 
-	// The env var only moves the starting position: it's a standing shell
-	// preference, and having one must not count as having picked this time.
+	// A standing preference only moves the starting position, and having one
+	// must not count as having picked this time.
 	pick, _, err = extractAgentFlag(nil)
 	if err != nil || pick.kind != agentCodex {
 		t.Errorf("env default = %q, %v; want codex", pick.kind, err)

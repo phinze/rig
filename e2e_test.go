@@ -150,6 +150,10 @@ func TestProjectRigCreatesRepositorylessRuntimeAndJoinedStatus(t *testing.T) {
 	t.Cleanup(func() { _ = exec.Command(realTmux, "-L", "rig-project-e2e", "kill-server").Run() })
 	env := append(os.Environ(),
 		"HOME="+home,
+		// Pin config the same way state is pinned below: an XDG_CONFIG_HOME
+		// in the developer's shell, or a real `rig config agent`, must never
+		// reach into a test rig and choose its agent.
+		"XDG_CONFIG_HOME="+filepath.Join(home, "config"),
 		"PATH="+bin+":"+os.Getenv("PATH"),
 		"SHELL=/bin/sh",
 		"HISTFILE=/dev/null",
@@ -240,6 +244,10 @@ func TestNew(t *testing.T) {
 
 	env := append(os.Environ(),
 		"HOME="+home,
+		// Pin config the same way state is pinned below: an XDG_CONFIG_HOME
+		// in the developer's shell, or a real `rig config agent`, must never
+		// reach into a test rig and choose its agent.
+		"XDG_CONFIG_HOME="+filepath.Join(home, "config"),
 		"PATH="+bin+":"+os.Getenv("PATH"),
 		"SHELL=/bin/sh",
 		"HISTFILE=/dev/null",
@@ -394,6 +402,10 @@ func TestUpDown(t *testing.T) {
 
 	env := append(os.Environ(),
 		"HOME="+home,
+		// Pin config the same way state is pinned below: an XDG_CONFIG_HOME
+		// in the developer's shell, or a real `rig config agent`, must never
+		// reach into a test rig and choose its agent.
+		"XDG_CONFIG_HOME="+filepath.Join(home, "config"),
 		"PATH="+bin+":"+os.Getenv("PATH"),
 	)
 	env = append(env, hermeticGitVars()...)
@@ -584,6 +596,10 @@ func TestReview(t *testing.T) {
 
 	env := append(os.Environ(),
 		"HOME="+home,
+		// Pin config the same way state is pinned below: an XDG_CONFIG_HOME
+		// in the developer's shell, or a real `rig config agent`, must never
+		// reach into a test rig and choose its agent.
+		"XDG_CONFIG_HOME="+filepath.Join(home, "config"),
 		"PATH="+bin+":"+os.Getenv("PATH"),
 		"SHELL=/bin/sh",
 		"HISTFILE=/dev/null",
@@ -792,6 +808,10 @@ func TestUpFromOwnPR(t *testing.T) {
 
 	env := append(os.Environ(),
 		"HOME="+home,
+		// Pin config the same way state is pinned below: an XDG_CONFIG_HOME
+		// in the developer's shell, or a real `rig config agent`, must never
+		// reach into a test rig and choose its agent.
+		"XDG_CONFIG_HOME="+filepath.Join(home, "config"),
 		"PATH="+bin+":"+os.Getenv("PATH"),
 	)
 	env = append(env, hermeticGitVars()...)
@@ -926,6 +946,10 @@ func TestReap(t *testing.T) {
 
 	env := append(os.Environ(),
 		"HOME="+home,
+		// Pin config the same way state is pinned below: an XDG_CONFIG_HOME
+		// in the developer's shell, or a real `rig config agent`, must never
+		// reach into a test rig and choose its agent.
+		"XDG_CONFIG_HOME="+filepath.Join(home, "config"),
 		"PATH="+bin+":"+os.Getenv("PATH"),
 		"SHELL=/bin/sh",
 		"HISTFILE=/dev/null",
@@ -1043,6 +1067,10 @@ func TestParkWake(t *testing.T) {
 
 	env := append(os.Environ(),
 		"HOME="+home,
+		// Pin config the same way state is pinned below: an XDG_CONFIG_HOME
+		// in the developer's shell, or a real `rig config agent`, must never
+		// reach into a test rig and choose its agent.
+		"XDG_CONFIG_HOME="+filepath.Join(home, "config"),
 		"PATH="+bin+":"+os.Getenv("PATH"),
 		"SHELL=/bin/sh",
 		"HISTFILE=/dev/null",
@@ -1270,6 +1298,10 @@ func TestDownLeavesRecoverableTombstone(t *testing.T) {
 
 	env := append(os.Environ(),
 		"HOME="+home,
+		// Pin config the same way state is pinned below: an XDG_CONFIG_HOME
+		// in the developer's shell, or a real `rig config agent`, must never
+		// reach into a test rig and choose its agent.
+		"XDG_CONFIG_HOME="+filepath.Join(home, "config"),
 		"PATH="+bin+":"+os.Getenv("PATH"),
 		"SHELL=/bin/sh",
 		"HISTFILE=/dev/null",

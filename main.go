@@ -77,6 +77,8 @@ func main() {
 		err = runEnv(args)
 	case "info":
 		err = runInfo(args)
+	case "config":
+		err = runConfigCmd(args)
 	case "__gh":
 		// Hidden: each rig prepends a tiny `gh` shim that delegates here. Resolve
 		// repository context from cwd on every invocation, including agent tool
@@ -132,7 +134,8 @@ usage:
                             Repo is chosen by an fzf picker over ghq repos, cwd
                             pre-selected on top, unless --repo names one)
                             Agent is cld/claude, cdx/codex, or agy/antigravity,
-                            defaulting to $RIG_AGENT and then to claude. Every
+                            defaulting to $RIG_AGENT, then the "rig config
+                            agent" setting, then claude. Every
                             prompt a creation command already shows carries an
                             agent bar that ctrl-o cycles; an invocation that
                             prompts for nothing gets the bar on its own.
@@ -219,6 +222,11 @@ usage:
                             (eval'd by the direnv stdlib; silent outside a rig)
   rig info --format=json    print stable machine-readable context for the
                             current rig and repository
+  rig config [SETTING [VALUE]] | rig config SETTING --unset
+                            read or write standing preferences, stored in
+                            ~/.config/rig/config.toml. No argument lists every
+                            setting with its value and where that value came
+                            from. Currently: agent, the one new rigs start on
 
 any unambiguous prefix works: rig swe is sweep, rig swi is switch, rig sw is
 neither and says so. A misspelling suggests the nearest names instead.

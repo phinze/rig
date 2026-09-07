@@ -143,7 +143,13 @@ func (p *agentPick) sync() {
 	if err != nil {
 		return
 	}
-	if kind, err := parseAgent(strings.TrimSpace(string(blob))); err == nil {
+	// An empty file is as broken as a missing one, and parseAgent reads "" as a
+	// deliberate Claude rather than as "nothing here" — so check before asking.
+	name := strings.TrimSpace(string(blob))
+	if name == "" {
+		return
+	}
+	if kind, err := parseAgent(name); err == nil {
 		p.kind = kind
 	}
 }
@@ -246,10 +252,12 @@ func runAgentPickCmd(args []string) error {
 // cycleAgentState advances the choice recorded at path and returns the header
 // block fzf should redraw.
 func cycleAgentState(path, hint string) (string, error) {
-	kind := agentClaude
+	kind := defaultAgent()
 	if blob, err := os.ReadFile(path); err == nil {
-		if k, err := parseAgent(strings.TrimSpace(string(blob))); err == nil {
-			kind = k
+		if name := strings.TrimSpace(string(blob)); name != "" {
+			if k, err := parseAgent(name); err == nil {
+				kind = k
+			}
 		}
 	}
 	kind = kind.next()
