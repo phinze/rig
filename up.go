@@ -157,7 +157,12 @@ func attachExistingRig(rigID string) (bool, error) {
 	}
 	var found *rigInfo
 	for i := range rigs {
-		if rigs[i].ID == rigID {
+		// TrackerID as well as ID, because `rig adopt` deliberately leaves the
+		// local id alone: an adopted rig's id is still its kickoff slug, so an
+		// ID-only match would miss it and build a second, empty rig for the same
+		// ticket — the exact duplication this check exists to prevent.
+		if rigs[i].ID == rigID ||
+			(rigs[i].TrackerID != "" && strings.EqualFold(rigs[i].TrackerID, rigID)) {
 			found = &rigs[i]
 			break
 		}

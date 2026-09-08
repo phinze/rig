@@ -43,6 +43,8 @@ func main() {
 		err = runPR(args)
 	case "track":
 		err = runTrack(args)
+	case "adopt":
+		err = runAdopt(args)
 	case "add":
 		err = runAdd(args)
 	case "recto":
@@ -173,6 +175,13 @@ usage:
   rig track [branch]        record a secondary PR branch for the repo you're in
                             (defaults to the current work's branch) so down and
                             reap gate on it alongside the rig's primary PR
+  rig adopt <issue>         give the current rig the Linear identity it didn't
+                            have when it started: work that began as rig new and
+                            has since filed its own ticket. Id, basedir, tmux
+                            session and jj workspace all stay put (agent history
+                            is keyed on those paths); the rig gains relay,
+                            project status, dispatch by identifier, and the
+                            ticket marker on every board
   rig add <owner/repo>      add another repo to the rig you're in
   rig recto <repo> [args]   pull that repo's persistent Recto beside the main
                             agent; optional args are forwarded to Recto there

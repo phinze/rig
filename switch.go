@@ -95,7 +95,10 @@ func pickRigStatus(statuses []rigStatus, args []string, prompt string) (*rigStat
 		q := strings.ToLower(strings.Join(args, " "))
 		var matches []rigStatus
 		for _, s := range statuses {
-			hay := strings.ToLower(s.ID + " " + s.Slug + " " + s.Title)
+			// TrackerID is in the haystack for adopted rigs, whose id stays the
+			// kickoff slug: without it `rig switch MIR-123` can't reach the rig
+			// that `rig dispatch MIR-123` and `rig relay` both already resolve.
+			hay := strings.ToLower(s.ID + " " + s.Slug + " " + s.Title + " " + s.TrackerID)
 			if strings.Contains(hay, q) {
 				matches = append(matches, s)
 			}

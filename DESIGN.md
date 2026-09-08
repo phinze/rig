@@ -838,6 +838,52 @@ Sweep keeps them in the quiet inventory but never checks them for collection.
 The ordinary tombstone captures their tracker identity and agent session, and
 resurrection rebuilds the repositoryless shape directly.
 
+## Adopting a ticket (`rig adopt`)
+
+Work does not always know what it is when it starts. `rig new` exists for the
+kickoff you can only phrase as a sentence, and some of those sentences turn into
+a real piece of work with a real ticket behind it. The rig should be able to
+catch up.
+
+The tempting reading of "become a ticket rig" is a rename: move the basedir to
+the ticket-shaped slug, rename the jj workspace, rename the tmux session, rewrite
+the `.envrc`. That is the wrong shape, and for the same reason tombstones record
+an agent session id eagerly. Every agent store keys on absolute cwd or workspace
+path, never on rig. Claude mangles the cwd into a directory name, Codex records
+a cwd in each rollout's `session_meta`, Antigravity records a workspace. Move the
+basedir and the conversation becomes unreachable. A rig that filed its own ticket
+is exactly the rig whose conversation is the valuable artifact, so a promotion
+that costs it the conversation is a promotion that defeats itself.
+
+So adoption is additive. The manifest gains `tracker` and `tracker_id`, and the
+title becomes the ticket's; the id, basedir, tmux session and jj workspace do not
+move. The local id says where the work lives, the tracker says what it is about,
+and those were never required to be the same string. `up`-created rigs merely
+have the convenience of both being derived at once.
+
+What that buys is not the ticket glyph. `rig relay` refuses a rig with no Linear
+identity outright, `rig project status` joins on tracker identity and so cannot
+see the rig at all, and `rig dispatch MIR-123` has nothing to resolve. Three
+features that a loose rig simply does not have, switched on by two fields.
+
+Two lookups had to learn the same lesson the join already knew. `attachExistingRig`
+matched local ids only, so after adoption `rig up MIR-123` would have built a
+second, empty rig for work that already existed, precisely the duplication that
+check exists to prevent. `pickRigStatus` had the same blind spot for `rig switch`.
+Both now match the tracker identifier alongside the id.
+
+Adoption promotes, it never reassigns. A rig that already tracks something has
+accumulated a branch, a PR and a conversation under that identifier, and quietly
+re-pointing it would leave every board confidently agreeing about a ticket none
+of the work belongs to. Re-adopting the same identifier is a no-op, so a retried
+command does not read as a failure.
+
+The one thing it deliberately does not do is touch branches. Linear links a PR by
+branch name or by naming the issue in the PR body, and by adoption time the work
+usually already rides a bookmark. Renaming that bookmark to please a tracker is
+not a promotion's business, so adopt prints the branch Linear would have minted
+and leaves the choice where it belongs.
+
 ## Open questions
 
 - ~~**Language.**~~ Answered: Go. Fish was at its ceiling for this shape

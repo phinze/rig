@@ -339,7 +339,16 @@ func readManifest(basedir string) (manifest, error) {
 				}
 			}
 		case "repos":
-			m.Repos[key] = parseTOMLString(val)
+			// A value with no owner/repo shape is dropped rather than recorded.
+			// Every consumer splits it on "/", and the way one gets here is a
+			// hand-added scalar appended to the file instead of placed in the
+			// block above the tables: section never resets, so `tracker =
+			// "linear"` at the end of the file would otherwise land here as a
+			// phantom repo, flip every len(m.Repos) == 1 check, and be persisted
+			// by the next write.
+			if nwo := parseTOMLString(val); strings.Contains(nwo, "/") {
+				m.Repos[key] = nwo
+			}
 		case "review_prs":
 			m.ReviewPRs[key] = parseTOMLString(val)
 		case "branches":

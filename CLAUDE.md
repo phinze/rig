@@ -70,6 +70,34 @@ state, defaulting to the rig containing cwd when no query is given.
 `rig add owner/repo` brings additional repos under the same rig. `rig down`
 breaks it back down.
 
+`rig adopt MIR-123` gives a rig the tracker identity it lacked when it started:
+`rig new` work that grew into something worth tracking and filed its own ticket.
+It is additive, never a rename. The manifest gains `tracker` and `tracker_id`
+and the title becomes the ticket's; the id, basedir, tmux session, and jj
+workspace all stay exactly where they were, because every agent store keys on
+absolute cwd or workspace path and moving the basedir would orphan the
+conversation, which in a rig that filed its own ticket is the valuable part.
+The local id says where the work lives and the tracker says what it's about;
+those were only ever the same string because `up` derives both at once. What it
+switches on is real rather than cosmetic: `rig relay` refuses a rig with no
+Linear identity, `rig project status` joins on tracker identity and can't see
+one otherwise, and `rig dispatch MIR-123` has nothing to resolve. So
+`attachExistingRig` and `pickRigStatus` both match `TrackerID` alongside the id
+now. Without that, `rig up MIR-123` on an adopted rig builds a second, empty rig
+for work that already exists. Adoption promotes and never reassigns: a rig
+that already tracks something accumulated its branch, PR, and conversation under
+that identifier. Branches are deliberately untouched: by adoption time the work
+usually already rides a bookmark, so adopt prints the branch Linear would have
+minted and leaves renaming to you.
+
+The manifest is still rig's private format, and hand-editing those two fields in
+would mostly have worked, which is the other half of why this is a command.
+`readManifest`'s `section` never resets, so a `tracker = "linear"` line appended
+to the end of the file lands under `[repos]` and becomes a phantom repo that
+flips every `len(m.Repos) == 1` check and gets persisted by the next write. A
+repos value with no `/` in it is now dropped on read, since every consumer splits
+on that anyway.
+
 `rig project <query|url|uuid>` creates or enters a repositoryless overview rig
 for a Linear project. Its agent runs from the rig root, with no fake checkout or
 Recto, and `rig project status --format=json` joins the project's complete issue

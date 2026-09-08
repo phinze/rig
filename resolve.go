@@ -13,7 +13,7 @@ import (
 // command that isn't meant to be typed.
 var commandNames = []string{
 	"up", "new", "project", "dispatch", "relay", "review", "pr", "track",
-	"add", "recto", "ls", "notify", "switch", "radar", "park", "wake",
+	"adopt", "add", "recto", "ls", "notify", "switch", "radar", "park", "wake",
 	"resume", "waiting", "sweep", "down", "reap", "history", "resurrect",
 	"env", "info", "config",
 }
@@ -28,7 +28,15 @@ var commandNames = []string{
 // working abbreviation, so it's pinned here instead — an exact alias match
 // resolves before the prefix pass runs, which is what keeps config from
 // contesting a letter it never had.
-var commandAliases = map[string]string{"cd": "switch", "c": "switch"}
+//
+// `a` and `ad` are pinned for the same reason and by the same precedent: both
+// abbreviated add until adopt arrived, and a new command must never steal a
+// spelling that already worked. Adopt is the newcomer, so it pays the cost and
+// starts at `ado`.
+var commandAliases = map[string]string{
+	"cd": "switch", "c": "switch",
+	"a": "add", "ad": "add",
+}
 
 // hiddenCommands are the internals other processes invoke: the per-rig gh shim,
 // the pickers' state round-trips, and the durable teardown worker. Exact spelling
