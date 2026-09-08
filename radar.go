@@ -36,7 +36,7 @@ import (
 // flight. You just type to fuzzy-filter, with verbs on modifier keys so they
 // never fight the query: ctrl+n opens the shared new-rig wizard, ctrl+p parks or
 // wakes the selected rig, ctrl+r refreshes, and esc clears a live query then
-// quits.
+// quits. ctrl+q quits from anywhere, including mid-query.
 func runRadar(args []string) error {
 	if len(args) != 0 {
 		return fmt.Errorf("usage: rig radar")
@@ -553,7 +553,11 @@ func (m radarModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m radarModel) handleKey(key string) (radarModel, tea.Cmd) {
 	// Board-global keys: move, select, hard-quit.
 	switch key {
-	case "ctrl+c":
+	case "ctrl+c", "ctrl+q":
+		// ctrl+q quits outright rather than joining esc's two-stage clear-then-
+		// quit. Esc is staged because it also ends a query, so a search would
+		// otherwise be one keystroke from dropping the popup; ctrl+q means only
+		// quit, and staging it would make the unambiguous key the slower one.
 		return m, tea.Quit
 	case "down":
 		if m.cursor < len(m.rows())-1 {
@@ -1867,7 +1871,7 @@ func (m radarModel) View() string {
 		if m.showHistory {
 			hist = "^t hide history"
 		}
-		footer = radarFaintStyle.Render("type filter · enter go · ^n new · ^p " + toggle + " · ^r refresh · " + hist + " · esc quit")
+		footer = radarFaintStyle.Render("type filter · enter go · ^n new · ^p " + toggle + " · ^r refresh · " + hist + " · esc/^q quit")
 	}
 
 	items := m.displayItems()
@@ -1888,7 +1892,7 @@ func (m radarModel) View() string {
 		if m.filter != "" {
 			footer = radarFaintStyle.Render("no other matches · esc clear")
 		} else {
-			footer = radarFaintStyle.Render("nothing else to pick · ^n new · ^r refresh · esc quit")
+			footer = radarFaintStyle.Render("nothing else to pick · ^n new · ^r refresh · esc/^q quit")
 		}
 	}
 

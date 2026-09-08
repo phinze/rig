@@ -727,6 +727,36 @@ func TestRadarKeyFlow(t *testing.T) {
 	}
 }
 
+// ctrl+q is the unambiguous quit, so unlike esc it never stages behind a live
+// query. A search is the one state where esc alone cannot leave the board, and
+// it is also where you are most likely to want out.
+func TestRadarCtrlQQuitsEvenMidQuery(t *testing.T) {
+	m := radarModel{
+		inflight: []rigStatus{{Slug: "a", ID: "PROJ-1", Title: "add radar"}},
+	}
+	quits := func(key string) bool {
+		next, cmd := m.handleKey(key)
+		m = next
+		return cmd != nil && cmd() == tea.Quit()
+	}
+
+	if !quits("ctrl+q") {
+		t.Error("ctrl+q on a clean board did not quit")
+	}
+
+	m, _ = m.handleKey("r")
+	if m.filter != "r" {
+		t.Fatalf("setup: filter = %q, want r", m.filter)
+	}
+	// esc here only clears, which is the behaviour ctrl+q exists beside.
+	if !quits("ctrl+q") {
+		t.Error("ctrl+q with a live query did not quit")
+	}
+	if m.filter != "r" {
+		t.Errorf("ctrl+q cleared the query instead of quitting outright: filter=%q", m.filter)
+	}
+}
+
 func TestRadarNewRigSuccessBecomesDestination(t *testing.T) {
 	m := radarModel{}
 	m, _ = m.handleKey("ctrl+n")
