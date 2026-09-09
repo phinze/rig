@@ -184,7 +184,7 @@ func TestProjectRigCreatesRepositorylessRuntimeAndJoinedStatus(t *testing.T) {
 	}
 
 	session := tmuxSessionName(basedir)
-	layout, err := exec.Command(realTmux, "-L", "rig-project-e2e", "list-panes", "-s", "-t", session, "-F",
+	layout, err := exec.Command(realTmux, "-u", "-L", "rig-project-e2e", "list-panes", "-s", "-t", session, "-F",
 		"#{pane_current_path}\t#{@rig-window-role}\t#{@rig-pane-role}").CombinedOutput()
 	if err != nil {
 		t.Fatalf("reading project layout: %v\n%s", err, layout)
@@ -510,7 +510,7 @@ func TestUpDown(t *testing.T) {
 	}
 
 	// Two panes: claude on the left, recto on the right.
-	panes := mustOutput(t, "", env, realTmux, "-L", "rig-e2e", "list-panes", "-t", session+":0", "-F", "#{pane_current_command}")
+	panes := mustOutput(t, "", env, realTmux, "-u", "-L", "rig-e2e", "list-panes", "-t", session+":0", "-F", "#{pane_current_command}")
 	paneLines := strings.Split(strings.TrimSpace(panes), "\n")
 	if len(paneLines) != 2 {
 		t.Errorf("expected 2 panes after up, got %d:\n%s", len(paneLines), panes)
@@ -1171,7 +1171,7 @@ func TestParkWake(t *testing.T) {
 	// Wake rebuilds the same repo-rooted carousel as creation, not the old bare
 	// shell at the rig root. The metadata is part of the contract: recto relies
 	// on it when promoting repos later.
-	layout, err := exec.Command(realTmux, "-L", socket, "list-panes", "-s", "-t", session, "-F",
+	layout, err := exec.Command(realTmux, "-u", "-L", socket, "list-panes", "-s", "-t", session, "-F",
 		"#{window_name}\t#{pane_current_path}\t#{@rig-window-role}\t#{@rig-pane-role}\t#{@rig-pane-repo}").CombinedOutput()
 	if err != nil {
 		t.Fatalf("reading wake layout: %v\n%s", err, layout)
@@ -1188,7 +1188,7 @@ func TestParkWake(t *testing.T) {
 
 	// If only the agent exits, `rig resume` repairs that half-live runtime in
 	// place and chooses the manifest's agent without another flag or picker.
-	agentPaneOut, err := exec.Command(realTmux, "-L", socket, "list-panes", "-s", "-t", session, "-F",
+	agentPaneOut, err := exec.Command(realTmux, "-u", "-L", socket, "list-panes", "-s", "-t", session, "-F",
 		"#{pane_id}\t#{@rig-pane-role}").CombinedOutput()
 	if err != nil {
 		t.Fatal(err)

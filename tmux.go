@@ -33,15 +33,30 @@ func tmuxSessionName(path string) string {
 	return strings.ToLower(repl.Replace(path))
 }
 
+// tmuxCmd builds a tmux invocation with -u forced on.
+//
+// tmux decides whether a client can handle UTF-8 from LANG/LC_ALL/LC_CTYPE at
+// invocation time, and runs the output of any client it judges non-UTF-8
+// through utf8_sanitize, which rewrites every non-printable byte to "_". That
+// silently eats the tabs delimiting our -F format fields and the glyphs the
+// radar reads out of pane titles, so rig sees one field where it expected
+// eight and quietly drops the row. macOS hands GUI-launched processes no
+// locale at all, so shells spawned by desktop apps and over ssh routinely
+// arrive with none. Forcing the flag is cheaper and more honest than
+// asserting a specific locale rig has no way to know is installed.
+func tmuxCmd(args ...string) *exec.Cmd {
+	return exec.Command("tmux", append([]string{"-u"}, args...)...)
+}
+
 func tmuxHasSession(name string) bool {
-	return exec.Command("tmux", "has-session", "-t", name).Run() == nil
+	return tmuxCmd("has-session", "-t", name).Run() == nil
 }
 
 // tmuxSocketPath returns the exact server socket used by the current tmux
 // environment. Teardown persists it before crossing into a systemd service,
 // whose environment may not carry TMUX or TMUX_TMPDIR.
 func tmuxSocketPath() string {
-	out, err := exec.Command("tmux", "display-message", "-p", "#{socket_path}").Output()
+	out, err := tmuxCmd("display-message", "-p", "#{socket_path}").Output()
 	if err != nil {
 		return ""
 	}
@@ -53,7 +68,7 @@ func tmuxSocketPath() string {
 // first, the same session_last_attached signal session-wizard's `t` sorts on.
 // Returns an empty map when tmux isn't running.
 func tmuxLastAttached() map[string]int64 {
-	out, err := exec.Command("tmux", "list-sessions", "-F", "#{session_last_attached} #{session_name}").Output()
+	out, err := tmuxCmd("list-sessions", "-F", "#{session_last_attached} #{session_name}").Output()
 	if err != nil {
 		return map[string]int64{}
 	}
@@ -88,7 +103,7 @@ type tmuxSession struct {
 // nil when tmux isn't running. A tab delimiter keeps paths with spaces intact
 // (session names are dash-normalized, so they never carry a tab).
 func tmuxSessions() []tmuxSession {
-	out, err := exec.Command("tmux", "list-sessions", "-F",
+	out, err := tmuxCmd("list-sessions", "-F",
 		"#{session_last_attached}\t#{session_path}\t#{session_name}").Output()
 	if err != nil {
 		return nil
@@ -137,7 +152,7 @@ type agentChild struct {
 // a wrapped agent is still caught). Returns nil when tmux isn't
 // running.
 func tmuxAgentChildren() map[string][]agentChild {
-	out, err := exec.Command("tmux", "list-panes", "-a", "-F",
+	out, err := tmuxCmd("list-panes", "-a", "-F",
 		"#{session_name}\t#{window_index}\t#{pane_index}\t#{window_name}\t#{pane_current_command}\t#{window_activity}\t#{pane_current_path}\t#{pane_title}").Output()
 	if err != nil {
 		return nil
@@ -203,7 +218,7 @@ func currentTmuxSession() string {
 	if os.Getenv("TMUX") == "" {
 		return ""
 	}
-	out, err := exec.Command("tmux", "display-message", "-p", "#S").Output()
+	out, err := tmuxCmd("display-message", "-p", "#S").Output()
 	if err != nil {
 		return ""
 	}
@@ -215,7 +230,7 @@ func currentTmuxSession() string {
 // A rig session has an explicit window name so tmux never replaces its identity
 // with "claude" or "recto".
 func tmuxNewRigSession(name, windowName, cwd string) (string, string, error) {
-	cmd := exec.Command("tmux", "new-session", "-d",
+	cmd := tmuxCmd("new-session", "-d",
 		"-s", name, "-n", windowName, "-c", cwd,
 		"-P", "-F", "#{pane_id}\t#{window_id}",
 	)
@@ -232,7 +247,7 @@ func tmuxNewRigSession(name, windowName, cwd string) (string, string, error) {
 }
 
 func tmuxSplitHID(target, cwd, command string) (string, error) {
-	cmd := exec.Command("tmux", "split-window", "-d", "-h", "-l", "50%",
+	cmd := tmuxCmd("split-window", "-d", "-h", "-l", "50%",
 		"-t", target, "-c", cwd, "-P", "-F", "#{pane_id}", command)
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
@@ -243,7 +258,7 @@ func tmuxSplitHID(target, cwd, command string) (string, error) {
 }
 
 func tmuxSplitShell(target, cwd string) (string, error) {
-	cmd := exec.Command("tmux", "split-window", "-d", "-h", "-l", "50%",
+	cmd := tmuxCmd("split-window", "-d", "-h", "-l", "50%",
 		"-t", target, "-c", cwd, "-P", "-F", "#{pane_id}")
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
@@ -256,7 +271,7 @@ func tmuxSplitShell(target, cwd string) (string, error) {
 // tmuxNewCommandWindow creates a detached, explicitly named window whose only
 // pane runs command. Rig uses it to park one persistent Recto per repository.
 func tmuxNewCommandWindow(session, name, cwd, command string) (string, string, error) {
-	cmd := exec.Command("tmux", "new-window", "-d",
+	cmd := tmuxCmd("new-window", "-d",
 		"-t", session, "-n", name, "-c", cwd,
 		"-P", "-F", "#{pane_id}\t#{window_id}", command,
 	)
@@ -273,31 +288,31 @@ func tmuxNewCommandWindow(session, name, cwd, command string) (string, string, e
 }
 
 func tmuxSetPaneOption(pane, name, value string) error {
-	cmd := exec.Command("tmux", "set-option", "-p", "-t", pane, name, value)
+	cmd := tmuxCmd("set-option", "-p", "-t", pane, name, value)
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }
 
 func tmuxSetWindowOption(window, name, value string) error {
-	cmd := exec.Command("tmux", "set-option", "-w", "-t", window, name, value)
+	cmd := tmuxCmd("set-option", "-w", "-t", window, name, value)
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }
 
 func tmuxRenameWindow(window, name string) error {
-	cmd := exec.Command("tmux", "rename-window", "-t", window, name)
+	cmd := tmuxCmd("rename-window", "-t", window, name)
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }
 
 func tmuxJoinPane(src, dst string) error {
-	cmd := exec.Command("tmux", "join-pane", "-d", "-f", "-h", "-l", "50%", "-s", src, "-t", dst)
+	cmd := tmuxCmd("join-pane", "-d", "-f", "-h", "-l", "50%", "-s", src, "-t", dst)
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }
 
 func tmuxBreakPane(src, name string) (string, error) {
-	cmd := exec.Command("tmux", "break-pane", "-d", "-s", src, "-n", name,
+	cmd := tmuxCmd("break-pane", "-d", "-s", src, "-n", name,
 		"-P", "-F", "#{window_id}")
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
@@ -308,14 +323,14 @@ func tmuxBreakPane(src, name string) (string, error) {
 }
 
 func tmuxSelectPane(target string) error {
-	cmd := exec.Command("tmux", "select-pane", "-t", target)
+	cmd := tmuxCmd("select-pane", "-t", target)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	return cmd.Run()
 }
 
 // tmuxSendKeys types text into the target pane, then presses Enter.
 func tmuxSendKeys(target, text string) error {
-	cmd := exec.Command("tmux", "send-keys", "-t", target, text, "Enter")
+	cmd := tmuxCmd("send-keys", "-t", target, text, "Enter")
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	return cmd.Run()
 }
@@ -330,7 +345,7 @@ func tmuxKillSession(name string) error {
 	if !tmuxHasSession(name) {
 		return nil
 	}
-	cmd := exec.Command("tmux", "kill-session", "-t", name)
+	cmd := tmuxCmd("kill-session", "-t", name)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	return cmd.Run()
 }
@@ -351,7 +366,7 @@ func tmuxKillSessionAt(name, socket string) error {
 		}
 		return fmt.Errorf("checking tmux socket %s: %w", socket, err)
 	}
-	out, err := exec.Command("tmux", "-S", socket, "list-sessions", "-F", "#{session_name}").CombinedOutput()
+	out, err := tmuxCmd("-S", socket, "list-sessions", "-F", "#{session_name}").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("listing sessions on %s: %w: %s", socket, err, strings.TrimSpace(string(out)))
 	}
@@ -365,7 +380,7 @@ func tmuxKillSessionAt(name, socket string) error {
 	if !found {
 		return nil
 	}
-	cmd := exec.Command("tmux", "-S", socket, "kill-session", "-t", "="+name)
+	cmd := tmuxCmd("-S", socket, "kill-session", "-t", "="+name)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	return cmd.Run()
 }
@@ -376,7 +391,7 @@ func insideTmuxSession(name string) bool {
 	if os.Getenv("TMUX") == "" {
 		return false
 	}
-	out, err := exec.Command("tmux", "display-message", "-p", "#S").Output()
+	out, err := tmuxCmd("display-message", "-p", "#S").Output()
 	if err != nil {
 		return false
 	}
@@ -389,7 +404,7 @@ func tmuxAttach(name string) error {
 	if os.Getenv("TMUX") != "" {
 		bin = "switch-client"
 	}
-	cmd := exec.Command("tmux", bin, "-t", name)
+	cmd := tmuxCmd(bin, "-t", name)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return cmd.Run()
 }

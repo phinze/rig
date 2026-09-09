@@ -69,7 +69,7 @@ func tmuxRigPanes(session string) ([]rigTmuxPane, error) {
 		"#{@rig-window-role}", "#{@rig-window-repo}",
 		"#{pane_current_command}", "#{pane_current_path}",
 	}, "\t")
-	cmd := exec.Command("tmux", "list-panes", "-s", "-t", session, "-F", format)
+	cmd := tmuxCmd("list-panes", "-s", "-t", session, "-F", format)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, err

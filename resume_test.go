@@ -56,7 +56,7 @@ func TestEnsureRigRuntimeUpgradesLegacyBareSession(t *testing.T) {
 		return strings.Contains(string(raw), "--resume legacy-session")
 	})
 
-	out, err := exec.Command("tmux", "list-panes", "-s", "-t", session, "-F",
+	out, err := exec.Command("tmux", "-u", "list-panes", "-s", "-t", session, "-F",
 		"#{window_name}\t#{pane_current_path}\t#{@rig-window-role}\t#{@rig-window-repo}\t#{@rig-pane-role}\t#{@rig-pane-repo}").CombinedOutput()
 	if err != nil {
 		t.Fatalf("reading upgraded layout: %v\n%s", err, out)
