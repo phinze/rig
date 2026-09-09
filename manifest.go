@@ -49,6 +49,19 @@ type manifest struct {
 	// resolved for this rig. It is captured before parking kills the agent; older
 	// manifests resolve the newest matching conversation on first resume.
 	SessionID string
+	// BuildingRepo is the "owner/repo" this rig was created to hold, written
+	// before the workspace exists and cleared by addRepoToManifest once it
+	// does. Non-empty therefore means exactly one thing: a create got as far as
+	// the manifest and no further.
+	//
+	// It exists because the window between createBasedir and addRepoWorkspace
+	// spans a fetch and a `jj workspace add`, which is where an interrupt
+	// actually lands, and a rig stranded there lists and matches by id but has
+	// nothing to enter. This is the record of intent that lets re-running the
+	// creating command finish the job instead of re-asking which repo — and
+	// deliberately not Repos, which means "workspaces on disk" and is what
+	// review matching, sweep, and ls all read.
+	BuildingRepo string
 	// Kind records how the rig came to be, which sets its terminal condition.
 	// "" and "up" are authoring rigs — done when the work merges, so teardown
 	// guards their local commits. "review" is a `rig review` pickup of someone
@@ -138,6 +151,9 @@ func writeManifest(basedir string, m manifest) error {
 	}
 	if m.SessionID != "" {
 		fmt.Fprintf(&b, "session_id = %q\n", m.SessionID)
+	}
+	if m.BuildingRepo != "" {
+		fmt.Fprintf(&b, "building_repo = %q\n", m.BuildingRepo)
 	}
 	if !m.Created.IsZero() {
 		fmt.Fprintf(&b, "created = %q\n", m.Created.Format(time.RFC3339))
@@ -325,6 +341,8 @@ func readManifest(basedir string) (manifest, error) {
 				m.MainRepo = val
 			case "session_id":
 				m.SessionID = val
+			case "building_repo":
+				m.BuildingRepo = val
 			case "created":
 				if t, err := time.Parse(time.RFC3339, val); err == nil {
 					m.Created = t
@@ -397,6 +415,13 @@ func addRepoToManifest(basedir, subdir, nameWithOwner, branch string) error {
 		m.Repos = map[string]string{}
 	}
 	m.Repos[subdir] = nameWithOwner
+	// The workspace this rig was being built around now exists, so the record
+	// of intent has served its purpose and the rig stops reading as half-built.
+	// This is the single point where that happens, because it's the single
+	// point where a repo becomes real.
+	if strings.EqualFold(m.BuildingRepo, nameWithOwner) {
+		m.BuildingRepo = ""
+	}
 	if branch != "" {
 		if m.Branches == nil {
 			m.Branches = map[string][]string{}

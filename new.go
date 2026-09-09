@@ -121,7 +121,10 @@ func createNewRig(target newRigTarget, context string, repo repoRef, agent agent
 		return newRigResult{}, fmt.Errorf("colocating jj on %s: %w", repo.Path, err)
 	}
 
-	m := manifest{ID: target.ID, Title: target.Kickoff, Agent: string(agent), MainRepo: repo.Name}
+	m := manifest{
+		ID: target.ID, Title: target.Kickoff, Agent: string(agent), MainRepo: repo.Name,
+		BuildingRepo: repo.nameWithOwner(),
+	}
 	if err := createBasedir(target.Basedir, m); err != nil {
 		return newRigResult{}, err
 	}

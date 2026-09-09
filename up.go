@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"fmt"
 	"os"
 	"strings"
@@ -41,15 +42,29 @@ func runUp(args []string) error {
 	// local (listRigs, no tracker call), so re-upping into work you already have
 	// stays as instant as `rig switch`; the network only gets touched below, on
 	// a genuine create.
-	if done, err := attachExistingRig(strings.ToLower(id)); err != nil {
+	done, unfinished, err := attachExistingRig(strings.ToLower(id))
+	if err != nil {
 		return err
-	} else if done {
+	}
+	if done {
 		return nil
 	}
 
 	tk, err := resolveTask(id)
 	if err != nil {
 		return err
+	}
+
+	// Finishing an interrupted create means walking the create path again, but
+	// you already answered the repo question the first time and the wreck
+	// recorded the answer. Reuse it rather than re-asking, and say which one, so
+	// a resume never silently picks a repo on your behalf. An explicit --repo
+	// still wins: naming one is a deliberate override, and it's also the way to
+	// change your mind without tearing the rig down.
+	if unfinished != nil {
+		repoFlag = cmp.Or(repoFlag, unfinished.Building)
+		fmt.Fprintf(os.Stderr, "rig: %s was left half-built — finishing it with %s\n",
+			unfinished.ID, repoFlag)
 	}
 
 	repo, err := resolveRepo(repoFlag, pick)
@@ -77,7 +92,7 @@ func runUp(args []string) error {
 
 	m := manifest{
 		ID: tk.rigID(), Title: tk.Title, Agent: string(pick.kind), MainRepo: repo.Name,
-		Tracker: "linear", TrackerID: tk.Identifier,
+		Tracker: "linear", TrackerID: tk.Identifier, BuildingRepo: repo.nameWithOwner(),
 	}
 	if err := createBasedir(basedir, m); err != nil {
 		return err
@@ -147,13 +162,20 @@ func extractRepoFlag(args []string) (repo string, rest []string) {
 // attachExistingRig makes `rig up` idempotent. If a rig whose id matches rigID
 // already exists, it goes there instead of creating a duplicate: a live rig is
 // switched to, a parked one is woken first (park stamp cleared, session restood
-// at the same basedir so earlier agent sessions are a resume away). It
-// reports whether it handled the id, so runUp only falls through to the create
-// path when nothing matched. Session-stand-up-and-attach mirrors wake/switch.
-func attachExistingRig(rigID string) (bool, error) {
+// at the same basedir so earlier agent sessions are a resume away).
+//
+// It returns done when it handled the id, so runUp only falls through to the
+// create path when nothing matched — or when what matched is a rig whose own
+// create was interrupted, which it hands back as unfinished rather than
+// entering. Attaching to one of those cannot work (there is no workspace for a
+// session to start in) and it is the retry that would have fixed it, so
+// claiming the id here is what used to make the failure permanent: every
+// `rig up MIR-1564` reported "already up" and then died in ensureRigRuntime.
+// Session-stand-up-and-attach mirrors wake/switch.
+func attachExistingRig(rigID string) (done bool, unfinished *rigInfo, err error) {
 	rigs, err := listRigs()
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	var found *rigInfo
 	for i := range rigs {
@@ -168,9 +190,12 @@ func attachExistingRig(rigID string) (bool, error) {
 		}
 	}
 	if found == nil {
-		return false, nil
+		return false, nil, nil
 	}
-	return true, activateRig(*found)
+	if found.Building != "" {
+		return false, found, nil
+	}
+	return true, nil, activateRig(*found)
 }
 
 // activateRig is the shared "put me in this rig" path. It is deliberately

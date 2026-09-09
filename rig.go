@@ -46,11 +46,47 @@ func basedirPath(name string) (string, error) {
 	return filepath.Join(home, "workspaces", name), nil
 }
 
+// rigCreationInterrupted reports whether a rig on disk is the wreckage of its
+// own interrupted create: the manifest landed, the workspace never did. It asks
+// the manifest rather than the filesystem on purpose. A missing workspace dir
+// is ambiguous (an interrupted create looks exactly like a workspace someone
+// deleted out from under a real rig, and the second still owns branches and a
+// conversation), while BuildingRepo is written by the create path itself and
+// cleared the moment a workspace exists. Rigs predating that field read as
+// complete, which is the pre-existing behavior and the safe way to be wrong.
+func rigCreationInterrupted(m manifest) bool { return m.BuildingRepo != "" }
+
+// finishRigHint names the way out of a half-built rig. `up` can finish one from
+// its tracker id, so say that exact command. A rig that never had a ticket was
+// made from a kickoff we can't reconstruct here, so it points at the discard
+// rather than inventing a command that wouldn't work.
+func finishRigHint(m manifest) string {
+	if m.TrackerID != "" {
+		return fmt.Sprintf("run `rig up %s` to finish it, or `rig down` to discard it", m.TrackerID)
+	}
+	return "run `rig down` to discard it, then start it over"
+}
+
 // createBasedir makes the rig basedir and writes its manifest + root .envrc.
 // It errors if the basedir already exists so we never stomp an in-flight rig.
 func createBasedir(basedir string, m manifest) error {
 	if _, err := os.Stat(basedir); err == nil {
-		return fmt.Errorf("basedir already exists: %s", basedir)
+		// The one basedir we may reuse is the wreckage of our own interrupted
+		// create: no workspace, no commits, no agent conversation, nothing to
+		// lose. Reusing it is what makes re-running the creating command the
+		// cure, which is the idempotency `rig up` already advertises. Every
+		// other existing basedir is someone's in-flight work and stays
+		// untouchable, including one whose manifest we can't read.
+		old, err := readManifest(basedir)
+		if err != nil || !rigCreationInterrupted(old) {
+			return fmt.Errorf("basedir already exists: %s", basedir)
+		}
+		// Keep the original creation time: the task started when you first ran
+		// the command, and ls sorting and ages should say so rather than reset
+		// every time a create is retried.
+		if m.Created.IsZero() {
+			m.Created = old.Created
+		}
 	}
 	if m.Created.IsZero() {
 		m.Created = time.Now()

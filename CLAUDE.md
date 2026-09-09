@@ -70,6 +70,37 @@ state, defaulting to the rig containing cwd when no query is given.
 `rig add owner/repo` brings additional repos under the same rig. `rig down`
 breaks it back down.
 
+Creating a rig is two steps that cannot be one. `createBasedir` writes the
+manifest, then `addRepoWorkspace` fetches and runs `jj workspace add`. The rig
+is visible and matchable the moment the manifest lands and everything slow
+happens after, so an interrupt lands in that window and strands a rig that
+lists, matches by id, and has nothing to enter. That used to be permanent:
+`attachExistingRig` claimed the id, `activateRig` handed off to
+`ensureRigRuntime`, and every retry printed "already up — switching" and then
+died on "no available repo workspace". The only exit was a `rig down` you had to
+know to reach for.
+
+`BuildingRepo` closes it. The create path records the `owner/repo` it is about
+to build before the workspace exists, and `addRepoToManifest` clears it once one
+does, so non-empty means exactly one thing. `attachExistingRig` declines those
+rather than claiming them, `createBasedir` adopts its own wreckage instead of
+erroring on the basedir, and the cure for an interrupted `rig up MIR-1564` is
+`rig up MIR-1564` — which is the idempotency `up` already advertised. The retry
+reuses the recorded repo rather than re-asking, which is why
+`captureRigRuntimeHints` no longer blanks `MainRepo` when it finds no workspace:
+that ran on the repair path and destroyed the one record of intent the repair
+needs, so each failed retry left the rig *less* recoverable. `--repo` still
+overrides, and is how you change your mind without tearing the rig down.
+
+Two things there are deliberate. The predicate asks the manifest rather than the
+filesystem, because a missing workspace dir is ambiguous — an interrupted create
+looks exactly like a workspace someone deleted out from under a real rig, and
+the second still owns branches and a conversation — while `Repos` goes on
+meaning "workspaces on disk", which is what review matching, sweep, and `ls` all
+read. And `rig new` only self-heals if you retype a kickoff that slugifies to
+the same basedir, which is a real edge rather than a solved one; `up` and
+`review` recover from an id and a URL, which are things you still have.
+
 `rig adopt MIR-123` gives a rig the tracker identity it lacked when it started:
 `rig new` work that grew into something worth tracking and filed its own ticket.
 It is additive, never a rename. The manifest gains `tracker` and `tracker_id`

@@ -196,6 +196,7 @@ type rigStatus struct {
 	Parked      bool       `json:"parked"`                // dormant, awaiting review
 	LastActive  *time.Time `json:"last_active,omitempty"` // newest agent turn, if any
 	Repos       []string   `json:"repos,omitempty"`       // "owner/repo" per repo in the rig
+	Building    string     `json:"building,omitempty"`    // "owner/repo" this rig's interrupted create was for
 	PRs         []rigPR    `json:"prs,omitempty"`         // populated only under --full
 
 	// Notifications are the inbox entries pinned to this rig. Loose entries
@@ -260,6 +261,7 @@ func rigStatuses(rigs []rigInfo, home string, now time.Time) []rigStatus {
 			LastTouched: r.LastTouched,
 			Parked:      !r.Parked.IsZero(),
 			Repos:       r.Repos,
+			Building:    r.Building,
 			SessionLive: tmuxHasSession(tmuxSessionName(r.Path)),
 		}
 		if ts := activity[r.Path]; ts > 0 {
@@ -291,6 +293,11 @@ func agentState(lastActive *time.Time, now time.Time) string {
 // "parked" (it's deliberately dormant, session killed); otherwise it's the live
 // agent state, or a dash when there's no session so the column stays scannable.
 func agentMarker(s rigStatus) string {
+	// A half-built rig has no session to have a state, and reading as an
+	// ordinary idle rig is the lie that sent you looking for a working `switch`.
+	if s.Building != "" {
+		return "half"
+	}
 	if s.Parked {
 		return "parked"
 	}
@@ -443,6 +450,10 @@ type rigInfo struct {
 	LastTouched time.Time // durable MRU stamp; falls back to Created for legacy rigs
 	Parked      time.Time // non-zero once `rig park` marked it dormant
 	Repos       []string  // "owner/repo" per repo in the rig, subdir-sorted
+	// Building is the manifest's BuildingRepo: non-empty means this rig's
+	// create was interrupted before its workspace existed, so it can be
+	// finished but not entered.
+	Building string
 }
 
 // manifestRepos flattens a manifest's repo table to its "owner/repo" slugs,
@@ -512,7 +523,7 @@ func listRigs() ([]rigInfo, error) {
 			ID: m.ID, Slug: e.Name(), Title: m.Title, Kind: m.Kind,
 			Tracker: m.Tracker, TrackerID: m.TrackerID, TrackerURL: m.TrackerURL,
 			Path: base, Created: created, LastTouched: touched, Parked: m.Parked,
-			Repos: manifestRepos(m),
+			Repos: manifestRepos(m), Building: m.BuildingRepo,
 		})
 	}
 	sort.Slice(rigs, func(i, j int) bool { return rigs[i].Created.Before(rigs[j].Created) })

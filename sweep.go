@@ -181,6 +181,9 @@ type sweepInput struct {
 	// its branch deleted from one that never produced anything — both of which
 	// otherwise present as "no PR, clean tree".
 	Shipped bool
+	// HalfBuilt means the rig's create was interrupted before its workspace
+	// existed, so there is nothing in it to weigh.
+	HalfBuilt bool
 }
 
 // sweepDecision is the ladder: disposition in, next step out. It deliberately
@@ -188,6 +191,15 @@ type sweepInput struct {
 // never disagree about what a rig's state is — they only differ in what they do
 // about it.
 func sweepDecision(in sweepInput) (action, detail string) {
+	// Above every other rung because none of them apply: a rig stranded by an
+	// interrupted create holds no workspace, no commits, and no conversation, so
+	// there is no work to weigh and nothing a merge or a wake could act on.
+	// Clearing it out is the only move, and `up` will rebuild it whenever you
+	// come back to the ticket.
+	if in.HalfBuilt {
+		return actionDown, "never finished being created"
+	}
+
 	// A review rig's terminal condition is "you've posted a review", not a merge,
 	// so its disposition (derived from the author's PR) says nothing useful. The
 	// teardown gate already encodes the right question; trust it.
@@ -466,15 +478,20 @@ func planSweep(rigs []rigInfo, statuses []rigStatus, home string, fetched map[st
 		}
 
 		in := sweepInput{
-			Disp:    parkedDisposition(s.PRs),
-			PRs:     s.PRs,
-			Review:  m.isReview(),
-			Shipped: len(m.PRs) > 0 || len(s.PRs) > 0,
+			Disp:      parkedDisposition(s.PRs),
+			PRs:       s.PRs,
+			Review:    m.isReview(),
+			Shipped:   len(m.PRs) > 0 || len(s.PRs) > 0,
+			HalfBuilt: rigCreationInterrupted(m),
 		}
 		// The teardown gate is the expensive half — a jj fetch plus a gh call per
 		// branch — so it's consulted only where the answer can change the verdict,
 		// and it's the thing worth narrating while you wait.
-		if in.Review || in.Disp == "merged" || in.Disp == "no PR" {
+		// A half-built rig reads as "no PR" and would qualify, but it has no
+		// workspace for the gate to reason about and its verdict is discarded
+		// anyway, so don't spend a fetch and a gh call proving a rig with no
+		// repos has no unmerged branches.
+		if !in.HalfBuilt && (in.Review || in.Disp == "merged" || in.Disp == "no PR") {
 			if say != nil {
 				say("checking " + s.ID)
 			}
@@ -485,7 +502,7 @@ func planSweep(rigs []rigInfo, statuses []rigStatus, home string, fetched map[st
 			rig: r, status: s, action: action, detail: detail,
 			repos:   len(m.Repos),
 			dirty:   rigDirtyRepos(s.Path, m, s.PRs),
-			collect: sweepCollectable(in.Shipped, s.Agent, s.LastActive, now),
+			collect: in.HalfBuilt || sweepCollectable(in.Shipped, s.Agent, s.LastActive, now),
 		}
 		if action == actionMerge {
 			p.merges, p.held = mergeablePRs(s.PRs)

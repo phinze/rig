@@ -1396,3 +1396,141 @@ func TestDownLeavesRecoverableTombstone(t *testing.T) {
 		t.Errorf("workspace not re-registered after resurrect:\n%s", wsList)
 	}
 }
+
+// TestUpFinishesHalfBuiltRig covers the hole that made an interrupted create
+// permanent. createBasedir writes the manifest before addRepoWorkspace does the
+// fetch and `jj workspace add`, so a ^C in that window left a rig that listed,
+// matched by id, and could neither be entered nor finished: `up` claimed the id,
+// handed off to activateRig, and died in ensureRigRuntime with "no available
+// repo workspace", forever. Re-running the same command has to complete it.
+//
+// It finishes from $HOME rather than the checkout on purpose. There is no cwd
+// repo to fall back on there, so the repo can only come from what the
+// interrupted create recorded, which is the half of the fix that keeps the retry
+// from re-asking a question you already answered.
+func TestUpFinishesHalfBuiltRig(t *testing.T) {
+	realTmux, err := exec.LookPath("tmux")
+	if err != nil {
+		t.Skip("tmux not installed")
+	}
+
+	home := t.TempDir()
+	bin := filepath.Join(home, "bin")
+	repoDir := filepath.Join(home, "src", "github.com", "fakeowner", "fakerepo")
+	rigBin := filepath.Join(home, "rig")
+
+	mustMkdir(t, bin)
+	mustMkdir(t, repoDir)
+
+	build := exec.Command("go", "build", "-o", rigBin, ".")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+
+	env := append(os.Environ(),
+		"HOME="+home,
+		"XDG_CONFIG_HOME="+filepath.Join(home, "config"),
+		"PATH="+bin+":"+os.Getenv("PATH"),
+	)
+	env = append(env, hermeticGitVars()...)
+
+	mustRun(t, repoDir, env, "git", "init", "-q", "-b", "main")
+	mustRun(t, repoDir, env, "git", "commit", "-q", "--allow-empty", "-m", "init")
+	mustRun(t, repoDir, env, "jj", "git", "init", "--colocate")
+	mustRun(t, repoDir, env, "jj", "config", "set", "--repo", `revset-aliases."trunk()"`, "main")
+
+	env = append(env,
+		"LINEAR_API_TOKEN=test-token",
+		"RIG_LINEAR_GRAPHQL_ENDPOINT="+fakeLinearGraphQL(t),
+	)
+
+	// The recorded repo is resolved through the same ghq path --repo uses, so
+	// point ghq at the fixture checkout rather than letting it try to clone.
+	mustWriteExec(t, filepath.Join(bin, "ghq"), fmt.Sprintf(
+		"#!/bin/sh\nif [ \"$1\" = root ]; then echo %s/src; exit 0; fi\n"+
+			"echo \"fake ghq: unsupported invocation $*\" >&2\nexit 1\n", home))
+
+	// Answering "no PR" lets the teardown at the end see nothing unmerged.
+	mustWriteExec(t, filepath.Join(bin, "gh"), "#!/bin/sh\n"+
+		"if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"view\" ]; then\n"+
+		"  echo 'no pull requests found for branch' >&2\n  exit 1\nfi\n"+
+		"echo \"fake gh: unsupported invocation $*\" >&2\nexit 1\n")
+
+	tmuxWrap := fmt.Sprintf("#!/bin/sh\nexec %s -L rig-e2e-half \"$@\"\n", realTmux)
+	mustWriteExec(t, filepath.Join(bin, "tmux"), tmuxWrap)
+	sleeper := "#!/bin/sh\nexec sleep infinity\n"
+	mustWriteExec(t, filepath.Join(bin, "recto"), sleeper)
+	mustWriteExec(t, filepath.Join(bin, "claude"), sleeper)
+
+	t.Cleanup(func() {
+		_ = exec.Command(realTmux, "-L", "rig-e2e-half", "kill-server").Run()
+	})
+
+	// Exactly what an interrupted `rig up FAKE-1` leaves behind: createBasedir's
+	// manifest, and nothing at all from addRepoWorkspace.
+	basedir := filepath.Join(home, "workspaces", "fake-1-do-the-thing")
+	mustMkdir(t, filepath.Join(basedir, ".rig"))
+	half := "id    = \"fake-1\"\n" +
+		"title = \"do the thing\"\n" +
+		"tracker = \"linear\"\n" +
+		"tracker_id = \"FAKE-1\"\n" +
+		"main_repo = \"fakerepo\"\n" +
+		"building_repo = \"fakeowner/fakerepo\"\n" +
+		"created = \"2026-01-01T00:00:00Z\"\n"
+	if err := os.WriteFile(filepath.Join(basedir, manifestName), []byte(half), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	upCmd := exec.Command(rigBin, "up", "FAKE-1")
+	upCmd.Dir = home
+	upCmd.Env = env
+	out, err := upCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("up on a half-built rig should finish it, not fail: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "half-built") {
+		t.Errorf("expected up to say it was finishing a half-built rig:\n%s", out)
+	}
+	if !strings.Contains(string(out), "fakeowner/fakerepo") {
+		t.Errorf("expected up to name the repo it reused rather than re-asking:\n%s", out)
+	}
+
+	if _, err := os.Stat(filepath.Join(basedir, "fakerepo", ".jj")); err != nil {
+		t.Errorf("expected the workspace to exist after finishing: %v", err)
+	}
+	blob, err := os.ReadFile(filepath.Join(basedir, manifestName))
+	if err != nil {
+		t.Fatalf("reading manifest: %v", err)
+	}
+	if !strings.Contains(string(blob), `fakerepo = "fakeowner/fakerepo"`) {
+		t.Errorf("manifest missing repos mapping after finishing:\n%s", blob)
+	}
+	// Cleared, or the finished rig would go on advertising itself as wreckage
+	// and every board would keep flagging it.
+	if strings.Contains(string(blob), "building_repo") {
+		t.Errorf("building_repo should be cleared once the workspace exists:\n%s", blob)
+	}
+	// The task started when the first `up` ran; finishing it is not a new rig.
+	if !strings.Contains(string(blob), `created = "2026-01-01T00:00:00Z"`) {
+		t.Errorf("finishing a rig should preserve its original created time:\n%s", blob)
+	}
+
+	session := "~/workspaces/fake-1-do-the-thing"
+	if err := exec.Command(realTmux, "-L", "rig-e2e-half", "has-session", "-t", session).Run(); err != nil {
+		t.Errorf("expected tmux session %s after finishing: %v", session, err)
+	}
+
+	// Tear it down before returning: TempDir's cleanup runs last and fails while
+	// a live pane still has its cwd inside the temp home.
+	downCmd := exec.Command(rigBin, "down")
+	downCmd.Dir = basedir
+	downCmd.Env = env
+	if out, err := downCmd.CombinedOutput(); err != nil {
+		t.Fatalf("rig down on the finished rig: %v\n%s", err, out)
+	}
+	waitFor(t, 10*time.Second, "rig down to finish", func() bool {
+		_, statErr := os.Stat(basedir)
+		sessionGone := exec.Command(realTmux, "-L", "rig-e2e-half", "has-session", "-t", "="+session).Run() != nil
+		return os.IsNotExist(statErr) && sessionGone
+	})
+}

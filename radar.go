@@ -1579,6 +1579,12 @@ func radarGlyph(s rigStatus, fetched bool) (string, lipgloss.Style) {
 		// as "just a place to land" without competing with the rigs' dots.
 		return "○", radarFaintStyle
 	}
+	// A half-built rig is the one row Enter cannot land on, so it stays out of
+	// the dot vocabulary entirely rather than borrowing the faint dot that means
+	// "idle, go ahead".
+	if s.Building != "" {
+		return "⚠", radarWarnStyle
+	}
 	if s.Parked {
 		if !fetched {
 			return "…", radarFaintStyle
@@ -1677,6 +1683,11 @@ func radarTailSegs(s rigStatus, fetched bool) []tailSeg {
 			return []tailSeg{{s.stone.Session.Agent, radarFaintStyle.Render(s.stone.Session.Agent)}}
 		}
 		return []tailSeg{{"no session", radarFaintStyle.Render("no session")}}
+	}
+	// Ahead of the fetch check: a half-built rig has no PR to wait on and its
+	// state is already known locally, so it should never sit at "…".
+	if s.Building != "" {
+		return []tailSeg{{"half-built", radarWarnStyle.Render("half-built")}}
 	}
 	if !fetched {
 		return []tailSeg{{"…", radarFaintStyle.Render("…")}}

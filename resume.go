@@ -85,8 +85,16 @@ func captureRigRuntimeHints(basedir string, m *manifest, refreshSession bool) {
 			}
 		}
 	}
+	// Only replace the recorded main repo with one we actually found. A rig
+	// whose create was interrupted has no workspace on disk to fall back to, and
+	// blanking the field there destroys the only surviving record of which repo
+	// it was being built around — while running on the very path that is
+	// supposed to be repairing it. Each failed retry used to make the rig a
+	// little less recoverable.
 	if m.MainRepo == "" || m.Repos[m.MainRepo] == "" {
-		m.MainRepo = firstRigRepo(basedir, *m)
+		if repo := firstRigRepo(basedir, *m); repo != "" {
+			m.MainRepo = repo
+		}
 	}
 	if !refreshSession && m.SessionID != "" {
 		return
@@ -175,6 +183,14 @@ func ensureRigRuntimeWithPrompt(basedir string, m manifest, prompt string) (stri
 		repo = firstRigRepo(basedir, m)
 	}
 	if repo == "" {
+		// `up` finishes a half-built rig rather than landing here, but switch,
+		// wake, resume, and the radar all share this path and none of them can
+		// build a workspace. Name the way out instead of stating the symptom:
+		// this is the error you hit while wondering why a rig you can see is a
+		// rig you cannot enter.
+		if rigCreationInterrupted(m) {
+			return "", fmt.Errorf("rig %s never finished being created: %s", m.ID, finishRigHint(m))
+		}
 		return "", fmt.Errorf("rig %s has no available repo workspace", m.ID)
 	}
 	paneCwd := filepath.Join(basedir, repo)

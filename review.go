@@ -306,6 +306,7 @@ func reviewPickupPR(pr *prRef, meta prMeta, pick *agentPick) error {
 		ID: rigID, Title: meta.Title, Kind: "review",
 		ReviewPRs: map[string]string{pr.Repo: pr.URL()},
 		Agent:     string(pick.kind), MainRepo: pr.Repo,
+		BuildingRepo: pr.Owner + "/" + pr.Repo,
 	}
 	if err := createBasedir(basedir, m); err != nil {
 		return err
@@ -372,9 +373,14 @@ func authorPickupPR(pr *prRef, meta prMeta, pick *agentPick) error {
 		fmt.Fprintf(os.Stderr, "rig: warning: couldn't ask Linear about PR links: %v\n", err)
 	}
 	rigID, basedirName := prRigIdentity(pr, meta, linked)
-	if done, err := attachExistingRig(rigID); err != nil {
+	// A half-built match falls through to the create path below, which adopts
+	// its basedir. The repo hint `up` uses is not needed here: the PR names the
+	// repo outright, so there is nothing to re-ask.
+	done, _, err := attachExistingRig(rigID)
+	if err != nil {
 		return err
-	} else if done {
+	}
+	if done {
 		return nil
 	}
 	if ok, err := pick.ensurePicked(); err != nil || !ok {
@@ -399,7 +405,10 @@ func authorPickupPR(pr *prRef, meta prMeta, pick *agentPick) error {
 		return err
 	}
 
-	m := manifest{ID: rigID, Title: meta.Title, Agent: string(pick.kind), MainRepo: pr.Repo} // kind "" = authoring
+	m := manifest{
+		ID: rigID, Title: meta.Title, Agent: string(pick.kind), MainRepo: pr.Repo,
+		BuildingRepo: pr.Owner + "/" + pr.Repo,
+	} // kind "" = authoring
 	if tk, ok := primaryLinkedLinearTask(linked); ok {
 		m.Tracker = "linear"
 		m.TrackerID = tk.Identifier
