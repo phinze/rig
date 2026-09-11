@@ -30,13 +30,19 @@ which is also the age shown in the first column; background agent and PR updates
 never move rows. ctrl-p toggles the selected rig between sections without
 leaving the board; Enter on a parked rig still wakes and enters it.
 The hosting rig is the one row ctrl-p can't reach, and not only because it isn't
-a cursor stop: parking it kills the session the popup is running in. ctrl-x arms
-"park this one once I've landed" instead, the next Enter (or a rig born from
-ctrl-n) picks where to land, and `runRadar` parks the origin only after the
-client has switched away, which is the order `rig park` already uses from inside
-a rig. The intent is read at pick time rather than at the keypress, so a
+a cursor stop: parking or tearing it down kills the session the popup is running
+in. ctrl-x opens a two-item leave menu instead (p park, d down) that arms "do
+this once I've landed"; the next Enter (or a rig born from ctrl-n) picks where
+to land, and `runRadar` applies the verb only after the client has switched
+away, which is the order `rig park` and `rig down` already use from inside a
+rig. The intent is read at pick time rather than at the keypress, so a
 destination that fails to prepare leaves it armed and visible instead of
-half-applied.
+half-applied. Down runs `rigTeardownBlocker` when armed, as a tea.Cmd behind a
+"checking…" banner that also blocks Enter, so a refusal lands in the popup where
+you can read it; it runs again under the lock at apply time, the same double
+check `runDown` makes around its own handoff. The menu is the seed of the
+per-row palette DESIGN.md still lists as next: it's the current row's verbs,
+and nothing else's yet.
 Sections are the row's *state*, so a row's *kind* gets a marker of its own on the
 hard-left edge, just inside the cursor gutter: a glyph from a family the state
 glyphs don't use, on the edge the eye is already scanning and the same one `ls`

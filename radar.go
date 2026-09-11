@@ -39,10 +39,14 @@ import (
 // quits. ctrl+q quits from anywhere, including mid-query.
 //
 // The hosting rig is the one row ctrl+p can't reach, and not only because it
-// isn't a cursor stop: parking it kills the session the popup is running in.
-// ctrl+x arms "park this one once I've landed" instead, and the next Enter (or
-// a rig born from ctrl+n) picks where to land. The park runs after the client
-// has switched away, which is the same order `rig park` uses from inside a rig.
+// isn't a cursor stop: parking or tearing it down kills the session the popup
+// is running in. ctrl+x opens a small leave menu instead — p parks, d tears
+// down — that arms "do this once I've landed", and the next Enter (or a rig
+// born from ctrl+n) picks where to land. The verb runs after the client has
+// switched away, which is the order `rig park` and `rig down` already use from
+// inside a rig. Down runs its teardown gate when armed, not when applied, so a
+// refusal lands in the popup where you can read it rather than in a terminal
+// you've just left.
 func runRadar(args []string) error {
 	if len(args) != 0 {
 		return fmt.Errorf("usage: rig radar")
@@ -58,23 +62,66 @@ func runRadar(args []string) error {
 	if err := radarFinish(choice.dest); err != nil {
 		return err
 	}
-	if choice.parkOrigin == "" {
-		return nil
-	}
-	// Blocking, like the CLI: the client is already elsewhere, so nothing is
-	// waiting on this terminal, and a contended lock should wait rather than
+	// Blocking locks, like the CLI: the client is already elsewhere, so nothing
+	// is waiting on this terminal, and a contended lock should wait rather than
 	// leave the rig you just left still in flight.
-	return setRigParked(choice.parkOrigin, true, false, nil)
+	switch choice.leave {
+	case leavePark:
+		return setRigParked(choice.origin, true, false, nil)
+	case leaveDown:
+		return radarDownOrigin(choice.origin)
+	}
+	return nil
+}
+
+// radarDownOrigin is the back half of `rig down` run from the radar once the
+// client has switched away. The gate ran when the verb was armed, but under no
+// lock and before a pick that could take a while, so it runs again here the
+// way runDown re-runs it after its own handoff. The popup is by construction
+// inside the doomed session, so teardown takes the worker path.
+func radarDownOrigin(basedir string) error {
+	lock, m, err := acquireDownRig(basedir, false)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = lock.Close() }()
+	// Move out of the basedir so RemoveAll can walk it cleanly.
+	if err := os.Chdir(os.Getenv("HOME")); err != nil {
+		return err
+	}
+	return finishDown(basedir, m, true)
 }
 
 // radarChoice is what the board hands back after a pick: where to go, and
-// optionally the basedir of the hosting rig to park once the client is safely
-// there. Parking has to trail the switch because it kills the session the
-// popup runs in, and the switch has to trail the TUI because Bubble Tea still
-// owns the terminal; so the board records the intent and runRadar sequences it.
+// optionally a verb to apply to the hosting rig (by basedir) once the client is
+// safely there. The verb has to trail the switch because it kills the session
+// the popup runs in, and the switch has to trail the TUI because Bubble Tea
+// still owns the terminal; so the board records the intent and runRadar
+// sequences it.
 type radarChoice struct {
-	dest       rigStatus
-	parkOrigin string
+	dest   rigStatus
+	leave  string // "", leavePark, or leaveDown
+	origin string
+}
+
+// Leave verbs for the hosting rig. Parking is one lock and a manifest stamp;
+// down is a teardown, so it is gated before it is armed.
+const (
+	leavePark = "park"
+	leaveDown = "down"
+)
+
+// radarLeaveCheckMsg carries the teardown gate's verdict for an armed down.
+// An empty reason means the rig may come down.
+type radarLeaveCheckMsg struct {
+	path   string
+	reason string
+}
+
+func radarLeaveCheckCmd(path string) tea.Cmd {
+	return func() tea.Msg {
+		return radarLeaveCheckMsg{path: path, reason: rigTeardownBlocker(path, map[string]bool{})}
+	}
 }
 
 // radarPick runs the board as a chooser. It prepares a selected destination
@@ -115,7 +162,7 @@ func radarPick(home string) (*radarChoice, error) {
 	if done.chosen == nil {
 		return nil, nil
 	}
-	return &radarChoice{dest: *done.chosen, parkOrigin: done.parkOrigin}, nil
+	return &radarChoice{dest: *done.chosen, leave: done.leave, origin: done.leaveOrigin}, nil
 }
 
 // radarPrepare does the fallible work behind Enter without switching the tmux
@@ -204,8 +251,10 @@ type radarModel struct {
 	filter        string       // fuzzy query; empty = show everything
 	cursor        int
 	chosen        *rigStatus // set on Enter or successful creation; acted on after exit
-	leaving       bool       // ctrl+x: park the hosting rig once a destination is chosen
-	parkOrigin    string     // basedir to park after the switch, set with chosen while leaving
+	leaveMenu     bool       // ctrl+x: choosing how to leave the hosting rig
+	leave         string     // armed leave verb for the hosting rig, "" when none
+	leaveChecking bool       // the teardown gate is still deciding whether down may arm
+	leaveOrigin   string     // basedir the armed verb applies to, set with chosen
 	actionPending bool       // selected destination is being prepared in a tea.Cmd
 	width         int
 	height        int
@@ -563,6 +612,19 @@ func (m radarModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyParked(msg.path, msg.parked)
 		return m, radarScanCmd(m.home)
 
+	case radarLeaveCheckMsg:
+		// A verdict for a verb no longer armed, or for a rig the popup is no
+		// longer sitting in, is stale; drop it rather than arm anything.
+		if !m.leaveChecking || m.leave != leaveDown || m.currentRow == nil || m.currentRow.Path != msg.path {
+			return m, nil
+		}
+		m.leaveChecking = false
+		if msg.reason != "" {
+			m.leave = ""
+			m.actionErr = downRefusal(msg.reason)
+		}
+		return m, nil
+
 	case radarActionMsg:
 		m.actionPending = false
 		if msg.err != nil {
@@ -576,14 +638,15 @@ func (m radarModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// choose records the destination the board is about to exit for. While leaving
-// is armed it also records the hosting rig as the one to park after the switch;
-// that is read here rather than at the keypress so a destination that fails to
-// prepare leaves the intent armed and visible instead of half-applied.
+// choose records the destination the board is about to exit for. While a leave
+// verb is armed it also records the hosting rig as the one it applies to after
+// the switch; that is read here rather than at the keypress so a destination
+// that fails to prepare leaves the intent armed and visible instead of
+// half-applied.
 func (m *radarModel) choose(dest rigStatus) {
 	m.chosen = &dest
-	if m.leaving && m.currentRow != nil {
-		m.parkOrigin = m.currentRow.Path
+	if m.leave != "" && m.currentRow != nil {
+		m.leaveOrigin = m.currentRow.Path
 	}
 }
 
@@ -611,13 +674,43 @@ func (m radarModel) handleKey(key string) (radarModel, tea.Cmd) {
 		}
 		return m, nil
 	case "enter":
+		// A pick while the gate is still out would switch away and then apply
+		// nothing, silently. The banner says what it's waiting on.
+		if m.leaveChecking {
+			return m, nil
+		}
 		rows := m.rows()
 		if len(rows) == 0 {
 			return m, nil
 		}
 		return m.beginAction(rows[m.cursor])
 	}
+	if m.leaveMenu {
+		return m.handleLeaveMenuKey(key)
+	}
 	return m.handleBoardKey(key)
+}
+
+// handleLeaveMenuKey is the two-item menu ctrl+x opens over the hosting rig.
+// It captures the keyboard while open, so a p or d can't leak into the filter;
+// anything that isn't a verb or esc is ignored rather than closing it.
+func (m radarModel) handleLeaveMenuKey(key string) (radarModel, tea.Cmd) {
+	switch key {
+	case "esc", "ctrl+x":
+		m.leaveMenu = false
+	case "p":
+		m.leaveMenu = false
+		m.leave = leavePark
+		m.leaveChecking = false
+	case "d":
+		// Arm and check at once: the banner shows the pending gate, and a
+		// refusal disarms with the same message `rig down` would have printed.
+		m.leaveMenu = false
+		m.leave = leaveDown
+		m.leaveChecking = true
+		return m, radarLeaveCheckCmd(m.currentRow.Path)
+	}
+	return m, nil
 }
 
 func (m radarModel) beginAction(s rigStatus) (radarModel, tea.Cmd) {
@@ -635,10 +728,11 @@ func (m radarModel) beginAction(s rigStatus) (radarModel, tea.Cmd) {
 func (m radarModel) handleBoardKey(key string) (radarModel, tea.Cmd) {
 	switch key {
 	case "esc":
-		// Armed leaving is the most recent thing you did, so it goes first;
-		// a query typed before it is still there after the cancel.
-		if m.leaving {
-			m.leaving = false
+		// An armed leave verb is the most recent thing you did, so it goes
+		// first; a query typed before it is still there after the cancel.
+		if m.leave != "" {
+			m.leave = ""
+			m.leaveChecking = false
 			return m, nil
 		}
 		if m.filter != "" {
@@ -647,18 +741,19 @@ func (m radarModel) handleBoardKey(key string) (radarModel, tea.Cmd) {
 		}
 		return m, tea.Quit
 	case "ctrl+x":
-		if m.leaving {
-			m.leaving = false
+		if m.leave != "" {
+			m.leave = ""
+			m.leaveChecking = false
 			return m, nil
 		}
 		switch {
 		case m.currentRow == nil:
-			m.actionErr = fmt.Errorf("not inside a rig session — nothing to park")
+			m.actionErr = fmt.Errorf("not inside a rig session — nothing to leave")
 		case m.currentRow.bare || m.currentRow.Path == "":
-			m.actionErr = fmt.Errorf("plain tmux sessions cannot be parked")
+			m.actionErr = fmt.Errorf("plain tmux sessions cannot be parked or torn down")
 		default:
 			m.actionErr = nil
-			m.leaving = true
+			m.leaveMenu = true
 		}
 		return m, nil
 	case "ctrl+t":
@@ -1933,8 +2028,12 @@ func (m radarModel) View() string {
 	switch {
 	case m.actionPending:
 		footer = radarFaintStyle.Render("opening selected destination…")
-	case m.leaving:
-		footer = radarFaintStyle.Render("type filter · enter park & go · ^n park & new · esc cancel")
+	case m.leaveMenu:
+		footer = radarFaintStyle.Render("p park · d down · esc cancel")
+	case m.leaveChecking:
+		footer = radarFaintStyle.Render("checking whether it can come down… · esc cancel")
+	case m.leave != "":
+		footer = radarFaintStyle.Render("type filter · enter " + m.leave + " & go · ^n " + m.leave + " & new · esc cancel")
 	case m.filter != "" && onStone:
 		footer = radarFaintStyle.Render("type to filter · enter resurrect · esc clear")
 	case m.filter != "":
@@ -2213,18 +2312,30 @@ func (m radarModel) inboxLine() string {
 	return style.Render(" "+line) + "\n\n"
 }
 
-// leavingLine is the banner for an armed ctrl+x: the hosting rig is about to be
-// parked, and the board is now choosing where to go rather than what to do. It
-// rides above the prompt as furniture, so viewportChrome counts it too.
+// leavingLine is the banner for ctrl+x: first the menu of ways to leave the
+// hosting rig, then the armed verb, after which the board is choosing where to
+// go rather than what to do. It rides above the prompt as furniture, so
+// viewportChrome counts it too.
 func (m radarModel) leavingLine() string {
-	if !m.leaving || m.currentRow == nil {
+	if m.currentRow == nil || (!m.leaveMenu && m.leave == "") {
 		return ""
 	}
 	label := m.currentRow.ID
 	if label == "" {
 		label = m.currentRow.Title
 	}
-	return radarWarnStyle.Render(" parking "+label+" · pick where to go · esc cancels") + "\n\n"
+	var line string
+	switch {
+	case m.leaveMenu:
+		line = "leave " + label + " · p park · d down · esc cancel"
+	case m.leaveChecking:
+		line = "checking whether " + label + " can come down…"
+	case m.leave == leaveDown:
+		line = "tearing down " + label + " · pick where to go · esc cancels"
+	default:
+		line = "parking " + label + " · pick where to go · esc cancels"
+	}
+	return radarWarnStyle.Render(" "+line) + "\n\n"
 }
 
 // viewportChrome reports the furniture the View spends around the body:

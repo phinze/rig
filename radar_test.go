@@ -1668,11 +1668,18 @@ func TestRadarLeaveParksCurrentAfterPick(t *testing.T) {
 		inflight:   []rigStatus{{Slug: "a", ID: "MIR-1", Title: "build it", Path: "/work/a"}},
 	}
 	m, cmd := m.handleKey("ctrl+x")
-	if cmd != nil || !m.leaving || m.actionErr != nil {
-		t.Fatalf("ctrl-x did not arm leaving: leaving=%v err=%v", m.leaving, m.actionErr)
+	if cmd != nil || !m.leaveMenu || m.leave != "" || m.actionErr != nil {
+		t.Fatalf("ctrl-x did not open the leave menu: menu=%v leave=%q err=%v", m.leaveMenu, m.leave, m.actionErr)
+	}
+	if !strings.Contains(m.leavingLine(), "leave MIR-9") {
+		t.Fatalf("menu banner = %q, want the hosting rig named", m.leavingLine())
+	}
+	m, cmd = m.handleKey("p")
+	if cmd != nil || m.leaveMenu || m.leave != leavePark {
+		t.Fatalf("p did not arm park: menu=%v leave=%q", m.leaveMenu, m.leave)
 	}
 	if !strings.Contains(m.leavingLine(), "parking MIR-9") {
-		t.Fatalf("banner = %q, want the hosting rig named", m.leavingLine())
+		t.Fatalf("banner = %q, want the armed verb", m.leavingLine())
 	}
 	if !strings.Contains(m.View(), "park & go") {
 		t.Fatalf("footer does not advertise the armed verb:\n%s", m.View())
@@ -1681,8 +1688,8 @@ func TestRadarLeaveParksCurrentAfterPick(t *testing.T) {
 	// A destination that fails to prepare leaves the intent armed, not applied.
 	updated, _ := m.Update(radarActionMsg{err: errRigBusy})
 	m = updated.(radarModel)
-	if !m.leaving || m.parkOrigin != "" || m.chosen != nil {
-		t.Fatalf("failed pick applied leaving: leaving=%v origin=%q chosen=%v", m.leaving, m.parkOrigin, m.chosen)
+	if m.leave != leavePark || m.leaveOrigin != "" || m.chosen != nil {
+		t.Fatalf("failed pick applied leaving: leave=%q origin=%q chosen=%v", m.leave, m.leaveOrigin, m.chosen)
 	}
 
 	updated, quit := m.Update(radarActionMsg{destination: rigStatus{Slug: "a", Path: "/work/a", session: "s"}})
@@ -1690,8 +1697,71 @@ func TestRadarLeaveParksCurrentAfterPick(t *testing.T) {
 	if quit == nil || m.chosen == nil || m.chosen.Slug != "a" {
 		t.Fatalf("pick did not finish radar: chosen=%+v quit=%v", m.chosen, quit != nil)
 	}
-	if m.parkOrigin != "/work/cur" {
-		t.Fatalf("parkOrigin = %q, want the hosting rig's basedir", m.parkOrigin)
+	if m.leaveOrigin != "/work/cur" || m.leave != leavePark {
+		t.Fatalf("leave = %q origin = %q, want park of the hosting rig", m.leave, m.leaveOrigin)
+	}
+}
+
+func TestRadarLeaveDownIsGatedBeforeItArms(t *testing.T) {
+	current := rigStatus{Slug: "cur", ID: "MIR-9", Path: "/work/cur"}
+	m := radarModel{currentRow: &current, inflight: []rigStatus{{Slug: "a", Title: "build it", Path: "/work/a"}}}
+	m, _ = m.handleKey("ctrl+x")
+	m, cmd := m.handleKey("d")
+	if cmd == nil || m.leave != leaveDown || !m.leaveChecking {
+		t.Fatalf("d did not arm down with a gate check: leave=%q checking=%v cmd=%v", m.leave, m.leaveChecking, cmd != nil)
+	}
+	if !strings.Contains(m.leavingLine(), "checking whether MIR-9") {
+		t.Fatalf("banner = %q, want the pending gate", m.leavingLine())
+	}
+	// Enter while the gate is out must not pick: it would switch and apply
+	// nothing.
+	m, cmd = m.handleKey("enter")
+	if cmd != nil || m.actionPending {
+		t.Fatal("enter picked a destination while the gate was still out")
+	}
+
+	// A refusal disarms and says why, the way `rig down` would have.
+	updated, _ := m.Update(radarLeaveCheckMsg{path: "/work/cur", reason: "rig has working-copy changes"})
+	m = updated.(radarModel)
+	if m.leave != "" || m.leaveChecking || m.actionErr == nil || !strings.Contains(m.actionErr.Error(), "working-copy changes") {
+		t.Fatalf("refusal = leave:%q checking:%v err:%v", m.leave, m.leaveChecking, m.actionErr)
+	}
+
+	// A clean verdict arms it, and the pick carries the verb out.
+	m, _ = m.handleKey("ctrl+x")
+	m, _ = m.handleKey("d")
+	updated, _ = m.Update(radarLeaveCheckMsg{path: "/work/cur"})
+	m = updated.(radarModel)
+	if m.leave != leaveDown || m.leaveChecking || m.actionErr != nil {
+		t.Fatalf("clean verdict did not arm: leave=%q checking=%v err=%v", m.leave, m.leaveChecking, m.actionErr)
+	}
+	if !strings.Contains(m.leavingLine(), "tearing down MIR-9") {
+		t.Fatalf("banner = %q, want the armed verb", m.leavingLine())
+	}
+	updated, _ = m.Update(radarActionMsg{destination: rigStatus{Slug: "a", Path: "/work/a", session: "s"}})
+	m = updated.(radarModel)
+	if m.leave != leaveDown || m.leaveOrigin != "/work/cur" {
+		t.Fatalf("leave = %q origin = %q, want down of the hosting rig", m.leave, m.leaveOrigin)
+	}
+}
+
+func TestRadarLeaveCheckIgnoresStaleVerdicts(t *testing.T) {
+	current := rigStatus{Slug: "cur", ID: "MIR-9", Path: "/work/cur"}
+	m := radarModel{currentRow: &current}
+	m, _ = m.handleKey("ctrl+x")
+	m, _ = m.handleKey("d")
+	m, _ = m.handleKey("esc") // cancelled while the gate was out
+	updated, _ := m.Update(radarLeaveCheckMsg{path: "/work/cur"})
+	m = updated.(radarModel)
+	if m.leave != "" {
+		t.Fatalf("a verdict for a cancelled check armed leave=%q", m.leave)
+	}
+	m, _ = m.handleKey("ctrl+x")
+	m, _ = m.handleKey("d")
+	updated, _ = m.Update(radarLeaveCheckMsg{path: "/work/elsewhere"})
+	m = updated.(radarModel)
+	if !m.leaveChecking {
+		t.Fatal("a verdict for another rig settled this one's check")
 	}
 }
 
@@ -1699,34 +1769,47 @@ func TestRadarLeaveHonorsNewRig(t *testing.T) {
 	current := rigStatus{Slug: "cur", ID: "MIR-9", Path: "/work/cur"}
 	m := radarModel{currentRow: &current}
 	m, _ = m.handleKey("ctrl+x")
+	m, _ = m.handleKey("p")
 	m, _ = m.handleKey("ctrl+n")
 	updated, _ := m.Update(newRigCreatedMsg{result: newRigResult{
 		ID: "new-rig", Basedir: "/work/new-rig", Session: "~/workspaces/new-rig",
 	}})
 	m = updated.(radarModel)
-	if m.chosen == nil || m.parkOrigin != "/work/cur" {
-		t.Fatalf("park & new: chosen=%+v origin=%q", m.chosen, m.parkOrigin)
+	if m.chosen == nil || m.leaveOrigin != "/work/cur" || m.leave != leavePark {
+		t.Fatalf("park & new: chosen=%+v leave=%q origin=%q", m.chosen, m.leave, m.leaveOrigin)
 	}
 }
 
-func TestRadarLeaveCancelsBeforeFilter(t *testing.T) {
+func TestRadarLeaveMenuCapturesKeysAndCancels(t *testing.T) {
 	current := rigStatus{Slug: "cur", ID: "MIR-9", Path: "/work/cur"}
 	m := radarModel{currentRow: &current, inflight: []rigStatus{{Slug: "a", Title: "build it", Path: "/work/a"}}}
 	m, _ = m.handleKey("b")
 	m, _ = m.handleKey("ctrl+x")
+	// A stray key neither closes the menu nor reaches the filter.
+	m, _ = m.handleKey("z")
+	if !m.leaveMenu || m.filter != "b" {
+		t.Fatalf("stray key: menu=%v filter=%q", m.leaveMenu, m.filter)
+	}
 	m, cmd := m.handleKey("esc")
-	if cmd != nil || m.leaving || m.filter != "b" {
-		t.Fatalf("esc did not disarm first: leaving=%v filter=%q quit=%v", m.leaving, m.filter, cmd != nil)
+	if cmd != nil || m.leaveMenu || m.leave != "" || m.filter != "b" {
+		t.Fatalf("esc did not close the menu first: menu=%v leave=%q filter=%q quit=%v", m.leaveMenu, m.leave, m.filter, cmd != nil)
 	}
 	m, _ = m.handleKey("ctrl+x")
-	m, _ = m.handleKey("ctrl+x")
-	if m.leaving {
-		t.Fatal("second ctrl-x did not disarm")
+	m, _ = m.handleKey("p")
+	m, cmd = m.handleKey("esc")
+	if cmd != nil || m.leave != "" || m.filter != "b" {
+		t.Fatalf("esc did not disarm first: leave=%q filter=%q quit=%v", m.leave, m.filter, cmd != nil)
 	}
-	// A plain Enter with nothing armed parks nothing.
+	m, _ = m.handleKey("ctrl+x")
+	m, _ = m.handleKey("p")
+	m, _ = m.handleKey("ctrl+x")
+	if m.leave != "" {
+		t.Fatal("ctrl-x on an armed verb did not disarm")
+	}
+	// A plain Enter with nothing armed applies nothing.
 	updated, _ := m.Update(radarActionMsg{destination: rigStatus{Slug: "a", Path: "/work/a", session: "s"}})
-	if m = updated.(radarModel); m.parkOrigin != "" {
-		t.Fatalf("unarmed pick set parkOrigin=%q", m.parkOrigin)
+	if m = updated.(radarModel); m.leaveOrigin != "" || m.leave != "" {
+		t.Fatalf("unarmed pick set leave=%q origin=%q", m.leave, m.leaveOrigin)
 	}
 }
 
@@ -1734,13 +1817,13 @@ func TestRadarLeaveRefusesNonRigCurrent(t *testing.T) {
 	bare := rigStatus{bare: true, session: "shell", Title: "shell"}
 	m := radarModel{currentRow: &bare}
 	m, _ = m.handleKey("ctrl+x")
-	if m.leaving || m.actionErr == nil || !strings.Contains(m.actionErr.Error(), "cannot be parked") {
-		t.Fatalf("bare current armed leaving: leaving=%v err=%v", m.leaving, m.actionErr)
+	if m.leaveMenu || m.actionErr == nil || !strings.Contains(m.actionErr.Error(), "cannot be parked") {
+		t.Fatalf("bare current opened the menu: menu=%v err=%v", m.leaveMenu, m.actionErr)
 	}
 	m = radarModel{}
 	m, _ = m.handleKey("ctrl+x")
-	if m.leaving || m.actionErr == nil {
-		t.Fatalf("no current session armed leaving: leaving=%v err=%v", m.leaving, m.actionErr)
+	if m.leaveMenu || m.actionErr == nil {
+		t.Fatalf("no current session opened the menu: menu=%v err=%v", m.leaveMenu, m.actionErr)
 	}
 }
 
@@ -1749,8 +1832,10 @@ func TestRadarLeaveBannerCountsAsChrome(t *testing.T) {
 	m := radarModel{currentRow: &current, inflight: []rigStatus{{Slug: "a", Title: "build it", Path: "/work/a"}}}
 	before, _ := m.viewportChrome()
 	m, _ = m.handleKey("ctrl+x")
-	after, _ := m.viewportChrome()
-	if after != before+2 {
-		t.Fatalf("prompt rows %d -> %d, want the banner and its blank counted", before, after)
+	menu, _ := m.viewportChrome()
+	m, _ = m.handleKey("p")
+	armed, _ := m.viewportChrome()
+	if menu != before+2 || armed != before+2 {
+		t.Fatalf("prompt rows %d -> %d (menu) -> %d (armed), want the banner and its blank counted in both", before, menu, armed)
 	}
 }

@@ -78,6 +78,19 @@ func runDown(args []string) error {
 			return err
 		}
 	}
+	if err := finishDown(basedir, m, inDoomed); err != nil {
+		return err
+	}
+	if cwdInside && !inDoomed {
+		fmt.Fprintf(os.Stderr, "rig: note: your shell's cwd was inside the basedir; run `cd` to recover.\n")
+	}
+	return nil
+}
+
+// finishDown destroys a rig whose preflight has passed and whose lock the
+// caller holds. It is the half of `rig down` the radar shares once it has
+// switched the client away from the rig being left.
+func finishDown(basedir string, m manifest, inDoomed bool) error {
 	job, err := prepareTeardownJob(basedir, m)
 	if err != nil {
 		return err
@@ -96,12 +109,7 @@ func runDown(args []string) error {
 	if err := executeTeardownJob(job); err != nil {
 		return fmt.Errorf("teardown incomplete (will retry from %s): %w", job.path, err)
 	}
-
 	fmt.Fprintf(os.Stderr, "rig: down %s — %s gone\n", m.ID, basedir)
-
-	if cwdInside && !inDoomed {
-		fmt.Fprintf(os.Stderr, "rig: note: your shell's cwd was inside the basedir; run `cd` to recover.\n")
-	}
 	return nil
 }
 
@@ -157,7 +165,7 @@ func sessionExitHandoff(inExitingSession bool) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	// The caller is already leaving this session, so a ctrl+x armed in the
+	// The caller is already leaving this session, so a leave verb armed in the
 	// nested board asks for what's about to happen anyway; only the pick counts.
 	var dest *rigStatus
 	if choice != nil {
