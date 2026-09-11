@@ -37,6 +37,12 @@ import (
 // never fight the query: ctrl+n opens the shared new-rig wizard, ctrl+p parks or
 // wakes the selected rig, ctrl+r refreshes, and esc clears a live query then
 // quits. ctrl+q quits from anywhere, including mid-query.
+//
+// The hosting rig is the one row ctrl+p can't reach, and not only because it
+// isn't a cursor stop: parking it kills the session the popup is running in.
+// ctrl+x arms "park this one once I've landed" instead, and the next Enter (or
+// a rig born from ctrl+n) picks where to land. The park runs after the client
+// has switched away, which is the same order `rig park` uses from inside a rig.
 func runRadar(args []string) error {
 	if len(args) != 0 {
 		return fmt.Errorf("usage: rig radar")
@@ -45,18 +51,37 @@ func runRadar(args []string) error {
 	if err != nil {
 		return err
 	}
-	chosen, err := radarPick(home)
-	if err != nil || chosen == nil {
+	choice, err := radarPick(home)
+	if err != nil || choice == nil {
 		return err
 	}
-	return radarFinish(*chosen)
+	if err := radarFinish(choice.dest); err != nil {
+		return err
+	}
+	if choice.parkOrigin == "" {
+		return nil
+	}
+	// Blocking, like the CLI: the client is already elsewhere, so nothing is
+	// waiting on this terminal, and a contended lock should wait rather than
+	// leave the rig you just left still in flight.
+	return setRigParked(choice.parkOrigin, true, false, nil)
+}
+
+// radarChoice is what the board hands back after a pick: where to go, and
+// optionally the basedir of the hosting rig to park once the client is safely
+// there. Parking has to trail the switch because it kills the session the
+// popup runs in, and the switch has to trail the TUI because Bubble Tea still
+// owns the terminal; so the board records the intent and runRadar sequences it.
+type radarChoice struct {
+	dest       rigStatus
+	parkOrigin string
 }
 
 // radarPick runs the board as a chooser. It prepares a selected destination
 // while Bubble Tea is still alive, so failures stay visible in the same model;
 // a successful choice is returned for the final tmux switch after the TUI has
 // restored the terminal. nil means the user escaped without choosing.
-func radarPick(home string) (*rigStatus, error) {
+func radarPick(home string) (*radarChoice, error) {
 	if !stdinIsTTY() {
 		return nil, fmt.Errorf("radar is a TUI — run it from a terminal (or tmux popup)")
 	}
@@ -86,7 +111,11 @@ func radarPick(home string) (*rigStatus, error) {
 	if err != nil {
 		return nil, err
 	}
-	return final.(radarModel).chosen, nil
+	done := final.(radarModel)
+	if done.chosen == nil {
+		return nil, nil
+	}
+	return &radarChoice{dest: *done.chosen, parkOrigin: done.parkOrigin}, nil
 }
 
 // radarPrepare does the fallible work behind Enter without switching the tmux
@@ -175,6 +204,8 @@ type radarModel struct {
 	filter        string       // fuzzy query; empty = show everything
 	cursor        int
 	chosen        *rigStatus // set on Enter or successful creation; acted on after exit
+	leaving       bool       // ctrl+x: park the hosting rig once a destination is chosen
+	parkOrigin    string     // basedir to park after the switch, set with chosen while leaving
 	actionPending bool       // selected destination is being prepared in a tea.Cmd
 	width         int
 	height        int
@@ -416,8 +447,7 @@ func (m radarModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if wizard.done {
 				m.newRig = nil
 				if wizard.result.Session != "" {
-					dest := rigStatus{bare: true, session: wizard.result.Session}
-					m.chosen = &dest
+					m.choose(rigStatus{bare: true, session: wizard.result.Session})
 					return m, tea.Quit
 				}
 				return m, nil
@@ -540,10 +570,21 @@ func (m radarModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.actionErr = nil
-		m.chosen = &msg.destination
+		m.choose(msg.destination)
 		return m, tea.Quit
 	}
 	return m, nil
+}
+
+// choose records the destination the board is about to exit for. While leaving
+// is armed it also records the hosting rig as the one to park after the switch;
+// that is read here rather than at the keypress so a destination that fails to
+// prepare leaves the intent armed and visible instead of half-applied.
+func (m *radarModel) choose(dest rigStatus) {
+	m.chosen = &dest
+	if m.leaving && m.currentRow != nil {
+		m.parkOrigin = m.currentRow.Path
+	}
 }
 
 // handleKey drives the picker as an always-on fuzzy filter, the way session-
@@ -594,11 +635,32 @@ func (m radarModel) beginAction(s rigStatus) (radarModel, tea.Cmd) {
 func (m radarModel) handleBoardKey(key string) (radarModel, tea.Cmd) {
 	switch key {
 	case "esc":
+		// Armed leaving is the most recent thing you did, so it goes first;
+		// a query typed before it is still there after the cancel.
+		if m.leaving {
+			m.leaving = false
+			return m, nil
+		}
 		if m.filter != "" {
 			m.setFilter("")
 			return m, nil
 		}
 		return m, tea.Quit
+	case "ctrl+x":
+		if m.leaving {
+			m.leaving = false
+			return m, nil
+		}
+		switch {
+		case m.currentRow == nil:
+			m.actionErr = fmt.Errorf("not inside a rig session — nothing to park")
+		case m.currentRow.bare || m.currentRow.Path == "":
+			m.actionErr = fmt.Errorf("plain tmux sessions cannot be parked")
+		default:
+			m.actionErr = nil
+			m.leaving = true
+		}
+		return m, nil
 	case "ctrl+t":
 		// Deliberate "what have I lost lately". Reset the cursor because the
 		// row set just changed shape under it, same as setFilter does.
@@ -1848,7 +1910,7 @@ func (m radarModel) View() string {
 	if typing {
 		prompt = radarFaintStyle.Render("/ ") + m.filter + radarFaintStyle.Render("▌") + "\n\n"
 	}
-	prompt = m.inboxLine() + prompt
+	prompt = m.inboxLine() + m.leavingLine() + prompt
 
 	var footer string
 	toggle := "park/wake"
@@ -1871,6 +1933,8 @@ func (m radarModel) View() string {
 	switch {
 	case m.actionPending:
 		footer = radarFaintStyle.Render("opening selected destination…")
+	case m.leaving:
+		footer = radarFaintStyle.Render("type filter · enter park & go · ^n park & new · esc cancel")
 	case m.filter != "" && onStone:
 		footer = radarFaintStyle.Render("type to filter · enter resurrect · esc clear")
 	case m.filter != "":
@@ -2149,6 +2213,20 @@ func (m radarModel) inboxLine() string {
 	return style.Render(" "+line) + "\n\n"
 }
 
+// leavingLine is the banner for an armed ctrl+x: the hosting rig is about to be
+// parked, and the board is now choosing where to go rather than what to do. It
+// rides above the prompt as furniture, so viewportChrome counts it too.
+func (m radarModel) leavingLine() string {
+	if !m.leaving || m.currentRow == nil {
+		return ""
+	}
+	label := m.currentRow.ID
+	if label == "" {
+		label = m.currentRow.Title
+	}
+	return radarWarnStyle.Render(" parking "+label+" · pick where to go · esc cancels") + "\n\n"
+}
+
 // viewportChrome reports the furniture the View spends around the body:
 // promptRows is how many lines precede it (the prompt and its blank in the
 // typing modes), and budget is how many body lines fit the popup, or -1 when the
@@ -2163,6 +2241,7 @@ func (m radarModel) viewportChrome() (promptRows, budget int) {
 	// rendered beats re-deriving the condition here, which is how this drifted
 	// in the first place: a notification silently sent every click two rows low.
 	promptRows += strings.Count(m.inboxLine(), "\n")
+	promptRows += strings.Count(m.leavingLine(), "\n")
 	if m.height <= 0 {
 		return promptRows, -1
 	}

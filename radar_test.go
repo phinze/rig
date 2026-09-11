@@ -1660,3 +1660,97 @@ func TestRadarKindColumnKeepsTheGridAligned(t *testing.T) {
 		t.Errorf("all-loose board reserved %d columns for kind, want 0", got)
 	}
 }
+
+func TestRadarLeaveParksCurrentAfterPick(t *testing.T) {
+	current := rigStatus{Slug: "cur", ID: "MIR-9", Title: "hosting", Path: "/work/cur"}
+	m := radarModel{
+		currentRow: &current,
+		inflight:   []rigStatus{{Slug: "a", ID: "MIR-1", Title: "build it", Path: "/work/a"}},
+	}
+	m, cmd := m.handleKey("ctrl+x")
+	if cmd != nil || !m.leaving || m.actionErr != nil {
+		t.Fatalf("ctrl-x did not arm leaving: leaving=%v err=%v", m.leaving, m.actionErr)
+	}
+	if !strings.Contains(m.leavingLine(), "parking MIR-9") {
+		t.Fatalf("banner = %q, want the hosting rig named", m.leavingLine())
+	}
+	if !strings.Contains(m.View(), "park & go") {
+		t.Fatalf("footer does not advertise the armed verb:\n%s", m.View())
+	}
+
+	// A destination that fails to prepare leaves the intent armed, not applied.
+	updated, _ := m.Update(radarActionMsg{err: errRigBusy})
+	m = updated.(radarModel)
+	if !m.leaving || m.parkOrigin != "" || m.chosen != nil {
+		t.Fatalf("failed pick applied leaving: leaving=%v origin=%q chosen=%v", m.leaving, m.parkOrigin, m.chosen)
+	}
+
+	updated, quit := m.Update(radarActionMsg{destination: rigStatus{Slug: "a", Path: "/work/a", session: "s"}})
+	m = updated.(radarModel)
+	if quit == nil || m.chosen == nil || m.chosen.Slug != "a" {
+		t.Fatalf("pick did not finish radar: chosen=%+v quit=%v", m.chosen, quit != nil)
+	}
+	if m.parkOrigin != "/work/cur" {
+		t.Fatalf("parkOrigin = %q, want the hosting rig's basedir", m.parkOrigin)
+	}
+}
+
+func TestRadarLeaveHonorsNewRig(t *testing.T) {
+	current := rigStatus{Slug: "cur", ID: "MIR-9", Path: "/work/cur"}
+	m := radarModel{currentRow: &current}
+	m, _ = m.handleKey("ctrl+x")
+	m, _ = m.handleKey("ctrl+n")
+	updated, _ := m.Update(newRigCreatedMsg{result: newRigResult{
+		ID: "new-rig", Basedir: "/work/new-rig", Session: "~/workspaces/new-rig",
+	}})
+	m = updated.(radarModel)
+	if m.chosen == nil || m.parkOrigin != "/work/cur" {
+		t.Fatalf("park & new: chosen=%+v origin=%q", m.chosen, m.parkOrigin)
+	}
+}
+
+func TestRadarLeaveCancelsBeforeFilter(t *testing.T) {
+	current := rigStatus{Slug: "cur", ID: "MIR-9", Path: "/work/cur"}
+	m := radarModel{currentRow: &current, inflight: []rigStatus{{Slug: "a", Title: "build it", Path: "/work/a"}}}
+	m, _ = m.handleKey("b")
+	m, _ = m.handleKey("ctrl+x")
+	m, cmd := m.handleKey("esc")
+	if cmd != nil || m.leaving || m.filter != "b" {
+		t.Fatalf("esc did not disarm first: leaving=%v filter=%q quit=%v", m.leaving, m.filter, cmd != nil)
+	}
+	m, _ = m.handleKey("ctrl+x")
+	m, _ = m.handleKey("ctrl+x")
+	if m.leaving {
+		t.Fatal("second ctrl-x did not disarm")
+	}
+	// A plain Enter with nothing armed parks nothing.
+	updated, _ := m.Update(radarActionMsg{destination: rigStatus{Slug: "a", Path: "/work/a", session: "s"}})
+	if m = updated.(radarModel); m.parkOrigin != "" {
+		t.Fatalf("unarmed pick set parkOrigin=%q", m.parkOrigin)
+	}
+}
+
+func TestRadarLeaveRefusesNonRigCurrent(t *testing.T) {
+	bare := rigStatus{bare: true, session: "shell", Title: "shell"}
+	m := radarModel{currentRow: &bare}
+	m, _ = m.handleKey("ctrl+x")
+	if m.leaving || m.actionErr == nil || !strings.Contains(m.actionErr.Error(), "cannot be parked") {
+		t.Fatalf("bare current armed leaving: leaving=%v err=%v", m.leaving, m.actionErr)
+	}
+	m = radarModel{}
+	m, _ = m.handleKey("ctrl+x")
+	if m.leaving || m.actionErr == nil {
+		t.Fatalf("no current session armed leaving: leaving=%v err=%v", m.leaving, m.actionErr)
+	}
+}
+
+func TestRadarLeaveBannerCountsAsChrome(t *testing.T) {
+	current := rigStatus{Slug: "cur", ID: "MIR-9", Path: "/work/cur"}
+	m := radarModel{currentRow: &current, inflight: []rigStatus{{Slug: "a", Title: "build it", Path: "/work/a"}}}
+	before, _ := m.viewportChrome()
+	m, _ = m.handleKey("ctrl+x")
+	after, _ := m.viewportChrome()
+	if after != before+2 {
+		t.Fatalf("prompt rows %d -> %d, want the banner and its blank counted", before, after)
+	}
+}

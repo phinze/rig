@@ -153,9 +153,15 @@ func sessionExitHandoff(inExitingSession bool) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	dest, err := radarPick(home)
+	choice, err := radarPick(home)
 	if err != nil {
 		return false, err
+	}
+	// The caller is already leaving this session, so a ctrl+x armed in the
+	// nested board asks for what's about to happen anyway; only the pick counts.
+	var dest *rigStatus
+	if choice != nil {
+		dest = &choice.dest
 	}
 	return handleSessionExitDestination(dest, radarFinish)
 }
