@@ -468,8 +468,8 @@ func TestUpDown(t *testing.T) {
 		_ = exec.Command(realTmux, "-L", "rig-e2e", "kill-server").Run()
 	})
 
-	// --- rig up ---
-	upCmd := exec.Command(rigBin, "up", "FAKE-1")
+	// --- rig up --- with the color a project agent would hand over.
+	upCmd := exec.Command(rigBin, "up", "FAKE-1", "--context", "start from the dial helper")
 	upCmd.Dir = repoDir
 	upCmd.Env = env
 	if out, err := upCmd.CombinedOutput(); err != nil {
@@ -477,6 +477,9 @@ func TestUpDown(t *testing.T) {
 	}
 
 	basedir := filepath.Join(home, "workspaces", "fake-1-do-the-thing")
+	if kick := string(mustReadFile(t, filepath.Join(basedir, "KICKOFF.md"))); !strings.Contains(kick, "# Kickoff: FAKE-1: ") || !strings.Contains(kick, "start from the dial helper") {
+		t.Errorf("KICKOFF.md should carry the pickup context under the ticket's heading:\n%s", kick)
+	}
 	wantFiles := []string{
 		basedir,
 		filepath.Join(basedir, manifestName),
@@ -545,13 +548,21 @@ func TestUpDown(t *testing.T) {
 	// repo: it must short-circuit before any repo/tracker resolution (there's no
 	// ghq stub here, so a fall-through to the create path would error on `ghq
 	// list`), proving the existence check is both local and repo-independent.
-	reUp := exec.Command(rigBin, "up", "FAKE-1")
+	reUp := exec.Command(rigBin, "up", "FAKE-1", "--context", "late color")
 	reUp.Dir = home
 	reUp.Env = env
 	if out, err := reUp.CombinedOutput(); err != nil {
 		t.Fatalf("second rig up (idempotent): %v\n%s", err, out)
 	} else if !strings.Contains(string(out), "already up") {
 		t.Errorf("expected second up to switch to the existing rig, got:\n%s", out)
+	} else if !strings.Contains(string(out), "rig dispatch FAKE-1") {
+		// Context for a rig that already exists is dropped, and it has to say
+		// so: a project agent must not believe it briefed an agent that never
+		// heard a word.
+		t.Errorf("re-up with context should warn and point at dispatch, got:\n%s", out)
+	}
+	if kick := string(mustReadFile(t, filepath.Join(basedir, "KICKOFF.md"))); strings.Contains(kick, "late color") {
+		t.Errorf("re-up must not rewrite the kickoff:\n%s", kick)
 	}
 	// Still exactly one rig on disk — no duplicate basedir was minted.
 	if entries, err := os.ReadDir(filepath.Join(home, "workspaces")); err != nil {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -139,5 +140,67 @@ func TestExtractRepoFlag(t *testing.T) {
 				t.Errorf("rest = %#v, want %#v", rest, tc.wantRest)
 			}
 		})
+	}
+}
+
+func TestExtractContextFlag(t *testing.T) {
+	ctx, rest := extractContextFlag([]string{"MIR-75", "--context", "reuse the dial helper", "--repo", "me/api"})
+	if ctx != "reuse the dial helper" || !reflect.DeepEqual(rest, []string{"MIR-75", "--repo", "me/api"}) {
+		t.Fatalf("context = %q rest = %#v", ctx, rest)
+	}
+	ctx, rest = extractContextFlag([]string{"--context=one liner", "MIR-75"})
+	if ctx != "one liner" || !reflect.DeepEqual(rest, []string{"MIR-75"}) {
+		t.Fatalf("equals form: context = %q rest = %#v", ctx, rest)
+	}
+}
+
+// The flag and a pipe both feed the same file, flag first, and neither is
+// required: a project agent's shell tool has a non-terminal, empty stdin, which
+// must read as "no context" rather than blocking or writing an empty kickoff.
+func TestResolveUpContextJoinsFlagAndStdin(t *testing.T) {
+	withStdin := func(t *testing.T, body string) {
+		t.Helper()
+		f, err := os.CreateTemp(t.TempDir(), "stdin")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.WriteString(body); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.Seek(0, 0); err != nil {
+			t.Fatal(err)
+		}
+		old := os.Stdin
+		os.Stdin = f
+		t.Cleanup(func() { os.Stdin = old; _ = f.Close() })
+	}
+
+	withStdin(t, "")
+	if got, err := resolveUpContext(""); err != nil || got != "" {
+		t.Fatalf("nothing given = %q, %v", got, err)
+	}
+	if got, _ := resolveUpContext("  flag only  "); got != "flag only" {
+		t.Fatalf("flag only = %q", got)
+	}
+
+	withStdin(t, "piped\nblob\n")
+	if got, _ := resolveUpContext(""); got != "piped\nblob" {
+		t.Fatalf("stdin only = %q", got)
+	}
+	withStdin(t, "piped\nblob\n")
+	if got, _ := resolveUpContext("from flag"); got != "from flag\n\npiped\nblob" {
+		t.Fatalf("both = %q", got)
+	}
+}
+
+func TestPickupPromptPointsAtKickoffOnlyWithContext(t *testing.T) {
+	tk := task{Identifier: "MIR-75", Title: "add zig stack"}
+	plain := pickupPrompt(tk, false)
+	if strings.Contains(plain, rigKickoffName) || !strings.Contains(plain, "MIR-75 (add zig stack)") {
+		t.Fatalf("plain prompt = %q", plain)
+	}
+	with := pickupPrompt(tk, true)
+	if !strings.Contains(with, "../"+rigKickoffName) || !strings.HasPrefix(with, plain) {
+		t.Fatalf("context prompt should extend the plain one and name the file: %q", with)
 	}
 }

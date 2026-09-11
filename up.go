@@ -3,6 +3,7 @@ package main
 import (
 	"cmp"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 )
@@ -14,6 +15,7 @@ func runUp(args []string) error {
 	}
 	defer pick.cleanup()
 	repoFlag, args := extractRepoFlag(args)
+	contextFlag, args := extractContextFlag(args)
 
 	// A PR URL means "pick up my own work on this PR" — authoring, not the issue
 	// flow. pickupPR sorts authoring vs review by who owns the PR (and reroutes
@@ -24,6 +26,9 @@ func runUp(args []string) error {
 	// issue-keyed rig anyway.
 	if len(args) >= 1 {
 		if pr := parsePRURL(args[0]); pr != nil {
+			if contextFlag != "" {
+				fmt.Fprintln(os.Stderr, "rig: warning: --context is for issue pickups; a PR pickup resumes existing work and ignores it")
+			}
 			return pickupPR(pr, "up", pick)
 		}
 	}
@@ -34,6 +39,10 @@ func runUp(args []string) error {
 	}
 	if id == "" {
 		return nil // picker cancelled
+	}
+	context, err := resolveUpContext(contextFlag)
+	if err != nil {
+		return err
 	}
 
 	// Idempotency: `rig up X` means "put me in my rig for X, making it if it
@@ -47,6 +56,13 @@ func runUp(args []string) error {
 		return err
 	}
 	if done {
+		// Idempotency wins over the context: the rig exists and we went there.
+		// But dropping the color silently is how a project agent ends up
+		// believing it briefed a task agent that never heard a word, so say so
+		// and name the command that does reach a running rig.
+		if context != "" {
+			fmt.Fprintf(os.Stderr, "rig: warning: %s already exists, so the context was not delivered; `rig dispatch %s <prompt>` hands a prompt to its agent\n", id, id)
+		}
 		return nil
 	}
 
@@ -97,6 +113,11 @@ func runUp(args []string) error {
 	if err := createBasedir(basedir, m); err != nil {
 		return err
 	}
+	if context != "" {
+		if err := writeRigKickoff(basedir, tk.Identifier+": "+tk.Title, context); err != nil {
+			return fmt.Errorf("writing %s: %w", rigKickoffName, err)
+		}
+	}
 
 	branchName := tk.workBranchName()
 	startRev := resolveStartRev(repo.Path, tk.BranchName)
@@ -122,10 +143,7 @@ func runUp(args []string) error {
 		rectoCmd: rectoCommand(),
 		repo:     repo.Name,
 		agent:    pick.kind,
-		prompt: fmt.Sprintf(
-			"Picking up %s (%s). Use the Linear MCP (it may take a few seconds to connect) to read the issue, mark it In Progress and assigned to me, then help me plan.",
-			tk.Identifier, tk.Title,
-		),
+		prompt:   pickupPrompt(tk, context != ""),
 	}
 	session, err := spawnSession(basedir, repoDest, sess)
 	if err != nil {
@@ -136,6 +154,45 @@ func runUp(args []string) error {
 	return attachOrReport(session)
 }
 
+// pickupPrompt is the opening message for an issue pickup. Extra context is
+// handed over as a path rather than inlined, for the same reasons kickoffPrompt
+// gives: the prompt reaches the agent as one shell argument, which is a poor
+// courier for a multi-line blob, and a file survives a resume and whatever
+// other agent the rig grows later.
+func pickupPrompt(tk task, hasContext bool) string {
+	prompt := fmt.Sprintf(
+		"Picking up %s (%s). Use the Linear MCP (it may take a few seconds to connect) to read the issue, mark it In Progress and assigned to me, then help me plan.",
+		tk.Identifier, tk.Title,
+	)
+	if hasContext {
+		prompt += fmt.Sprintf(" There's extra context for this pickup in ../%s; read it alongside the issue, it may narrow or redirect what the ticket says.", rigKickoffName)
+	}
+	return prompt
+}
+
+// resolveUpContext gathers the color a pickup can carry beyond the ticket: a
+// --context flag, piped stdin, or both (flag first). It exists for a project
+// rig's agent starting a task rig on your behalf, which knows things the ticket
+// doesn't and has no other channel to the task agent until it's running. A
+// terminal on stdin means nothing was piped, so only the flag counts.
+func resolveUpContext(flag string) (string, error) {
+	parts := []string{strings.TrimSpace(flag)}
+	if !stdinIsTTY() {
+		blob, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return "", fmt.Errorf("reading pickup context from stdin: %w", err)
+		}
+		parts = append(parts, strings.TrimSpace(string(blob)))
+	}
+	var kept []string
+	for _, p := range parts {
+		if p != "" {
+			kept = append(kept, p)
+		}
+	}
+	return strings.Join(kept, "\n\n"), nil
+}
+
 // extractRepoFlag pulls a --repo owner/repo (or --repo=owner/repo) out of args,
 // returning its value and the remaining args. `rig up` mixes the flag in with
 // its issue-id / query / PR-url positional, so we strip it before dispatching on
@@ -143,20 +200,32 @@ func runUp(args []string) error {
 // value is left in rest, where resolveRepo's empty-override path treats it as
 // "no override" and falls through to the picker.
 func extractRepoFlag(args []string) (repo string, rest []string) {
+	return extractValueFlag(args, "--repo")
+}
+
+// extractContextFlag pulls --context <text> (or --context=text) out of args.
+func extractContextFlag(args []string) (context string, rest []string) {
+	return extractValueFlag(args, "--context")
+}
+
+// extractValueFlag strips one valued flag from a positional-heavy arg list. A
+// repeated flag keeps the last; a trailing bare flag with no value is left in
+// rest, where the caller's empty-value path treats it as "not given".
+func extractValueFlag(args []string, name string) (value string, rest []string) {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
-		if a == "--repo" && i+1 < len(args) {
-			repo = args[i+1]
+		if a == name && i+1 < len(args) {
+			value = args[i+1]
 			i++
 			continue
 		}
-		if v, ok := strings.CutPrefix(a, "--repo="); ok {
-			repo = v
+		if v, ok := strings.CutPrefix(a, name+"="); ok {
+			value = v
 			continue
 		}
 		rest = append(rest, a)
 	}
-	return repo, rest
+	return value, rest
 }
 
 // attachExistingRig makes `rig up` idempotent. If a rig whose id matches rigID

@@ -19,6 +19,12 @@ no ticket yet, followed by an optional textarea for pasted context that lands in
 `KICKOFF.md` at the rig root (esc skips it; piped stdin fills it non-
 interactively). The agent is pointed at that file rather than handed its
 contents, because the launch prompt travels by `tmux send-keys` into a shell.
+`rig up` takes the same file by `--context` or piped stdin, which exists for a
+project rig's agent starting a task rig on your behalf: it knows things the
+ticket doesn't and has no channel to the task agent until that agent is running.
+An existing rig keeps `up`'s idempotency and drops the context with a warning
+that names `rig dispatch`, because a project agent silently believing it briefed
+an agent that never heard a word is the failure worth a line of stderr.
 The kickoff, context, repo, and agent controls are one Bubble Tea wizard shared
 with the radar; ctrl-n opens it there without leaving the radar's alternate
 screen or tmux popup.

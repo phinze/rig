@@ -129,12 +129,16 @@ func usage() {
 	fmt.Fprint(os.Stderr, `rig: workspace tool for task-shaped work
 
 usage:
-  rig up [issue|query|pr] [--repo owner/repo] [--agent AGENT]
+  rig up [issue|query|pr] [--repo owner/repo] [--agent AGENT] [--context TEXT]
                             go to your rig for a task, creating it if it's new
                             (Linear id, search terms, no-arg fzf picker, or a PR
                             of yours to resume; idempotent — re-up just switches.
                             Repo is chosen by an fzf picker over ghq repos, cwd
-                            pre-selected on top, unless --repo names one)
+                            pre-selected on top, unless --repo names one.
+                            --context, and piped stdin, carry color beyond the
+                            ticket into the new rig's KICKOFF.md for its agent
+                            to read alongside the issue; an existing rig warns
+                            and points at dispatch instead)
                             Agent is cld/claude, cdx/codex, or agy/antigravity,
                             defaulting to $RIG_AGENT, then the "rig config
                             agent" setting, then claude. Every
