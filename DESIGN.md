@@ -614,10 +614,17 @@ The ladder is `parkedDisposition` generalized past parked rigs, which is
 most of why this was cheap to build: same vocabulary, so sweep, waiting, and
 the radar can't disagree about what a rig's state *is*, only about what to
 do about it. Merged and clean tears down. Approved with CI clear offers the
-merge. Changes requested is reported with its wake command rather than
-executed, because it wants a human and a batch pass is the wrong shape for
-that. A review rig ignores its disposition entirely and asks the teardown
-gate, since "you posted a review" is its terminal condition and the author's
+merge. A review verdict (changes requested, or red CI) wakes a parked rig,
+and only points at a live one: the verdict wants a human, but the session
+rebuild doesn't, and a rig parked on review was parked on the promise that a
+verdict brings it back. The mirror rung is a live rig whose PR is out and
+unanswered, which sweep offers to park; that's what park is for, and it's the
+half of "auto park on review status" that the parked section was always
+implying. Both are `setRigParked` and each is the other's undo, which is
+why a batch pass is allowed to run them. The rig sweep is running inside is
+never offered for park, since executing it would end the pass mid-stream.
+A review rig ignores its disposition entirely and asks the teardown gate,
+since "you posted a review" is its terminal condition and the author's
 merge state says nothing about it.
 
 Empty `Checks` means the repo has no CI configured, not CI that hasn't

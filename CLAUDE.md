@@ -197,8 +197,20 @@ and would slip past the check that catches bare sessions. Recording is best-effo
 purpose: a rig you asked to tear down must go away even if we couldn't write
 its tombstone. See DESIGN.md §"Tombstones".
 
+Sweep also parks and wakes. A live rig whose PR is out and unanswered is offered
+for park (pre-checked unless its agent is mid-turn), and a parked rig whose
+review came back is offered for wake (always pre-checked, since parking on
+review was the promise that a verdict brings it back). The same verdict on a
+rig that's already live is `actionAttend`: the NEEDS YOU row, display only,
+because the verb for "you're already in the seat" is you. Wake used to be that
+row for every rig, and running it on a live one was a no-op that read as a
+command. The ladder needs `Parked` and `Current` to tell these apart, and
+`Current` exists because parking the rig sweep is streaming into would end the
+pass; it is never offered, not merely unchecked.
+
 Two things there are easy to get wrong. Merges never arrive pre-checked and `a`
-skips them, because merging is the only irreversible act in the pass. And
+skips them, because merging is the only irreversible act in the pass; it does
+cover wakes and parks, which each have the other as an undo. And
 "pre-checked" is a separate judgment from "safe": `sweepCollectable` asks whether
 losing the rig would annoy you, gating on `sweepStaleAfter` (24h, formerly
 reap's idle window and now its only home) for rigs with no PR on record.

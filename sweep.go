@@ -106,13 +106,24 @@ func runSweep(args []string) error {
 }
 
 // sweep actions, in the order the board groups them: merge advances work, down
-// clears the board, wake needs you in the seat (so it's shown, never executed),
-// and "" means this rig wants nothing today.
+// clears the board, wake brings a parked rig back because its review came back,
+// park puts a live rig away because its review hasn't, attend needs you in the
+// seat of a rig that's already live (so it's shown, never executed), and ""
+// means this rig wants nothing today.
+//
+// Wake and park are both `setRigParked` and both reversible with one command,
+// which is why a batch pass is allowed to run them. They used to be one
+// display-only rung ("wake needs a human"), but what needs the human is the
+// review verdict, not the session rebuild: a rig parked on review is a promise
+// that the verdict brings it back, and a rig idling live with its PR out is
+// exactly what park is for.
 const (
-	actionNone  = ""
-	actionMerge = "merge"
-	actionDown  = "down"
-	actionWake  = "wake"
+	actionNone   = ""
+	actionMerge  = "merge"
+	actionDown   = "down"
+	actionWake   = "wake"
+	actionPark   = "park"
+	actionAttend = "attend"
 )
 
 // sweepPlan is one rig's proposed next step: what we'd do, why, and (for a
@@ -184,6 +195,22 @@ type sweepInput struct {
 	// HalfBuilt means the rig's create was interrupted before its workspace
 	// existed, so there is nothing in it to weigh.
 	HalfBuilt bool
+	// Parked is the rig's current state, which decides whether a review
+	// verdict means "wake it" or "you're already there".
+	Parked bool
+	// Current means sweep is running inside this rig's tmux session. Parking
+	// it would kill the pass mid-stream, so it is never offered.
+	Current bool
+}
+
+// sweepSummons is the rung for a rig whose review came back: a parked one is
+// woken, a live one is only pointed at, since the verb for "you're already in
+// the seat" is you.
+func sweepSummons(in sweepInput, detail string) (string, string) {
+	if in.Parked {
+		return actionWake, detail
+	}
+	return actionAttend, detail
 }
 
 // sweepDecision is the ladder: disposition in, next step out. It deliberately
@@ -212,7 +239,7 @@ func sweepDecision(in sweepInput) (action, detail string) {
 
 	switch in.Disp {
 	case "changes requested":
-		return actionWake, "review came back with changes"
+		return sweepSummons(in, "review came back with changes")
 	}
 
 	// Red CI is your move, not a reviewer's, so it outranks everything below and
@@ -220,7 +247,7 @@ func sweepDecision(in sweepInput) (action, detail string) {
 	// folds review state only — and burying "CI failing" under "awaiting review"
 	// was the single most misleading thing the board did.
 	if red := failingPRs(in.PRs); len(red) > 0 {
-		return actionWake, "CI failing on " + strings.Join(red, ", ")
+		return sweepSummons(in, "CI failing on "+strings.Join(red, ", "))
 	}
 
 	switch in.Disp {
@@ -268,6 +295,13 @@ func sweepDecision(in sweepInput) (action, detail string) {
 		return actionDown, "no PR on record"
 
 	default: // waiting
+		// The PR is out and nobody has answered. A live rig here is exactly what
+		// park is for: the work is done until a reviewer says otherwise, and the
+		// radar's parked section is where "waiting on someone else" belongs. The
+		// one you're sweeping from stays live, since parking it ends the pass.
+		if !in.Parked && !in.Current {
+			return actionPark, "awaiting review"
+		}
 		return actionNone, "awaiting review"
 	}
 }
@@ -441,6 +475,7 @@ func planSweep(rigs []rigInfo, statuses []rigStatus, home string, fetched map[st
 	}
 
 	now := time.Now()
+	current := currentTmuxSession()
 	plans := make([]sweepPlan, 0, len(statuses))
 	for _, s := range statuses {
 		r, ok := byPath[s.Path]
@@ -483,6 +518,8 @@ func planSweep(rigs []rigInfo, statuses []rigStatus, home string, fetched map[st
 			Review:    m.isReview(),
 			Shipped:   len(m.PRs) > 0 || len(s.PRs) > 0,
 			HalfBuilt: rigCreationInterrupted(m),
+			Parked:    s.Parked,
+			Current:   current != "" && tmuxSessionName(s.Path) == current,
 		}
 		// The teardown gate is the expensive half — a jj fetch plus a gh call per
 		// branch — so it's consulted only where the answer can change the verdict,
@@ -504,8 +541,16 @@ func planSweep(rigs []rigInfo, statuses []rigStatus, home string, fetched map[st
 			dirty:   rigDirtyRepos(s.Path, m, s.PRs),
 			collect: in.HalfBuilt || sweepCollectable(in.Shipped, s.Agent, s.LastActive, now),
 		}
-		if action == actionMerge {
+		switch action {
+		case actionMerge:
 			p.merges, p.held = mergeablePRs(s.PRs)
+		case actionPark:
+			// Parking mid-turn would cut the agent off; parking an idle rig only
+			// puts its finished work where it belongs. The row is there either way.
+			p.collect = s.Agent != "working"
+		case actionWake:
+			// Parking on review was the promise that the verdict brings it back.
+			p.collect = true
 		}
 		// Last rung of the subject ladder, and the only one that costs a read —
 		// so ask for it only once the free rungs have come back empty.
@@ -529,8 +574,12 @@ func sweepRank(action string) int {
 		return 1
 	case actionWake:
 		return 2
-	default:
+	case actionPark:
 		return 3
+	case actionAttend:
+		return 4
+	default:
+		return 5
 	}
 }
 
@@ -580,7 +629,36 @@ func executeSweep(picked []sweepPlan, dryRun bool, mergeFlag string, fetched map
 			if err := sweepDown(p, fetched); err != nil {
 				return err
 			}
+		case actionWake, actionPark:
+			if dryRun {
+				fmt.Fprintf(os.Stderr, "  would %s %s\n", p.action, p.status.ID)
+				continue
+			}
+			if err := sweepSetParked(p); err != nil {
+				return err
+			}
 		}
+	}
+	return nil
+}
+
+// sweepSetParked runs one park or wake and reports it. A held lock is someone
+// else's command in progress, so it's a skip rather than an abort, the same
+// call sweepTeardown makes.
+func sweepSetParked(p sweepPlan) error {
+	park := p.action == actionPark
+	err := setRigParked(p.status.Path, park, true, nil)
+	if errors.Is(err, errRigBusy) {
+		fmt.Fprintf(os.Stderr, "  %s: skipped — another rig command holds its lock\n", p.status.ID)
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("%s %s: %w", p.action, p.status.ID, err)
+	}
+	if park {
+		fmt.Fprintf(os.Stderr, "  parked %s — `rig wake %s` brings it back\n", p.status.ID, p.status.ID)
+	} else {
+		fmt.Fprintf(os.Stderr, "  woke %s — %s\n", p.status.ID, p.detail)
 	}
 	return nil
 }
@@ -652,7 +730,11 @@ func reportSweep(plans []sweepPlan) {
 		case actionDown:
 			next = "ready to tear down"
 		case actionWake:
-			next = "rig wake " + p.status.ID
+			next = "ready to wake"
+		case actionPark:
+			next = "ready to park"
+		case actionAttend:
+			next = "needs you"
 		}
 		fmt.Fprintf(w, "  %s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			rigKindGlyph(rigKindOf(p.status)), p.status.ID, sweepRefs(p),
@@ -700,8 +782,8 @@ type sweepItem struct {
 // picture rather than just the part you can act on.
 type sweepModel struct {
 	plans   []sweepPlan // everything the scan found, in board order
-	items   []sweepItem // actionable, merges first then downs
-	inert   []sweepPlan // wake + nothing-to-do, display only
+	items   []sweepItem // actionable: merges, downs, wakes, parks
+	inert   []sweepPlan // attend + nothing-to-do, display only
 	cursor  int
 	showAll bool // expand the quiet rigs
 	dryRun  bool
@@ -755,7 +837,7 @@ func (m *sweepModel) load(plans []sweepPlan) {
 		switch p.action {
 		case actionMerge:
 			m.items = append(m.items, sweepItem{plan: p, selected: false})
-		case actionDown:
+		case actionDown, actionWake, actionPark:
 			m.items = append(m.items, sweepItem{plan: p, selected: p.collect})
 		default:
 			m.inert = append(m.inert, p)
@@ -832,17 +914,18 @@ func (m sweepModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.items[m.cursor].selected = !m.items[m.cursor].selected
 			}
 		case "a":
-			// Deliberately teardown-only. Merges are irreversible, so a single
-			// key must never be able to queue one you didn't look at.
+			// Everything but merges. Those are irreversible, so a single key
+			// must never be able to queue one you didn't look at; a teardown has
+			// its tombstone and a park or wake has its opposite.
 			all := true
 			for _, it := range m.items {
-				if it.plan.action == actionDown && !it.selected {
+				if it.plan.action != actionMerge && !it.selected {
 					all = false
 					break
 				}
 			}
 			for i := range m.items {
-				if m.items[i].plan.action == actionDown {
+				if m.items[i].plan.action != actionMerge {
 					m.items[i].selected = !all
 				}
 			}
@@ -909,10 +992,12 @@ func (m sweepModel) View() string {
 	}
 	writeGroup("MERGE", actionMerge)
 	writeGroup("TEAR DOWN", actionDown)
+	writeGroup("WAKE", actionWake)
+	writeGroup("PARK", actionPark)
 
 	var wake, quiet []sweepPlan
 	for _, p := range m.inert {
-		if p.action == actionWake {
+		if p.action == actionAttend {
 			wake = append(wake, p)
 		} else {
 			quiet = append(quiet, p)
@@ -945,30 +1030,29 @@ func (m sweepModel) View() string {
 
 	// The footer counts what enter would actually do, so the commitment is
 	// legible before you make it rather than after.
-	nMerge, nDown := 0, 0
+	counts := map[string]int{}
 	for _, it := range m.items {
 		if !it.selected {
 			continue
 		}
 		if it.plan.action == actionMerge {
-			nMerge += len(it.plan.merges)
+			counts[actionMerge] += len(it.plan.merges)
 		} else {
-			nDown++
+			counts[it.plan.action]++
 		}
 	}
 	var acts []string
-	if nMerge > 0 {
-		acts = append(acts, fmt.Sprintf("merge %d", nMerge))
-	}
-	if nDown > 0 {
-		acts = append(acts, fmt.Sprintf("down %d", nDown))
+	for _, a := range []string{actionMerge, actionDown, actionWake, actionPark} {
+		if n := counts[a]; n > 0 {
+			acts = append(acts, fmt.Sprintf("%s %d", a, n))
+		}
 	}
 	apply := "nothing selected"
 	if len(acts) > 0 {
 		apply = strings.Join(acts, ", ")
 	}
 	b.WriteString("\n" + radarFaintStyle.Render(
-		" space toggle · a all teardowns · w quiet · enter "+apply+" · q quit") + "\n")
+		" space toggle · a all but merges · w quiet · enter "+apply+" · q quit") + "\n")
 
 	return b.String()
 }
@@ -1105,12 +1189,13 @@ func (m sweepModel) sweepLine(box string, p sweepPlan, c sweepCols) (lead, subje
 }
 
 // sweepWhyStyle colours the why column. Red is reserved for a why that names
-// something broken — today that's exactly the wake rows' failing CI, and it's
-// the whole reason those rows left the quiet section. Before the subject
-// column existed the red covered the entire line; now it sits on the four
-// words that earned it and the title beside them stays readable.
+// something broken — a review verdict or failing CI, whether the rig it summons
+// is parked (wake) or live (attend) — and it's the whole reason those rows left
+// the quiet section. Before the subject column existed the red covered the
+// entire line; now it sits on the four words that earned it and the title
+// beside them stays readable.
 func sweepWhyStyle(p sweepPlan) lipgloss.Style {
-	if p.action == actionWake {
+	if p.action == actionWake || p.action == actionAttend {
 		return radarHotStyle
 	}
 	return radarFaintStyle

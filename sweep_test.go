@@ -65,17 +65,48 @@ func TestSweepDecision(t *testing.T) {
 			in: sweepInput{Disp: "approved", PRs: []rigPR{
 				{Repo: "o/runtime", prInfo: prInfo{Number: 10, State: "OPEN", Review: "APPROVED", Checks: "failing"}},
 			}},
+			wantAction: actionAttend,
+			wantDetail: "CI failing on runtime#10",
+		},
+		{
+			// The same verdict on a parked rig has a verb: it was parked on the
+			// promise that a verdict brings it back.
+			name: "approved but CI failing wakes a parked rig",
+			in: sweepInput{Disp: "approved", Parked: true, PRs: []rigPR{
+				{Repo: "o/runtime", prInfo: prInfo{Number: 10, State: "OPEN", Review: "APPROVED", Checks: "failing"}},
+			}},
 			wantAction: actionWake,
 			wantDetail: "CI failing on runtime#10",
 		},
 		{
 			name:       "changes requested wants you in the seat",
 			in:         sweepInput{Disp: "changes requested"},
-			wantAction: actionWake,
+			wantAction: actionAttend,
 		},
 		{
-			name:       "still awaiting review does nothing",
+			name:       "changes requested wakes a parked rig",
+			in:         sweepInput{Disp: "changes requested", Parked: true},
+			wantAction: actionWake,
+			wantDetail: "review came back with changes",
+		},
+		{
+			// A live rig with its PR out and unanswered is exactly what park is
+			// for: the work is done until a reviewer says otherwise.
+			name:       "still awaiting review parks a live rig",
 			in:         sweepInput{Disp: "waiting"},
+			wantAction: actionPark,
+			wantDetail: "awaiting review",
+		},
+		{
+			name:       "still awaiting review leaves a parked rig parked",
+			in:         sweepInput{Disp: "waiting", Parked: true},
+			wantAction: actionNone,
+			wantDetail: "awaiting review",
+		},
+		{
+			// Parking the rig sweep runs inside would end the pass mid-stream.
+			name:       "awaiting review never parks the rig you're sweeping from",
+			in:         sweepInput{Disp: "waiting", Current: true},
 			wantAction: actionNone,
 			wantDetail: "awaiting review",
 		},
@@ -111,7 +142,7 @@ func TestSweepDecision(t *testing.T) {
 			in: sweepInput{Disp: "waiting", PRs: []rigPR{
 				{Repo: "o/mirendev", prInfo: prInfo{Number: 111, State: "OPEN", Review: "REVIEW_REQUIRED", Checks: "failing"}},
 			}},
-			wantAction: actionWake,
+			wantAction: actionAttend,
 			wantDetail: "CI failing on mirendev#111",
 		},
 		{
@@ -120,17 +151,18 @@ func TestSweepDecision(t *testing.T) {
 			in: sweepInput{Disp: "changes requested", PRs: []rigPR{
 				{Repo: "o/r", prInfo: prInfo{Number: 1, State: "OPEN", Review: "CHANGES_REQUESTED", Checks: "failing"}},
 			}},
-			wantAction: actionWake,
+			wantAction: actionAttend,
 			wantDetail: "review came back with changes",
 		},
 		{
 			// Pending checks resolve themselves; nagging would put half the board
-			// in the needs-you pile every time anyone pushed.
+			// in the needs-you pile every time anyone pushed. It reads as plain
+			// waiting, which for a live rig means park.
 			name: "pending CI is not a summons",
 			in: sweepInput{Disp: "waiting", PRs: []rigPR{
 				{Repo: "o/r", prInfo: prInfo{Number: 2, State: "OPEN", Review: "REVIEW_REQUIRED", Checks: "pending"}},
 			}},
-			wantAction: actionNone,
+			wantAction: actionPark,
 			wantDetail: "awaiting review",
 		},
 		{
@@ -223,7 +255,7 @@ func TestSweepMultiRepoMergeRow(t *testing.T) {
 }
 
 // A rig whose PRs disagree about review never reaches "approved", so the sweep
-// leaves it alone rather than landing half a cross-repo change.
+// treats it as still waiting rather than landing half a cross-repo change.
 func TestSweepMixedReviewStatesAreLeftAlone(t *testing.T) {
 	prs := []rigPR{
 		{Repo: "o/runtime", prInfo: prInfo{Number: 1, State: "OPEN", Review: "APPROVED", Checks: "passing"}},
@@ -232,7 +264,7 @@ func TestSweepMixedReviewStatesAreLeftAlone(t *testing.T) {
 	if got := parkedDisposition(prs); got != "waiting" {
 		t.Fatalf("disposition = %q, want waiting", got)
 	}
-	action, _ := sweepDecision(sweepInput{Disp: parkedDisposition(prs), PRs: prs})
+	action, _ := sweepDecision(sweepInput{Disp: parkedDisposition(prs), PRs: prs, Parked: true})
 	if action != actionNone {
 		t.Errorf("action = %q, want nothing — half a cross-repo change must not land", action)
 	}
@@ -371,9 +403,12 @@ func TestExecuteSweepDryRunTouchesNothing(t *testing.T) {
 		{status: rigStatus{ID: "a", Path: "/tmp/a"}, action: actionMerge,
 			merges: []rigPR{{Repo: "o/r", prInfo: prInfo{Number: 1}}}},
 		{status: rigStatus{ID: "b", Path: "/tmp/b"}, action: actionDown},
+		{status: rigStatus{ID: "c", Path: "/tmp/c"}, action: actionPark},
+		{status: rigStatus{ID: "d", Path: "/tmp/d"}, action: actionWake},
 	}
-	// A real run here would shell out to gh and delete /tmp/b; a dry one must do
-	// neither, so reaching the end without error is the whole assertion.
+	// A real run here would shell out to gh, delete /tmp/b, and stamp manifests
+	// that don't exist under /tmp/c and /tmp/d; a dry one must do none of it, so
+	// reaching the end without error is the whole assertion.
 	if err := executeSweep(picked, true, "--merge", map[string]bool{}); err != nil {
 		t.Fatalf("dry run returned %v", err)
 	}
@@ -440,7 +475,7 @@ func TestSweepSubjectMultiPRFallsBackOutsideMerge(t *testing.T) {
 			{Repo: "o/reviewagent", prInfo: prInfo{Number: 19, Title: "Add a cost model"}},
 			{Repo: "o/rfd", prInfo: prInfo{Number: 156, Title: "RFD-95: promote Biscuit"}},
 		}},
-		action: actionWake,
+		action: actionAttend,
 		detail: "CI failing on rfd#156",
 	}
 	if got := sweepSubject(p); got != "estimate review costs" {
@@ -776,7 +811,7 @@ func testPlans() []sweepPlan {
 		plan("mir-982", actionMerge, "approved, CI clear", pr("o/rfd", 154), pr("o/runtime", 971)),
 		plan("mir-955", actionMerge, "approved, CI clear", pr("o/runtime", 972)),
 		plan("old-rig", actionDown, "merged and clean"),
-		plan("mir-1364", actionWake, "review came back with changes"),
+		plan("mir-1364", actionAttend, "review came back with changes"),
 		plan("mir-822", actionNone, "awaiting review"),
 	}
 }
@@ -784,7 +819,7 @@ func testPlans() []sweepPlan {
 // The walk reads best when it advances work first, clears the board second, and
 // leaves the rigs that want a human for the report at the end.
 func TestSweepRankOrdersTheWalk(t *testing.T) {
-	want := []string{actionMerge, actionDown, actionWake, actionNone}
+	want := []string{actionMerge, actionDown, actionWake, actionPark, actionAttend, actionNone}
 	for i := 1; i < len(want); i++ {
 		if sweepRank(want[i-1]) >= sweepRank(want[i]) {
 			t.Errorf("sweepRank(%q) should sort before sweepRank(%q)", want[i-1], want[i])
@@ -856,5 +891,74 @@ func TestSweepBoardMarksKindWithoutBreakingTheGrid(t *testing.T) {
 	}
 	if got := newSweepModel(loose, false).columns().kind; got != 0 {
 		t.Errorf("all-loose board reserved %d columns for kind, want 0", got)
+	}
+}
+
+// Wake and park are checkable rows with their own defaults: a wake is always
+// pre-checked (parking on review was the promise that a verdict brings it back)
+// and a park is pre-checked unless the agent is mid-turn. Neither is merge, so
+// `a` covers both, and the footer counts each by its own verb.
+func TestSweepWakeAndParkAreCheckableRows(t *testing.T) {
+	plans := []sweepPlan{
+		{status: rigStatus{ID: "back", Title: "back"}, action: actionWake, detail: "review came back with changes", collect: true},
+		{status: rigStatus{ID: "idle", Title: "idle"}, action: actionPark, detail: "awaiting review", collect: true},
+		{status: rigStatus{ID: "busy", Title: "busy", Agent: "working"}, action: actionPark, detail: "awaiting review"},
+		{status: rigStatus{ID: "live", Title: "live"}, action: actionAttend, detail: "CI failing on o/r#1"},
+	}
+	m := newSweepModel(plans, false)
+	m.width = 120
+	if len(m.items) != 3 || len(m.inert) != 1 {
+		t.Fatalf("items = %d, inert = %d; want 3 checkable and the attend row read-only", len(m.items), len(m.inert))
+	}
+	if !m.items[0].selected || !m.items[1].selected || m.items[2].selected {
+		t.Fatalf("defaults = %v %v %v; want wake and idle park checked, mid-turn park not",
+			m.items[0].selected, m.items[1].selected, m.items[2].selected)
+	}
+	view := m.View()
+	for _, want := range []string{" WAKE", " PARK", " NEEDS YOU", "enter wake 1, park 1"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("view missing %q:\n%s", want, view)
+		}
+	}
+	m = press(m, "a")
+	if !m.items[2].selected {
+		t.Error("a should check the mid-turn park along with everything else that isn't a merge")
+	}
+	if got := m.selected(); len(got) != 3 {
+		t.Errorf("selected = %d plans, want all 3", len(got))
+	}
+}
+
+// planSweep hands the ladder the rig's parked state and whether sweep is running
+// inside it, which is what turns one review verdict into wake, attend, or
+// nothing, and keeps the pass from parking the session it's streaming into.
+func TestPlanSweepFeedsParkedAndCurrentToTheLadder(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("TMUX", "")
+	home := t.TempDir()
+	mk := func(id string, parked bool) (rigInfo, rigStatus) {
+		dir := filepath.Join(home, id)
+		m := manifest{ID: id, Title: id, Repos: map[string]string{"r": "o/r"}}
+		if parked {
+			m.Parked = time.Now()
+		}
+		if err := os.MkdirAll(filepath.Join(dir, ".rig"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeManifest(dir, m); err != nil {
+			t.Fatal(err)
+		}
+		waiting := []rigPR{{Repo: "o/r", prInfo: prInfo{Number: 1, State: "OPEN", Review: "REVIEW_REQUIRED", Checks: "passing"}}}
+		return rigInfo{Path: dir}, rigStatus{ID: id, Path: dir, Parked: parked, PRs: waiting}
+	}
+	liveRig, liveStatus := mk("live", false)
+	parkedRig, parkedStatus := mk("parked", true)
+	plans := planSweep([]rigInfo{liveRig, parkedRig}, []rigStatus{liveStatus, parkedStatus}, home, map[string]bool{}, nil)
+	got := map[string]string{}
+	for _, p := range plans {
+		got[p.status.ID] = p.action
+	}
+	if got["live"] != actionPark || got["parked"] != actionNone {
+		t.Errorf("actions = %v; want the live rig offered for park and the parked one left alone", got)
 	}
 }
