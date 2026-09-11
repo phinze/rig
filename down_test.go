@@ -30,6 +30,18 @@ func TestHandleSessionExitDestination(t *testing.T) {
 		}
 	})
 
+	t.Run("caller inside doomed session with no terminal is refused", func(t *testing.T) {
+		// The test binary's stdin is never a terminal, which is exactly the
+		// shape of an agent's shell tool.
+		proceed, err := sessionExitHandoff(true)
+		if err == nil || proceed {
+			t.Fatalf("proceed=%v err=%v; want a refusal that names the radar", proceed, err)
+		}
+		if !strings.Contains(err.Error(), "ctrl+x") {
+			t.Errorf("refusal should point at the radar's leave menu: %v", err)
+		}
+	})
+
 	t.Run("caller outside doomed session needs no handoff", func(t *testing.T) {
 		proceed, err := sessionExitHandoff(false)
 		if err != nil {

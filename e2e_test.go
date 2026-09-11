@@ -150,6 +150,12 @@ func TestProjectRigCreatesRepositorylessRuntimeAndJoinedStatus(t *testing.T) {
 	t.Cleanup(func() { _ = exec.Command(realTmux, "-L", "rig-project-e2e", "kill-server").Run() })
 	env := append(os.Environ(),
 		"HOME="+home,
+		// The developer's shell is usually inside tmux, and an inherited TMUX let
+		// the binary under test ask the test server which session it is in and
+		// be told the rig's own, so every in-session path (the down worker, the
+		// park handoff) ran under test with nobody inside. Pin it out: the test
+		// process is outside every session, and the binary should know it.
+		"TMUX=",
 		// Pin config the same way state is pinned below: an XDG_CONFIG_HOME
 		// in the developer's shell, or a real `rig config agent`, must never
 		// reach into a test rig and choose its agent.
@@ -244,6 +250,12 @@ func TestNew(t *testing.T) {
 
 	env := append(os.Environ(),
 		"HOME="+home,
+		// The developer's shell is usually inside tmux, and an inherited TMUX let
+		// the binary under test ask the test server which session it is in and
+		// be told the rig's own, so every in-session path (the down worker, the
+		// park handoff) ran under test with nobody inside. Pin it out: the test
+		// process is outside every session, and the binary should know it.
+		"TMUX=",
 		// Pin config the same way state is pinned below: an XDG_CONFIG_HOME
 		// in the developer's shell, or a real `rig config agent`, must never
 		// reach into a test rig and choose its agent.
@@ -264,7 +276,7 @@ func TestNew(t *testing.T) {
 	mustWriteExec(t, filepath.Join(bin, "ghq"), ghq)
 	tmuxWrap := fmt.Sprintf("#!/bin/sh\nexec %s -L rig-new-e2e -f /dev/null \"$@\"\n", realTmux)
 	mustWriteExec(t, filepath.Join(bin, "tmux"), tmuxWrap)
-	mustWriteExec(t, filepath.Join(bin, "recto"), "#!/bin/sh\nexec sleep infinity\n")
+	mustWriteExec(t, filepath.Join(bin, "recto"), rectoStub)
 	codex := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$*\" > %s\nexec sleep infinity\n", shellQuote(marker))
 	mustWriteExec(t, filepath.Join(bin, "codex"), codex)
 	t.Cleanup(func() { _ = exec.Command(realTmux, "-L", "rig-new-e2e", "kill-server").Run() })
@@ -402,6 +414,12 @@ func TestUpDown(t *testing.T) {
 
 	env := append(os.Environ(),
 		"HOME="+home,
+		// The developer's shell is usually inside tmux, and an inherited TMUX let
+		// the binary under test ask the test server which session it is in and
+		// be told the rig's own, so every in-session path (the down worker, the
+		// park handoff) ran under test with nobody inside. Pin it out: the test
+		// process is outside every session, and the binary should know it.
+		"TMUX=",
 		// Pin config the same way state is pinned below: an XDG_CONFIG_HOME
 		// in the developer's shell, or a real `rig config agent`, must never
 		// reach into a test rig and choose its agent.
@@ -443,7 +461,7 @@ func TestUpDown(t *testing.T) {
 	// hang so the panes stay open for our assertions; tmux would close a
 	// pane whose command exits immediately.
 	sleeper := "#!/bin/sh\nexec sleep infinity\n"
-	mustWriteExec(t, filepath.Join(bin, "recto"), sleeper)
+	mustWriteExec(t, filepath.Join(bin, "recto"), rectoStub)
 	mustWriteExec(t, filepath.Join(bin, "claude"), sleeper)
 
 	t.Cleanup(func() {
@@ -596,6 +614,12 @@ func TestReview(t *testing.T) {
 
 	env := append(os.Environ(),
 		"HOME="+home,
+		// The developer's shell is usually inside tmux, and an inherited TMUX let
+		// the binary under test ask the test server which session it is in and
+		// be told the rig's own, so every in-session path (the down worker, the
+		// park handoff) ran under test with nobody inside. Pin it out: the test
+		// process is outside every session, and the binary should know it.
+		"TMUX=",
 		// Pin config the same way state is pinned below: an XDG_CONFIG_HOME
 		// in the developer's shell, or a real `rig config agent`, must never
 		// reach into a test rig and choose its agent.
@@ -644,7 +668,7 @@ exit 1
 	tmuxWrap := fmt.Sprintf("#!/bin/sh\nexec %s -L rig-e2e-review \"$@\"\n", realTmux)
 	mustWriteExec(t, filepath.Join(bin, "tmux"), tmuxWrap)
 
-	mustWriteExec(t, filepath.Join(bin, "recto"), "#!/bin/sh\nif [ \"$1\" = pr ]; then exit 0; fi\nexec sleep infinity\n")
+	mustWriteExec(t, filepath.Join(bin, "recto"), "#!/bin/sh\ncase $1 in pr|state) exit 0;; esac\nexec sleep infinity\n")
 	mustWriteExec(t, filepath.Join(bin, "claude"), "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$HOME/claude.args\"\nexec sleep infinity\n")
 
 	t.Cleanup(func() {
@@ -808,6 +832,12 @@ func TestUpFromOwnPR(t *testing.T) {
 
 	env := append(os.Environ(),
 		"HOME="+home,
+		// The developer's shell is usually inside tmux, and an inherited TMUX let
+		// the binary under test ask the test server which session it is in and
+		// be told the rig's own, so every in-session path (the down worker, the
+		// park handoff) ran under test with nobody inside. Pin it out: the test
+		// process is outside every session, and the binary should know it.
+		"TMUX=",
 		// Pin config the same way state is pinned below: an XDG_CONFIG_HOME
 		// in the developer's shell, or a real `rig config agent`, must never
 		// reach into a test rig and choose its agent.
@@ -856,7 +886,7 @@ exit 1
 	mustWriteExec(t, filepath.Join(bin, "tmux"), tmuxWrap)
 
 	sleeper := "#!/bin/sh\nexec sleep infinity\n"
-	mustWriteExec(t, filepath.Join(bin, "recto"), sleeper)
+	mustWriteExec(t, filepath.Join(bin, "recto"), rectoStub)
 	mustWriteExec(t, filepath.Join(bin, "claude"), sleeper)
 
 	t.Cleanup(func() {
@@ -946,6 +976,12 @@ func TestReap(t *testing.T) {
 
 	env := append(os.Environ(),
 		"HOME="+home,
+		// The developer's shell is usually inside tmux, and an inherited TMUX let
+		// the binary under test ask the test server which session it is in and
+		// be told the rig's own, so every in-session path (the down worker, the
+		// park handoff) ran under test with nobody inside. Pin it out: the test
+		// process is outside every session, and the binary should know it.
+		"TMUX=",
 		// Pin config the same way state is pinned below: an XDG_CONFIG_HOME
 		// in the developer's shell, or a real `rig config agent`, must never
 		// reach into a test rig and choose its agent.
@@ -975,7 +1011,7 @@ func TestReap(t *testing.T) {
 	mustWriteExec(t, filepath.Join(bin, "tmux"), tmuxWrap)
 
 	sleeper := "#!/bin/sh\nexec sleep infinity\n"
-	mustWriteExec(t, filepath.Join(bin, "recto"), sleeper)
+	mustWriteExec(t, filepath.Join(bin, "recto"), rectoStub)
 	mustWriteExec(t, filepath.Join(bin, "claude"), sleeper)
 
 	t.Cleanup(func() {
@@ -1067,6 +1103,12 @@ func TestParkWake(t *testing.T) {
 
 	env := append(os.Environ(),
 		"HOME="+home,
+		// The developer's shell is usually inside tmux, and an inherited TMUX let
+		// the binary under test ask the test server which session it is in and
+		// be told the rig's own, so every in-session path (the down worker, the
+		// park handoff) ran under test with nobody inside. Pin it out: the test
+		// process is outside every session, and the binary should know it.
+		"TMUX=",
 		// Pin config the same way state is pinned below: an XDG_CONFIG_HOME
 		// in the developer's shell, or a real `rig config agent`, must never
 		// reach into a test rig and choose its agent.
@@ -1091,8 +1133,7 @@ func TestParkWake(t *testing.T) {
 	tmuxWrap := fmt.Sprintf("#!/bin/sh\nexec %s -L %s \"$@\"\n", realTmux, socket)
 	mustWriteExec(t, filepath.Join(bin, "tmux"), tmuxWrap)
 
-	sleeper := "#!/bin/sh\nexec sleep infinity\n"
-	mustWriteExec(t, filepath.Join(bin, "recto"), sleeper)
+	mustWriteExec(t, filepath.Join(bin, "recto"), rectoStub)
 	claude := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$*\" >> %s\nwhile :; do sleep 60; done\n", shellQuote(agentMarker))
 	mustWriteExec(t, filepath.Join(bin, "claude"), claude)
 
@@ -1261,6 +1302,13 @@ func mustRun(t *testing.T, dir string, env []string, name string, args ...string
 	}
 }
 
+// rectoStub stands in for recto in a pane: it hangs so the pane stays open, but
+// answers `recto state forget` at once, since teardown runs that inline and
+// would otherwise wait on the pane command forever. It used to hang there too
+// and nobody noticed, because every e2e ran with the developer's TMUX inherited
+// and `rig down` took the detached-worker path, where the wait was invisible.
+const rectoStub = "#!/bin/sh\nif [ \"$1\" = state ]; then exit 0; fi\nexec sleep infinity\n"
+
 func mustOutput(t *testing.T, dir string, env []string, name string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command(name, args...)
@@ -1298,6 +1346,12 @@ func TestDownLeavesRecoverableTombstone(t *testing.T) {
 
 	env := append(os.Environ(),
 		"HOME="+home,
+		// The developer's shell is usually inside tmux, and an inherited TMUX let
+		// the binary under test ask the test server which session it is in and
+		// be told the rig's own, so every in-session path (the down worker, the
+		// park handoff) ran under test with nobody inside. Pin it out: the test
+		// process is outside every session, and the binary should know it.
+		"TMUX=",
 		// Pin config the same way state is pinned below: an XDG_CONFIG_HOME
 		// in the developer's shell, or a real `rig config agent`, must never
 		// reach into a test rig and choose its agent.
@@ -1329,7 +1383,7 @@ func TestDownLeavesRecoverableTombstone(t *testing.T) {
 	mustWriteExec(t, filepath.Join(bin, "tmux"),
 		fmt.Sprintf("#!/bin/sh\nexec %s -L rig-e2e-tomb \"$@\"\n", realTmux))
 	sleeper := "#!/bin/sh\nexec sleep infinity\n"
-	mustWriteExec(t, filepath.Join(bin, "recto"), sleeper)
+	mustWriteExec(t, filepath.Join(bin, "recto"), rectoStub)
 	mustWriteExec(t, filepath.Join(bin, "claude"), sleeper)
 
 	t.Cleanup(func() {
@@ -1429,6 +1483,12 @@ func TestUpFinishesHalfBuiltRig(t *testing.T) {
 
 	env := append(os.Environ(),
 		"HOME="+home,
+		// The developer's shell is usually inside tmux, and an inherited TMUX let
+		// the binary under test ask the test server which session it is in and
+		// be told the rig's own, so every in-session path (the down worker, the
+		// park handoff) ran under test with nobody inside. Pin it out: the test
+		// process is outside every session, and the binary should know it.
+		"TMUX=",
 		"XDG_CONFIG_HOME="+filepath.Join(home, "config"),
 		"PATH="+bin+":"+os.Getenv("PATH"),
 	)
@@ -1459,7 +1519,7 @@ func TestUpFinishesHalfBuiltRig(t *testing.T) {
 	tmuxWrap := fmt.Sprintf("#!/bin/sh\nexec %s -L rig-e2e-half \"$@\"\n", realTmux)
 	mustWriteExec(t, filepath.Join(bin, "tmux"), tmuxWrap)
 	sleeper := "#!/bin/sh\nexec sleep infinity\n"
-	mustWriteExec(t, filepath.Join(bin, "recto"), sleeper)
+	mustWriteExec(t, filepath.Join(bin, "recto"), rectoStub)
 	mustWriteExec(t, filepath.Join(bin, "claude"), sleeper)
 
 	t.Cleanup(func() {
