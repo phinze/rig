@@ -9,7 +9,7 @@ import (
 
 // liveSelectHint is the live picker's own header line, kept here because both
 // the plain --header and the agent-bar header block have to render it.
-const liveSelectHint = "tab: fresh Linear search"
+const liveSelectHint = "tab: fresh search · " + sourceCycleKey + ": next source (linear, github, tasks)"
 
 // fzfSelect pipes tab-delimited rows into fzf and returns the chosen row.
 // Only the first three columns are shown (with-nth=1,2,3); callers can stash
@@ -59,8 +59,10 @@ func fzfSelect(rows []string, prompt string, pick *agentPick) (string, error) {
 // `sh -c`) printing tab-delimited rows, with the current query at fzf's {q}
 // placeholder; initialQuery pre-seeds the prompt so `rig up some words` searches
 // immediately while staying editable. A non-nil pick adds the agent bar under
-// the hint (see fzfSelect). Returns "" if the user cancels (fzf exit 130).
-func fzfLiveSelect(reloadCmd, prompt, initialQuery string, pick *agentPick) (string, error) {
+// the hint (see fzfSelect); extra is any further fzf arguments the caller
+// wants on the picker, such as the issue picker's source-cycling bind.
+// Returns "" if the user cancels (fzf exit 130).
+func fzfLiveSelect(reloadCmd, prompt, initialQuery string, pick *agentPick, extra ...string) (string, error) {
 	if !stdinIsTTY() {
 		return "", noTTYError(prompt)
 	}
@@ -80,6 +82,7 @@ func fzfLiveSelect(reloadCmd, prompt, initialQuery string, pick *agentPick) (str
 	} else {
 		args = append(args, "--header="+liveSelectHint)
 	}
+	args = append(args, extra...)
 	defer pick.sync()
 	cmd := exec.Command("fzf", args...)
 	// The rows come from the start/change reload binds, not stdin; hand fzf an

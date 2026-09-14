@@ -52,6 +52,11 @@ func TestWriteRigClaudeMD(t *testing.T) {
 	if !strings.Contains(got, "rig relay <discovery>") || !strings.Contains(got, "does not post to Linear") {
 		t.Errorf("missing project-discovery relay guidance in:\n%s", got)
 	}
+	// relay refuses anything without a Linear identity, so a rig from another
+	// tracker isn't told about it.
+	if got := renderRigInstructions(dir, manifest{ID: "rig-9", Tracker: "github", TrackerID: "phinze/rig#9"}); strings.Contains(got, "rig relay") {
+		t.Errorf("github rig should not be pointed at relay:\n%s", got)
+	}
 }
 
 // A title-less rig (e.g. a GH issue with no resolved title yet) should still

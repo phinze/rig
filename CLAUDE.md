@@ -315,6 +315,35 @@ review working copy out from under Recto. `rig review --refresh <url>` is the
 only path that advances the pin and working copy to a new head. Teardown deletes
 the pin after forgetting the workspace.
 
+`rig up` picks from three sources: Linear, GitHub issues on your own repos, and
+personal tasks in Vikunja via the `personal-tasks` helper. In the picker,
+ctrl-t cycles them and the prompt names the one you're searching; `--source`
+names one outright. The source lives in the prompt rather than in a second
+header bar because `rig __agent cycle` reprints the header block from a fixed
+hint, so a source bar there would freeze at whatever it said when the picker
+opened. The bind is a `transform-prompt` that shells out to `rig __source cycle
+STATE` chained with a `reload`, the same file round-trip the agent bar uses, and
+every row carries its source in a hidden fourth column so the selection says
+where it came from without a sync back. ctrl-t is the radar's show-torn-down
+key, but the two never share a screen; ctrl-s would be the honest mnemonic and
+is XOFF on any terminal without `-ixon`.
+
+An exact id routes by shape. `owner/repo#9` and an issue URL are GitHub. A
+`TEAM-123` id is Linear's shape and Vikunja's both (PERS-3, CTL-1, NDSM-2 are
+per-project indexes), so `resolveTask` asks the personal-tasks domains whether
+the prefix is theirs before asking Linear. That check is deferred until after
+the existing-rig match, which only needs the local id, so a re-up costs
+nothing; `taskRef.rigID` exists to derive that id without a lookup. A GitHub
+issue's rig id is `<repo>-<n>` because the number alone is unique only per
+repo and `pr-<n>` is already reserved. The issue also names its repo, so the
+repo picker is skipped for it (`--repo` still overrides); a personal task
+implies none, so it keeps the picker. Branches for both are synthesized in
+Linear's `<login>/<id>-<slug>` shape so `basedirName` serves every source, and
+they're pushed unescaped, since only Linear links PRs from the branch name.
+The manifest records `tracker` as `linear`, `github`, or `vikunja` (the product,
+not the helper) plus `tracker_url`; `relay` and `project` still gate on
+`linear` and are unaffected.
+
 The agent is selectable with `--agent`, which takes either the long name or the
 short one it goes by in the picker: `cld`, `cdx`, `agy`. Beneath that the
 ordinary precedence applies, narrowest scope first: `RIG_AGENT` for this shell,

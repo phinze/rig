@@ -131,9 +131,13 @@ func renderRigInstructions(basedir string, m manifest) string {
 	b.WriteString("  promotion with a Recto command, e.g. `rig recto cloud focus src/app.go:42`.\n")
 	b.WriteString("  Do not manipulate tmux panes directly. For an ad hoc shell, split from a\n")
 	b.WriteString("  repo's Recto so tmux inherits the correct working directory.\n")
-	b.WriteString("- If this work uncovers something that could change a sibling issue or the\n")
-	b.WriteString("  wider Linear project, run `rig relay <discovery>`. It sends a private local\n")
-	b.WriteString("  note to the project's overview rig; it does not post to Linear.\n")
+	// relay refuses a rig with no Linear identity, so a GitHub or personal-task
+	// rig is spared a bullet about a command that would only tell it no.
+	if m.Tracker == "" || m.Tracker == "linear" {
+		b.WriteString("- If this work uncovers something that could change a sibling issue or the\n")
+		b.WriteString("  wider Linear project, run `rig relay <discovery>`. It sends a private local\n")
+		b.WriteString("  note to the project's overview rig; it does not post to Linear.\n")
+	}
 	b.WriteString("- Parking and tearing down are the human's moves, made from the radar's\n")
 	b.WriteString("  leave menu (ctrl+x). `rig park` and `rig down` refuse from inside this\n")
 	b.WriteString("  session without a terminal, because they would kill it with you in it.\n")

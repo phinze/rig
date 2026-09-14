@@ -14,62 +14,117 @@ import (
 )
 
 type task struct {
-	Identifier string // e.g. "MIR-75"
+	Identifier string // e.g. "MIR-75", "PERS-3", "phinze/rig#9"
 	Title      string
 	BranchName string // e.g. "phinze/mir-75-add-zig-stack"
+	// Source is the tracker the task came from. Blank reads as Linear: the
+	// PR-link lookup builds tasks without one, and every rig made before there
+	// was a second source is a Linear rig.
+	Source taskSource
+	URL    string // the task's page, recorded as the manifest's tracker_url
+	Repo   string // GitHub only: the owner/repo the issue lives in
+	Domain string // Vikunja only: the personal-tasks domain that holds it
+}
+
+func (t task) source() taskSource {
+	if t.Source == "" {
+		return sourceLinear
+	}
+	return t.Source
 }
 
 var linearIDRe = regexp.MustCompile(`^[A-Z][A-Z0-9]*-[0-9]+$`)
 
-// resolveIssueID turns `rig up` args into a Linear identifier. An exact
-// identifier is used directly; anything else (including no args) opens a live
-// fzf picker whose list is a fresh Linear search re-run on each keystroke,
-// seeded with whatever query the args spelled out. Returns "" (no error) when
-// the user cancels the picker.
-func resolveIssueID(args []string, pick *agentPick) (string, error) {
-	if len(args) == 1 && linearIDRe.MatchString(args[0]) {
-		return args[0], nil
+// resolveIssueID turns `rig up` args into a task reference. An exact
+// identifier is used directly: a GitHub issue by `owner/repo#n` or URL, and a
+// `TEAM-123` shape as either Linear or a personal task, which resolveTask
+// tells apart later so the lookup isn't spent on a re-up. Anything else
+// (including no args) opens a live fzf picker whose list is a fresh search of
+// the current source re-run on Tab, seeded with whatever query the args spelled
+// out; ctrl-t cycles the source. source is the --source flag, or "" for the
+// default. Returns a zero ref (no error) when the user cancels the picker.
+func resolveIssueID(args []string, pick *agentPick, source taskSource) (taskRef, error) {
+	if len(args) == 1 {
+		if ref := parseGitHubIssueRef(args[0]); ref != nil {
+			return taskRef{source: sourceGitHub, id: ref.identifier()}, nil
+		}
+		if linearIDRe.MatchString(args[0]) {
+			return taskRef{source: source, id: args[0]}, nil
+		}
 	}
 
-	// fzf shells out to `rig __issues {q}` on every (debounced) keystroke, so the
-	// candidate list is whatever Linear returns for the current query rather than
-	// a fuzzy filter over one frozen fetch. Point it at our own binary so row
+	// fzf shells out to `rig __issues STATE {q}` on Tab, so the candidate list is
+	// whatever the current source returns for the current query rather than a
+	// fuzzy filter over one frozen fetch. Point it at our own binary so row
 	// formatting stays in one place (runIssueRows).
 	exe, err := os.Executable()
 	if err != nil {
-		return "", fmt.Errorf("locating rig binary: %w", err)
+		return taskRef{}, fmt.Errorf("locating rig binary: %w", err)
 	}
-	reloadCmd := shellQuote(exe) + " __issues {q}"
+	src := &sourcePick{source: sourceLinear}
+	if source != "" {
+		src.source = source
+	}
+	if err := src.prepare(); err != nil {
+		return taskRef{}, fmt.Errorf("preparing issue picker: %w", err)
+	}
+	defer src.cleanup()
+	reloadCmd := shellQuote(exe) + " __issues " + shellQuote(src.statePath) + " {q}"
 
-	sel, err := fzfLiveSelect(reloadCmd, "Pick issue: ", strings.Join(args, " "), pick)
+	sel, err := fzfLiveSelect(reloadCmd, issuePrompt(src.source), strings.Join(args, " "), pick, src.fzfArgs(exe, reloadCmd)...)
 	if err != nil {
-		return "", err
+		return taskRef{}, err
 	}
 	if sel == "" {
-		return "", nil
+		return taskRef{}, nil
 	}
-	id, _, _ := strings.Cut(sel, "\t")
-	return strings.TrimSpace(id), nil
+	cols := strings.Split(sel, "\t")
+	ref := taskRef{id: strings.TrimSpace(cols[0])}
+	if len(cols) >= 4 {
+		if s, err := parseTaskSource(cols[3]); err == nil {
+			ref.source = s
+		}
+	}
+	return ref, nil
 }
 
 // runIssueRows backs the live issue picker (the hidden `rig __issues` command
-// fzf shells out to). It prints tab-delimited Identifier\tState\tTitle rows for
-// the given query — empty query lists the default assigned/open set, anything
-// else feeds Linear search. Because fzf runs it on every keystroke, it stays
-// quiet on failure: a lookup error yields no rows rather than a stderr splat in
-// the middle of the picker UI.
+// fzf shells out to). Its first argument is the picker's source state file;
+// the rest is the query. It prints tab-delimited Identifier\tState\tTitle\tSource
+// rows — empty query lists each source's default open set, anything else feeds
+// that source's search. Because fzf runs it on a keypress, it stays quiet on
+// failure: a lookup error yields no rows rather than a stderr splat in the
+// middle of the picker UI.
 func runIssueRows(args []string) error {
-	query := strings.TrimSpace(strings.Join(args, " "))
-	cands, err := fetchIssues(query, 25)
+	if len(args) == 0 {
+		return fmt.Errorf("usage: rig __issues STATEFILE [QUERY...]")
+	}
+	source, ok := readSourceState(args[0])
+	if !ok {
+		source = sourceLinear
+	}
+	query := strings.TrimSpace(strings.Join(args[1:], " "))
+	cands, err := fetchSourceIssues(source, query, 25)
 	if err != nil {
 		return nil // stay quiet; the picker just shows no rows for this query
 	}
 	var b strings.Builder
 	for _, c := range cands {
-		fmt.Fprintf(&b, "%s\t%s\t%s\n", c.Identifier, c.State, c.Title)
+		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\n", c.Identifier, c.State, c.Title, source)
 	}
 	_, _ = os.Stdout.WriteString(b.String())
 	return nil
+}
+
+// fetchSourceIssues is the picker's one fan-out point over sources.
+func fetchSourceIssues(source taskSource, query string, limit int) ([]issueCandidate, error) {
+	switch source {
+	case sourceGitHub:
+		return fetchGitHubIssues(query, limit)
+	case sourceVikunja:
+		return fetchVikunjaTasks(query)
+	}
+	return fetchLinearIssues(query, limit)
 }
 
 type issueCandidate struct {
@@ -78,7 +133,7 @@ type issueCandidate struct {
 	Title      string
 }
 
-func fetchIssues(search string, limit int) ([]issueCandidate, error) {
+func fetchLinearIssues(search string, limit int) ([]issueCandidate, error) {
 	client, err := newLinearClient()
 	if err != nil {
 		return nil, err
@@ -130,11 +185,35 @@ func fetchIssues(search string, limit int) ([]issueCandidate, error) {
 	return cands, nil
 }
 
-func resolveTask(id string) (task, error) {
-	if !linearIDRe.MatchString(id) {
-		return task{}, fmt.Errorf("only Linear identifiers (e.g. MIR-75) are supported right now")
+// resolveTask fetches the task a ref names. A ref with no source is a
+// `TEAM-123` id that could be Linear's or a personal task's: the two mint the
+// same shape, so the personal-tasks domains are asked whether the prefix is
+// theirs before Linear is. That costs a few local subprocess calls, and only
+// on a genuine create; an exact id that names an existing rig never gets here.
+func resolveTask(ref taskRef) (task, error) {
+	switch ref.source {
+	case sourceGitHub:
+		gh := parseGitHubIssueRef(ref.id)
+		if gh == nil {
+			return task{}, fmt.Errorf("%q is not a GitHub issue (want owner/repo#n or an issue url)", ref.id)
+		}
+		return resolveGitHubTask(*gh)
+	case sourceVikunja:
+		return resolveVikunjaTask(ref.id)
 	}
+	if !linearIDRe.MatchString(ref.id) {
+		return task{}, fmt.Errorf("%q is not an issue identifier (want MIR-75, PERS-3, or owner/repo#9)", ref.id)
+	}
+	if ref.source == "" {
+		prefix, _, _ := strings.Cut(ref.id, "-")
+		if domain, err := vikunjaDomainFor(prefix); err == nil && domain != "" {
+			return resolveVikunjaTask(ref.id)
+		}
+	}
+	return resolveLinearTask(ref.id)
+}
 
+func resolveLinearTask(id string) (task, error) {
 	client, err := newLinearClient()
 	if err != nil {
 		return task{}, err
@@ -146,7 +225,7 @@ func resolveTask(id string) (task, error) {
 		Issue linearIssueNode `json:"issue"`
 	}
 	query := `query ResolveIssue($id: String!) {
-  issue(id: $id) { identifier title branchName }
+  issue(id: $id) { identifier title branchName url }
 }`
 	if err := client.query(query, map[string]any{"id": id}, &data); err != nil {
 		return task{}, err
@@ -157,13 +236,17 @@ func resolveTask(id string) (task, error) {
 	if data.Issue.BranchName == "" {
 		return task{}, fmt.Errorf("Linear returned no branchName for %s", id)
 	}
-	return task{Identifier: data.Issue.Identifier, Title: data.Issue.Title, BranchName: data.Issue.BranchName}, nil
+	return task{
+		Source: sourceLinear, Identifier: data.Issue.Identifier, Title: data.Issue.Title,
+		BranchName: data.Issue.BranchName, URL: data.Issue.URL,
+	}, nil
 }
 
 type linearIssueNode struct {
 	Identifier string `json:"identifier"`
 	Title      string `json:"title"`
 	BranchName string `json:"branchName"`
+	URL        string `json:"url"`
 	State      struct {
 		Name string `json:"name"`
 	} `json:"state"`
@@ -337,15 +420,20 @@ func primaryLinkedLinearTask(linked []linkedLinearTask) (task, bool) {
 	return task{}, false
 }
 
-// rigID returns the lowercased issue identifier used as the rig's id.
+// rigID returns the rig's local id: the lowercased identifier, except for a
+// GitHub issue, whose `<repo>-<n>` shape is taskRef's to derive.
 func (t task) rigID() string {
-	return strings.ToLower(t.Identifier)
+	return taskRef{source: t.source(), id: t.Identifier}.rigID()
 }
 
-// basedirName strips any "<user>/" prefix off the Linear branch name so the
-// resulting slug is short and matches the issue: "phinze/mir-75-add-zig-stack"
-// → "mir-75-add-zig-stack".
+// basedirName strips any "<user>/" prefix off the branch name so the resulting
+// slug is short and matches the issue: "phinze/mir-75-add-zig-stack" →
+// "mir-75-add-zig-stack". Synthesized branches carry the same shape, so this
+// covers every source; a task with no branch at all falls back to its own slug.
 func (t task) basedirName() string {
+	if t.BranchName == "" {
+		return taskSlug(t.rigID(), t.Title)
+	}
 	return stripBranchUserPrefix(t.BranchName)
 }
 
@@ -357,6 +445,11 @@ func (t task) basedirName() string {
 // presenting Linear with that exact token: "phinze/mir-75-add-zig-stack" →
 // "phinze/mir_75-add-zig-stack".
 func (t task) workBranchName() string {
+	if t.source() != sourceLinear {
+		// Only Linear links on the branch name; the synthesized branches are
+		// already the ones to push.
+		return t.BranchName
+	}
 	id := strings.ToLower(t.Identifier)
 	escapedID := strings.Replace(id, "-", "_", 1)
 	prefix, slug := "", t.BranchName

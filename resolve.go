@@ -42,7 +42,7 @@ var commandAliases = map[string]string{
 // the pickers' state round-trips, and the durable teardown worker. Exact spelling
 // only, on both sides — they never resolve from a prefix, and they're never
 // offered as a suggestion.
-var hiddenCommands = []string{"__gh", "__agent", "__issues", "__teardown"}
+var hiddenCommands = []string{"__gh", "__agent", "__issues", "__source", "__teardown"}
 
 // helpCommands print usage. They're resolved before the prefix pass rather than
 // through it, which is what keeps `rig h` meaning history: help is reachable by

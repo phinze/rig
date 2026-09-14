@@ -898,11 +898,12 @@ and leaves the choice where it belongs.
   neighborhood (peer to `recto`, `jj`, `gh`, ships clean as a `pkgs/`
   derivation). The Python-prototype-first hedge proved unnecessary, since
   the shape held on the first pass.
-- **Tracker shim shape.** Minimum interface: `resolve_issue(id) ->
-  Task`, plus maybe `mark_in_progress(id)` and `mark_done(id)`. GH
-  issues lack a canonical `branchName` field, so the shim has to
-  synthesize one (or just defer entirely, since jj doesn't need it up
-  front).
+- ~~**Tracker shim shape.**~~ Answered in practice by the second and third
+  sources: `resolveTask(taskRef) -> task`, with `fetchSourceIssues` as the
+  picker's fan-out. GH issues and Vikunja tasks get a synthesized branch in
+  Linear's `<login>/<id>-<slug>` shape so the basedir derivation is shared.
+  `mark_in_progress` stayed with the agent (the pickup prompt names the tool
+  to do it with) rather than becoming a shim method.
 - **Sandbox primitive.** bwrap on Linux, claude code's own
   `--allowed-paths`, or something else? Decide before locking in the
   basedir-as-boundary assumption.
@@ -912,10 +913,11 @@ and leaves the choice where it belongs.
   with those sessions); the host stdlib is a one-line eval. Repo-owned
   `.envrc` files and the parent basedir `.envrc` provide the direnv
   entrypoints; the stdlib projects the right environment from either one.
-- **Interactive picker source mixing.** No-arg `rig up` should fzf
-  across pickable issues. Merge Linear + GH into one list with a
-  source column, or pick the tracker first? Merged is nicer but means
-  two API calls per invocation.
+- ~~**Interactive picker source mixing.**~~ Answered: neither merged nor
+  tracker-first. The picker opens on Linear and ctrl-t cycles it through
+  GitHub (your own repos) and personal tasks, with the prompt naming the
+  current source. A merged list would have needed a cross-tracker relevance
+  ranking to fake; a source toggle costs one keystroke and one API call.
 - ~~**`rig down` destructiveness.**~~ Answered by the park/reap lifecycle
   rather than an archive dir: `down` tears the basedir down but refuses to
   drop unmerged work, `park` keeps a finished rig on disk while its review
@@ -942,8 +944,8 @@ left is growth on the built base:
 2. Fold `rig sweep`'s ladder back into the radar as per-row verbs, so the
    board can advance the row you're looking at instead of only switching
    to it.
-3. Sand off the open questions still open (sandbox primitive, multi-tracker
-   shim, picker source mixing) as real use pushes on them.
+3. Sand off the open questions still open (sandbox primitive) as real use
+   pushes on them.
 
 ## Related
 

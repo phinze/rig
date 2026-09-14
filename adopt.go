@@ -26,7 +26,12 @@ func runAdopt(args []string) error {
 	if len(args) != 1 {
 		return fmt.Errorf("usage: rig adopt <issue>")
 	}
-	id := strings.ToUpper(strings.TrimSpace(args[0]))
+	// A TEAM-123 id is case-insensitive on both trackers that mint it, so
+	// `rig adopt mir-123` works; a GitHub `owner/repo#9` is left as typed.
+	ref := taskRef{id: strings.ToUpper(strings.TrimSpace(args[0]))}
+	if gh := parseGitHubIssueRef(strings.TrimSpace(args[0])); gh != nil {
+		ref = taskRef{source: sourceGitHub, id: gh.identifier()}
+	}
 
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -49,7 +54,7 @@ func runAdopt(args []string) error {
 		return fmt.Errorf("a project rig already tracks a Linear project; adopt promotes a task rig")
 	}
 	if m.TrackerID != "" {
-		if strings.EqualFold(m.TrackerID, id) {
+		if strings.EqualFold(m.TrackerID, ref.id) {
 			fmt.Fprintf(os.Stderr, "rig: %s already tracks %s\n", m.ID, m.TrackerID)
 			return nil
 		}
@@ -63,13 +68,14 @@ func runAdopt(args []string) error {
 	// Resolving is what makes this worth a command rather than a documented
 	// hand-edit: a typo'd identifier would otherwise sit in the manifest until
 	// relay or project status failed with an error about something else.
-	tk, err := resolveTask(id)
+	tk, err := resolveTask(ref)
 	if err != nil {
 		return err
 	}
 
-	m.Tracker = "linear"
+	m.Tracker = string(tk.source())
 	m.TrackerID = tk.Identifier
+	m.TrackerURL = tk.URL
 	if tk.Title != "" {
 		// The ticket is the canonical name for the work now. The kickoff line
 		// isn't lost: it's still the rig's id, and still the heading of

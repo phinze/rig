@@ -16,6 +16,10 @@ func runUp(args []string) error {
 	defer pick.cleanup()
 	repoFlag, args := extractRepoFlag(args)
 	contextFlag, args := extractContextFlag(args)
+	source, args, err := extractSourceFlag(args)
+	if err != nil {
+		return err
+	}
 
 	// A PR URL means "pick up my own work on this PR" — authoring, not the issue
 	// flow. pickupPR sorts authoring vs review by who owns the PR (and reroutes
@@ -33,11 +37,11 @@ func runUp(args []string) error {
 		}
 	}
 
-	id, err := resolveIssueID(args, pick)
+	ref, err := resolveIssueID(args, pick, source)
 	if err != nil {
 		return err
 	}
-	if id == "" {
+	if ref.id == "" {
 		return nil // picker cancelled
 	}
 	context, err := resolveUpContext(contextFlag)
@@ -51,7 +55,7 @@ func runUp(args []string) error {
 	// local (listRigs, no tracker call), so re-upping into work you already have
 	// stays as instant as `rig switch`; the network only gets touched below, on
 	// a genuine create.
-	done, unfinished, err := attachExistingRig(strings.ToLower(id))
+	done, unfinished, err := attachExistingRig(ref.rigID())
 	if err != nil {
 		return err
 	}
@@ -61,15 +65,19 @@ func runUp(args []string) error {
 		// believing it briefed a task agent that never heard a word, so say so
 		// and name the command that does reach a running rig.
 		if context != "" {
-			fmt.Fprintf(os.Stderr, "rig: warning: %s already exists, so the context was not delivered; `rig dispatch %s <prompt>` hands a prompt to its agent\n", id, id)
+			fmt.Fprintf(os.Stderr, "rig: warning: %s already exists, so the context was not delivered; `rig dispatch %s <prompt>` hands a prompt to its agent\n", ref.id, ref.id)
 		}
 		return nil
 	}
 
-	tk, err := resolveTask(id)
+	tk, err := resolveTask(ref)
 	if err != nil {
 		return err
 	}
+	// A GitHub issue already says which repo it's for, so that question isn't
+	// asked again; --repo still overrides, for the issue whose fix lands
+	// somewhere else.
+	repoFlag = cmp.Or(repoFlag, tk.Repo)
 
 	// Finishing an interrupted create means walking the create path again, but
 	// you already answered the repo question the first time and the wreck
@@ -108,7 +116,8 @@ func runUp(args []string) error {
 
 	m := manifest{
 		ID: tk.rigID(), Title: tk.Title, Agent: string(pick.kind), MainRepo: repo.Name,
-		Tracker: "linear", TrackerID: tk.Identifier, BuildingRepo: repo.nameWithOwner(),
+		Tracker: string(tk.source()), TrackerID: tk.Identifier, TrackerURL: tk.URL,
+		BuildingRepo: repo.nameWithOwner(),
 	}
 	if err := createBasedir(basedir, m); err != nil {
 		return err
@@ -120,14 +129,17 @@ func runUp(args []string) error {
 	}
 
 	branchName := tk.workBranchName()
-	startRev := resolveStartRev(repo.Path, tk.BranchName)
-	if startRev == "trunk()" {
+	startRev := "trunk()"
+	if tk.source() == sourceLinear {
 		// Existing work may predate keyword-controlled Linear linking and still
 		// ride the generated, issue-bearing branch. Resume it when found; only
 		// use the new branch shape when there is no old work to recover.
+		if startRev = resolveStartRev(repo.Path, tk.BranchName); startRev != "trunk()" {
+			branchName = tk.BranchName
+		}
+	}
+	if startRev == "trunk()" {
 		startRev = resolveStartRev(repo.Path, branchName)
-	} else {
-		branchName = tk.BranchName
 	}
 	// Record the intended branch even when startRev fell back to trunk() because
 	// it isn't pushed yet, so pr/ls/reap resolve the right PR once it exists.
@@ -137,8 +149,7 @@ func runUp(args []string) error {
 	}
 
 	// Layout: recto on the right, the selected agent on the left with an issue-pickup
-	// prompt. Linear-specific phrasing for now; when a second tracker
-	// arrives we'll dispatch on it.
+	// prompt phrased for wherever the issue lives.
 	sess := sessionSpec{
 		rectoCmd: rectoCommand(),
 		repo:     repo.Name,
@@ -154,16 +165,38 @@ func runUp(args []string) error {
 	return attachOrReport(session)
 }
 
-// pickupPrompt is the opening message for an issue pickup. Extra context is
-// handed over as a path rather than inlined, for the same reasons kickoffPrompt
-// gives: the prompt reaches the agent as one shell argument, which is a poor
-// courier for a multi-line blob, and a file survives a resume and whatever
-// other agent the rig grows later.
+// pickupPrompt is the opening message for an issue pickup. Each source names
+// the tool the agent should read the issue with, since none of them is
+// discoverable from the rig alone: Linear by its MCP, a GitHub issue by the
+// rig's own gh shim (which already points at the repo), a personal task by the
+// `personal-tasks` helper and skill. Extra context is handed over as a path
+// rather than inlined, for the same reasons kickoffPrompt gives: the prompt
+// reaches the agent as one shell argument, which is a poor courier for a
+// multi-line blob, and a file survives a resume and whatever other agent the
+// rig grows later.
 func pickupPrompt(tk task, hasContext bool) string {
-	prompt := fmt.Sprintf(
-		"Picking up %s (%s). Use the Linear MCP (it may take a few seconds to connect) to read the issue, mark it In Progress and assigned to me, then help me plan.",
-		tk.Identifier, tk.Title,
-	)
+	var prompt string
+	switch tk.source() {
+	case sourceGitHub:
+		number := "<n>"
+		if ref := parseGitHubIssueRef(tk.Identifier); ref != nil {
+			number = fmt.Sprint(ref.Number)
+		}
+		prompt = fmt.Sprintf(
+			"Picking up GitHub issue %s (%s). Read it and its comments with `gh issue view %s --comments`, then help me plan.",
+			tk.Identifier, tk.Title, number,
+		)
+	case sourceVikunja:
+		prompt = fmt.Sprintf(
+			"Picking up personal task %s (%s). Use the personal-tasks skill to read it (`personal-tasks %s show %s`) and claim it, then help me plan.",
+			tk.Identifier, tk.Title, tk.Domain, tk.Identifier,
+		)
+	default:
+		prompt = fmt.Sprintf(
+			"Picking up %s (%s). Use the Linear MCP (it may take a few seconds to connect) to read the issue, mark it In Progress and assigned to me, then help me plan.",
+			tk.Identifier, tk.Title,
+		)
+	}
 	if hasContext {
 		prompt += fmt.Sprintf(" There's extra context for this pickup in ../%s; read it alongside the issue, it may narrow or redirect what the ticket says.", rigKickoffName)
 	}
@@ -206,6 +239,21 @@ func extractRepoFlag(args []string) (repo string, rest []string) {
 // extractContextFlag pulls --context <text> (or --context=text) out of args.
 func extractContextFlag(args []string) (context string, rest []string) {
 	return extractValueFlag(args, "--context")
+}
+
+// extractSourceFlag pulls --source <name> out of args. It names the tracker an
+// exact id belongs to and seeds the picker's starting source; absent, an exact
+// `TEAM-123` id is routed by its prefix and the picker opens on Linear.
+func extractSourceFlag(args []string) (taskSource, []string, error) {
+	name, rest := extractValueFlag(args, "--source")
+	if name == "" {
+		return "", rest, nil
+	}
+	source, err := parseTaskSource(name)
+	if err != nil {
+		return "", nil, err
+	}
+	return source, rest, nil
 }
 
 // extractValueFlag strips one valued flag from a positional-heavy arg list. A

@@ -92,9 +92,13 @@ func main() {
 		// typed.
 		err = runAgentPickCmd(args)
 	case "__issues":
-		// Hidden: fzf's live issue picker shells out to this on each keystroke to
-		// get fresh Linear-search rows. Not in usage; not meant to be typed.
+		// Hidden: fzf's live issue picker shells out to this on Tab to get fresh
+		// rows from the current source. Not in usage; not meant to be typed.
 		err = runIssueRows(args)
+	case "__source":
+		// Hidden: the issue picker binds ctrl-t to a transform-prompt that shells
+		// out here to advance the source, the same file round-trip as __agent.
+		err = runSourcePickCmd(args)
 	case "__teardown":
 		// Hidden: durable teardown workers run outside tmux's pane cgroup so
 		// they can stop every process scope owned by the rig, including the
@@ -129,12 +133,17 @@ func usage() {
 	fmt.Fprint(os.Stderr, `rig: workspace tool for task-shaped work
 
 usage:
-  rig up [issue|query|pr] [--repo owner/repo] [--agent AGENT] [--context TEXT]
-                            go to your rig for a task, creating it if it's new
-                            (Linear id, search terms, no-arg fzf picker, or a PR
-                            of yours to resume; idempotent — re-up just switches.
+  rig up [issue|query|pr] [--source SRC] [--repo owner/repo] [--agent AGENT]
+         [--context TEXT]  go to your rig for a task, creating it if it's new
+                            (an id, search terms, no-arg fzf picker, or a PR of
+                            yours to resume; idempotent — re-up just switches).
+                            Sources are linear (MIR-75), github (owner/repo#9
+                            or an issue url, your own repos only), and tasks
+                            (PERS-3, via personal-tasks); ctrl-t cycles them
+                            in the picker, and --source names one outright.
                             Repo is chosen by an fzf picker over ghq repos, cwd
-                            pre-selected on top, unless --repo names one.
+                            pre-selected on top, unless --repo names one or a
+                            GitHub issue already does.
                             --context, and piped stdin, carry color beyond the
                             ticket into the new rig's KICKOFF.md for its agent
                             to read alongside the issue; an existing rig warns
