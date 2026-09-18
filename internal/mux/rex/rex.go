@@ -92,11 +92,13 @@ func shellBlock(label, cwd string, cmdline []string) obj {
 }
 
 // commandLine is how a rig command string becomes a block's argv. Rig hands
-// its backends shell-ish strings ("recto", "sleep infinity" in tests), so the
-// user's shell parses them, the same thing tmux does with split-window's
-// command argument.
+// its backends shell-ish strings ("recto", "sleep infinity" in tests), so a
+// shell parses them, the same thing tmux does with split-window's command
+// argument. It's a login shell because the Rex server's own environment is
+// whatever launchd gave the app, and rig's tools (jj, gh, recto) live on the
+// PATH /etc/profile sets up.
 func commandLine(cmdline string) []string {
-	return []string{"/bin/sh", "-c", cmdline}
+	return []string{"/bin/sh", "-lc", cmdline}
 }
 
 type sessionEntry struct {
@@ -248,16 +250,77 @@ func (Backend) CurrentPane() string {
 	return os.Getenv("REX_BLOCK")
 }
 
-// Attach from a bare terminal is Rex's text-mode attach. From inside Rex it
-// is ErrNoClientSwitch.
-func (Backend) Attach(target string) error {
-	if os.Getenv("REX_SESSION") != "" {
-		return mux.ErrNoClientSwitch
+// Attach from a bare terminal is Rex's text-mode attach. From inside Rex the
+// client can be moved within the session it's showing (a block target is
+// focus_block, the session itself is already there); another session is
+// ErrNoClientSwitch.
+func (b Backend) Attach(target string) error {
+	if os.Getenv("REX_SESSION") == "" {
+		cmd := command("attach", target)
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+		return cmd.Run()
 	}
-	cmd := command("attach", target)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	return cmd.Run()
+	current := b.CurrentSession()
+	if target == current {
+		return nil
+	}
+	if strings.HasPrefix(target, "block:") {
+		if owner, err := sessionOfBlock(target); err == nil && owner == current {
+			return b.SelectPane(target)
+		}
+	}
+	return mux.ErrNoClientSwitch
 }
+
+// Popup opens a floating layer centred over the session's active window
+// running the command, closing when it exits. The layer is sized in cells
+// from the focused block's grid, aiming at a board's worth (popupCols ×
+// popupRows) and never more than most of the window. Bounds go over as the
+// client draws them today, and the command is told the box's visible size
+// (COLUMNS, LINES) and colour (RIG_RADAR_BG) so it lays out inside the box
+// and paints every cell of it.
+func (Backend) Popup(session, cmdline string) error {
+	v, err := view(session)
+	if err != nil {
+		return err
+	}
+	cols, rows := 200.0, 60.0
+	for _, win := range v.Windows {
+		if !win.Active || win.FocusedBlock == "" {
+			continue
+		}
+		var size struct {
+			Columns float64 `json:"columns"`
+			Rows    float64 `json:"rows"`
+		}
+		if err := call(session, "com.superlogical.terminal.size", obj{"block_id": win.FocusedBlock, "args": obj{}}, &size); err == nil && size.Columns > 0 && size.Rows > 0 {
+			cols, rows = size.Columns, size.Rows
+		}
+	}
+	w := min(popupCols/cols, 0.9)
+	h := min(popupRows/rows, 0.9)
+	x, y := (1-w)/2, (1-h)/2
+	env := fmt.Sprintf("COLUMNS=%d LINES=%d RIG_RADAR_BG=%s ", int(w*cols), int(h*rows), popupBackground)
+	block := shellBlock("rig radar", "", commandLine(env+cmdline))
+	options := block["block"].(obj)["options"].(obj)
+	delete(options, "cwd")
+	options["exit"] = obj{"on_completion": true, "quick_exit_threshold_ms": 0}
+	options["theme"] = obj{"background": popupBackground, "foreground": popupForeground}
+	return call(session, "session.new_layer", obj{
+		"bounds": obj{"x": x, "y": y, "w": x + w, "h": y + h},
+		"focus":  true,
+		"layout": block,
+	}, nil)
+}
+
+const (
+	popupCols = 120.0
+	popupRows = 32.0
+	// Catppuccin mocha's base and text, matching the terminal theme so the
+	// popup reads as part of the window rather than a dialog.
+	popupBackground = "#181825"
+	popupForeground = "#cdd6f4"
+)
 
 // NewSession creates the session with its first window holding one shell
 // block, and returns that block and window. The block runs the user's login

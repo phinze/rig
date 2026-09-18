@@ -18,8 +18,8 @@ import (
 // main from the preference ladder. It decides nothing about existing rigs:
 // each records the backend that hosts it, and sessionFor reads that back. The
 // commands that list across the whole machine (radar, switch, ls) ask every
-// known backend rather than this one, because a machine hosting two
-// multiplexers has rigs on each and the board has to show both.
+// known backend rather than this one, because a Mac in the middle of the Rex
+// trial has tmux rigs and Rex rigs side by side and the board has to show both.
 var preferredBackend mux.Backend = tmux.Backend{}
 
 // knownBackends is every backend this binary can drive, whether or not its

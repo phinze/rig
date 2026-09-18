@@ -1852,3 +1852,24 @@ func TestRadarLeaveBannerCountsAsChrome(t *testing.T) {
 func sess(name string) rigSession {
 	return rigSession{name: name, b: tmux.Backend{}}
 }
+
+// paintBackground makes every cell of the frame carry an explicit background:
+// each line starts with it, regains it after a reset the row's own styling
+// emitted, is padded to the width, and short frames grow to the height.
+func TestPaintBackgroundFillsEveryCell(t *testing.T) {
+	bg := "\x1b[48;2;24;24;37m"
+	frame := "ab\x1b[0mcd\nxyz"
+	got := paintBackground(frame, 5, 3, "#181825")
+	want := bg + "ab\x1b[0m" + bg + "cd " + "\x1b[0m\n" +
+		bg + "xyz  " + "\x1b[0m\n" +
+		bg + "     " + "\x1b[0m"
+	if got != want {
+		t.Errorf("painted =\n%q\nwant\n%q", got, want)
+	}
+	if paintBackground(frame, 5, 3, "") != frame {
+		t.Error("no colour should leave the frame untouched")
+	}
+	if paintBackground(frame, 5, 3, "blue") != frame {
+		t.Error("an unparseable colour should leave the frame untouched")
+	}
+}

@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"github.com/phinze/rig/internal/mux"
+	"golang.org/x/term"
 	"io"
 	"math"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -49,8 +51,12 @@ import (
 // refusal lands in the popup where you can read it rather than in a terminal
 // you've just left.
 func runRadar(args []string) error {
+	if len(args) == 1 && args[0] == "--popup" {
+		return openRadarPopup()
+	}
+	radarPaint = os.Getenv(radarPaintEnv)
 	if len(args) != 0 {
-		return fmt.Errorf("usage: rig radar")
+		return fmt.Errorf("usage: rig radar [--popup]")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -214,14 +220,56 @@ func radarPrepare(s rigStatus) (rigStatus, error) {
 	return s, nil
 }
 
+// openRadarPopup shows the radar in a popup over the session the caller is
+// inside, on whichever backend that is. It exists so a keybinding has one
+// thing to run in either multiplexer: tmux's leader-r used to spell out
+// display-popup itself, and Rex has no keybindings yet, so the thing that
+// eventually triggers it (a global hotkey, a Rex bind) shouldn't need to know
+// how a popup is made.
+func openRadarPopup() error {
+	b, session := currentSession()
+	if b == nil {
+		return fmt.Errorf("rig radar --popup: not inside a multiplexer session")
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	return b.Popup(session, shellQuote(self)+" radar")
+}
+
 // radarFinish is deliberately tiny: preparation has already established the
-// destination, so after Bubble Tea restores the terminal only the tmux switch
-// remains.
+// destination, so after Bubble Tea restores the terminal only the switch
+// remains. A backend that can't switch the client says so here, and radar
+// waits for a key before exiting: in a popup that closes when it exits, a
+// message printed and immediately gone is the same as no message.
 func radarFinish(s rigStatus) error {
 	if s.session.name == "" {
 		return fmt.Errorf("radar destination has no session to attach")
 	}
-	return s.session.attach()
+	err := s.session.b.Attach(s.session.name)
+	if !errors.Is(err, mux.ErrNoClientSwitch) {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "\nrig: %q is ready, but %v.\nSwitch to it by hand, then press any key.\n", s.session.name, err)
+	waitForKey()
+	return nil
+}
+
+// waitForKey blocks until one byte arrives on a raw stdin, or returns at once
+// when stdin isn't a terminal.
+func waitForKey() {
+	fd := int(os.Stdin.Fd())
+	if !term.IsTerminal(fd) {
+		return
+	}
+	state, err := term.MakeRaw(fd)
+	if err != nil {
+		return
+	}
+	defer func() { _ = term.Restore(fd, state) }()
+	var b [1]byte
+	_, _ = os.Stdin.Read(b[:])
 }
 
 // radarModel is the Bubble Tea model. The framework layer stays thin: state is
@@ -493,7 +541,7 @@ func (m radarModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.KeyMsg, tea.WindowSizeMsg, newRigReposMsg, newRigCreatedMsg:
 			wizard, cmd := m.newRig.update(msg)
 			if size, ok := msg.(tea.WindowSizeMsg); ok {
-				m.width, m.height = size.Width, size.Height
+				m.width, m.height = clampToEnvSize(size.Width, size.Height)
 			}
 			if wizard.done {
 				m.newRig = nil
@@ -520,8 +568,7 @@ func (m radarModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
+		m.width, m.height = clampToEnvSize(msg.Width, msg.Height)
 		return m, nil
 
 	case tea.MouseMsg:
@@ -1996,7 +2043,13 @@ func (m radarModel) kindCell(s rigStatus, cols radarColumns) string {
 	return "  "
 }
 
+// View is view painted onto an opaque background when the popup host asked
+// for one. See paintBackground.
 func (m radarModel) View() string {
+	return paintBackground(m.view(), m.width, m.height, radarPaint)
+}
+
+func (m radarModel) view() string {
 	if m.newRig != nil {
 		return m.newRig.View()
 	}
@@ -2525,4 +2578,77 @@ func radarTruncate(s string, w int) string {
 		return "…"
 	}
 	return string(r[:w-1]) + "…"
+}
+
+// clampToEnvSize honours COLUMNS and LINES as an upper bound on the size the
+// terminal reports. A popup host whose terminal is allocated larger than the
+// box it draws sets them to the visible size, so the board lays out inside
+// what can be seen; anywhere else they're unset or agree with the terminal.
+func clampToEnvSize(width, height int) (int, int) {
+	if n, err := strconv.Atoi(os.Getenv("COLUMNS")); err == nil && n > 0 && n < width {
+		width = n
+	}
+	if n, err := strconv.Atoi(os.Getenv("LINES")); err == nil && n > 0 && n < height {
+		height = n
+	}
+	return width, height
+}
+
+// radarPaintEnv is how a popup host asks the radar to paint every cell with
+// an explicit background. A multiplexer that composites its popups over the
+// window beneath draws a cell with the default background as transparent, so
+// a board rendered the ordinary way floats over whatever it opened on top of.
+// The backend that opens such a popup sets this to the colour its popup
+// should read as; everywhere else it's unset and the terminal's own
+// background shows through as usual.
+const radarPaintEnv = "RIG_RADAR_BG"
+
+var radarPaint string
+
+// paintBackground fills a rendered frame so that every cell of a width×height
+// terminal carries the given "#rrggbb" background: each line is prefixed with
+// the colour, re-asserts it after any reset the row's own styling emitted,
+// and is padded to the full width; missing lines are added to the full
+// height. An empty colour returns the frame untouched.
+func paintBackground(frame string, width, height int, color string) string {
+	if color == "" || width <= 0 {
+		return frame
+	}
+	bg, ok := sgrBackground(color)
+	if !ok {
+		return frame
+	}
+	const reset = "\x1b[0m"
+	lines := strings.Split(frame, "\n")
+	for len(lines) < height {
+		lines = append(lines, "")
+	}
+	var b strings.Builder
+	for i, line := range lines {
+		line = strings.ReplaceAll(line, reset, reset+bg)
+		line = strings.ReplaceAll(line, "\x1b[49m", bg)
+		b.WriteString(bg)
+		b.WriteString(line)
+		if pad := width - lipgloss.Width(line); pad > 0 {
+			b.WriteString(strings.Repeat(" ", pad))
+		}
+		b.WriteString(reset)
+		if i < len(lines)-1 {
+			b.WriteByte('\n')
+		}
+	}
+	return b.String()
+}
+
+// sgrBackground turns "#rrggbb" into the truecolor SGR that sets it.
+func sgrBackground(color string) (string, bool) {
+	hex := strings.TrimPrefix(color, "#")
+	if len(hex) != 6 {
+		return "", false
+	}
+	var r, g, bl int
+	if _, err := fmt.Sscanf(hex, "%02x%02x%02x", &r, &g, &bl); err != nil {
+		return "", false
+	}
+	return fmt.Sprintf("\x1b[48;2;%d;%d;%dm", r, g, bl), true
 }

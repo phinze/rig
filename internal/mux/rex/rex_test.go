@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/phinze/rig/internal/mux"
@@ -39,6 +40,8 @@ com.superlogical.terminal.process)
     *) echo '{"foreground":{"name":"recto","cwd":"/w/x"}}' ;;
   esac ;;
 com.superlogical.terminal.title) echo '{"title":"✳ Task A"}' ;;
+com.superlogical.terminal.size) echo '{"columns":300,"rows":100}' ;;
+session.new_layer) echo '{"layer_id":"layer:1","block_ids":["block:p"],"revision":3}' ;;
 session.set_window_label|session.focus_block|session.move_block) echo '{"revision":2}' ;;
 *) echo '{}' ;;
 esac
@@ -148,5 +151,30 @@ func TestAttachInsideRexIsNoClientSwitch(t *testing.T) {
 	t.Setenv("REX_SESSION", "session:1")
 	if err := (Backend{}).Attach("~-workspaces-alpha"); !errors.Is(err, mux.ErrNoClientSwitch) {
 		t.Errorf("attach inside rex = %v, want ErrNoClientSwitch", err)
+	}
+}
+
+// Popup opens one layer in the session running the command through a login
+// shell, sized from the focused block's grid (120 columns of 300 and 32 rows
+// of 100, centred) and told that size and its colour.
+func TestPopupOpensASizedLayer(t *testing.T) {
+	log := fakeRex(t)
+	if err := (Backend{}).Popup("~-workspaces-alpha", "/usr/local/bin/rig radar"); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(log)
+	var layer string
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.Contains(line, "session.new_layer") {
+			layer = line
+		}
+	}
+	if layer == "" {
+		t.Fatalf("no new_layer call in:\n%s", raw)
+	}
+	for _, want := range []string{`"x":0.3`, `"w":0.7`, `"focus":true`, `"-lc"`, `COLUMNS=120 LINES=32 RIG_RADAR_BG=#181825 /usr/local/bin/rig radar`, `"on_completion":true`} {
+		if !strings.Contains(layer, want) {
+			t.Errorf("new_layer call lacks %s:\n%s", want, layer)
+		}
 	}
 }

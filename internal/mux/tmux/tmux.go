@@ -124,6 +124,30 @@ func (Backend) Attach(target string) error {
 	return cmd.Run()
 }
 
+// Popup is display-popup -E, sized in cells to a board's worth rather than
+// a share of the client: 80% of a full-screen window on a large display is a
+// popup most of which is empty.
+func (Backend) Popup(session, cmdline string) error {
+	w, h := popupCols, popupRows
+	if out, err := command("display-message", "-p", "-t", session, "#{client_width} #{client_height}").Output(); err == nil {
+		var cw, ch int
+		if _, err := fmt.Sscanf(strings.TrimSpace(string(out)), "%d %d", &cw, &ch); err == nil && cw > 0 && ch > 0 {
+			w = min(w, cw*9/10)
+			h = min(h, ch*9/10)
+		}
+	}
+	cmd := command("display-popup", "-E", "-t", session, "-w", strconv.Itoa(w), "-h", strconv.Itoa(h), cmdline)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	return cmd.Run()
+}
+
+// popupCols and popupRows are the board's natural size; both backends aim at
+// it and shrink only when the window can't seat it.
+const (
+	popupCols = 120
+	popupRows = 32
+)
+
 // NewSession creates the first, task-level window for a rig and returns
 // stable pane/window ids for the metadata and split operations that follow.
 // A rig session has an explicit window name so tmux never replaces its identity

@@ -60,6 +60,10 @@ type Backend interface {
 	// switch when already inside the multiplexer, an attach from a bare
 	// terminal. A backend that can't switch returns ErrNoClientSwitch.
 	Attach(target string) error
+	// Popup runs a shell command line in a floating popup over the session's
+	// active window, and returns once the popup is open. The popup closes when
+	// the command exits. It's how the radar is shown.
+	Popup(session, cmdline string) error
 
 	// Layout.
 	NewSession(name, windowName, cwd string) (pane, window string, err error)
