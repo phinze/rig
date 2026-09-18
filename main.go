@@ -33,7 +33,7 @@ func main() {
 	// two commands that don't touch a multiplexer are exempt, and config has
 	// to be: it's the one that repairs a stored name this binary doesn't know.
 	if cmd != "config" && cmd != "help" {
-		if backend, err = defaultBackend(); err != nil {
+		if preferredBackend, err = defaultBackend(); err != nil {
 			fmt.Fprintf(os.Stderr, "rig: %v\n", err)
 			os.Exit(2)
 		}

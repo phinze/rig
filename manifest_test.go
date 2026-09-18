@@ -416,8 +416,8 @@ func TestManifestBackendRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Backend != "" || rigBackend(got).Name() != "tmux" {
-		t.Errorf("backend = %q resolving to %s, want empty resolving to tmux", got.Backend, rigBackend(got).Name())
+	if got.Backend != "" || backendNamed(got.Backend).Name() != "tmux" {
+		t.Errorf("backend = %q resolving to %s, want empty resolving to tmux", got.Backend, backendNamed(got.Backend).Name())
 	}
 
 	if err := writeManifest(dir, manifest{ID: "x", Title: "t", Backend: "rex"}); err != nil {
@@ -433,7 +433,7 @@ func TestManifestBackendRoundTrip(t *testing.T) {
 	// A backend this binary doesn't know still resolves, to tmux, rather than
 	// leaving a rig with no multiplexer at all; that's a fallback for a
 	// downgraded binary, not for a typo, which the config command refuses.
-	if rigBackend(got).Name() != "tmux" {
-		t.Errorf("unknown backend resolved to %s, want tmux", rigBackend(got).Name())
+	if backendNamed(got.Backend).Name() != "tmux" {
+		t.Errorf("unknown backend resolved to %s, want tmux", backendNamed(got.Backend).Name())
 	}
 }

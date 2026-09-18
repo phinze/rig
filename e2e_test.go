@@ -82,7 +82,8 @@ func TestSpawnSessionAgents(t *testing.T) {
 	for _, c := range cases {
 		cwd := filepath.Join(home, string(c.agent), "repo")
 		mustMkdir(t, cwd)
-		session, err := spawnSession(filepath.Dir(cwd), cwd, sessionSpec{
+		session := sessionFor(filepath.Dir(cwd), manifest{})
+		err := spawnSession(session, cwd, sessionSpec{
 			rectoCmd: "recto", agent: c.agent, prompt: "test prompt",
 		})
 		if err != nil {

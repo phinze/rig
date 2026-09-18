@@ -41,34 +41,34 @@ func runResume(args []string) error {
 		basedir = chosen.Path
 	}
 
-	session, err := resumeRigRuntime(basedir, false, true)
+	rs, err := resumeRigRuntime(basedir, false, true)
 	if err != nil {
 		return err
 	}
-	return attachOrReport(session)
+	return rs.attach()
 }
 
 // resumeRigRuntime owns repair of an active rig. Explicit resume refreshes the
 // durable conversation hint before inspecting tmux; ordinary switching reuses
 // an existing hint and resolves one only when a legacy manifest has none.
-func resumeRigRuntime(basedir string, nonblocking, refreshSession bool) (string, error) {
+func resumeRigRuntime(basedir string, nonblocking, refreshSession bool) (rigSession, error) {
 	lock, err := acquireRigMutationLockMode(basedir, nonblocking)
 	if err != nil {
-		return "", err
+		return rigSession{}, err
 	}
 	defer func() { _ = lock.Close() }()
 
 	m, err := readManifest(basedir)
 	if err != nil {
-		return "", fmt.Errorf("reading manifest: %w", err)
+		return rigSession{}, fmt.Errorf("reading manifest: %w", err)
 	}
 	if !m.Parked.IsZero() {
-		return "", fmt.Errorf("%s is parked; use `rig wake %s`", m.ID, m.ID)
+		return rigSession{}, fmt.Errorf("%s is parked; use `rig wake %s`", m.ID, m.ID)
 	}
 	m.Touched = time.Now()
 	captureRigRuntimeHints(basedir, &m, refreshSession)
 	if err := writeManifest(basedir, m); err != nil {
-		return "", err
+		return rigSession{}, err
 	}
 	return ensureRigRuntime(basedir, m)
 }
@@ -78,9 +78,9 @@ func resumeRigRuntime(basedir string, nonblocking, refreshSession bool) (string,
 // discovery is comparatively expensive for Codex, so ordinary activation only
 // does it when no id is recorded; park and explicit resume ask for a refresh.
 func captureRigRuntimeHints(basedir string, m *manifest, refreshSession bool) {
-	session := rigSessionName(basedir)
-	if backend.HasSession(session) {
-		if panes, err := backend.Panes(session); err == nil {
+	rs := sessionFor(basedir, *m)
+	if rs.live() {
+		if panes, err := rs.panes(); err == nil {
 			if repo := mainRepoFromPanes(basedir, *m, panes); repo != "" {
 				m.MainRepo = repo
 			}
@@ -171,11 +171,11 @@ func rigResumeCommand(m manifest, prompt ...string) string {
 // ensureRigRuntime brings a rig back to the same carousel shape it had at
 // creation. It also repairs the common half-alive case where tmux survived but
 // the agent exited to its shell.
-func ensureRigRuntime(basedir string, m manifest) (string, error) {
+func ensureRigRuntime(basedir string, m manifest) (rigSession, error) {
 	return ensureRigRuntimeWithPrompt(basedir, m, "")
 }
 
-func ensureRigRuntimeWithPrompt(basedir string, m manifest, prompt string) (string, error) {
+func ensureRigRuntimeWithPrompt(basedir string, m manifest, prompt string) (rigSession, error) {
 	if m.isProject() {
 		return ensureProjectRuntime(basedir, m, prompt)
 	}
@@ -190,31 +190,30 @@ func ensureRigRuntimeWithPrompt(basedir string, m manifest, prompt string) (stri
 		// this is the error you hit while wondering why a rig you can see is a
 		// rig you cannot enter.
 		if rigCreationInterrupted(m) {
-			return "", fmt.Errorf("rig %s never finished being created: %s", m.ID, finishRigHint(m))
+			return rigSession{}, fmt.Errorf("rig %s never finished being created: %s", m.ID, finishRigHint(m))
 		}
-		return "", fmt.Errorf("rig %s has no available repo workspace", m.ID)
+		return rigSession{}, fmt.Errorf("rig %s has no available repo workspace", m.ID)
 	}
 	paneCwd := filepath.Join(basedir, repo)
-	session := rigSessionName(basedir)
+	rs := sessionFor(basedir, m)
 	command := rigResumeCommand(m, prompt)
 
-	if !backend.HasSession(session) {
-		var err error
-		session, err = spawnSession(basedir, paneCwd, sessionSpec{
+	if !rs.live() {
+		err := spawnSession(rs, paneCwd, sessionSpec{
 			rectoCmd: rectoCommand(), repo: repo, agent: m.agentKind(), command: command,
 		})
 		if err != nil {
-			return "", err
+			return rigSession{}, err
 		}
-		if err := ensureBackgroundRectos(session, basedir, repo, m); err != nil {
-			return "", err
+		if err := ensureBackgroundRectos(rs, basedir, repo, m); err != nil {
+			return rigSession{}, err
 		}
-		return session, nil
+		return rs, nil
 	}
 
-	panes, err := adoptLegacyRigPanes(session, basedir, m)
+	panes, err := adoptLegacyRigPanes(rs, basedir, m)
 	if err != nil {
-		return "", err
+		return rigSession{}, err
 	}
 	mainWindow := ""
 	var agentPane mux.Pane
@@ -228,7 +227,7 @@ func ensureRigRuntimeWithPrompt(basedir string, m manifest, prompt string) (stri
 		}
 	}
 	if mainWindow == "" {
-		return "", fmt.Errorf("rig session %s has no main window", session)
+		return rigSession{}, fmt.Errorf("rig session %s has no main window", rs.name)
 	}
 	if agentPane.PaneID == "" {
 		for _, p := range panes {
@@ -239,75 +238,75 @@ func ensureRigRuntimeWithPrompt(basedir string, m manifest, prompt string) (stri
 		}
 	}
 	if agentPane.PaneID == "" {
-		pane, err := backend.SplitShell(mainWindow, paneCwd)
+		pane, err := rs.b.SplitShell(mainWindow, paneCwd)
 		if err != nil {
-			return "", fmt.Errorf("restoring agent pane: %w", err)
+			return rigSession{}, fmt.Errorf("restoring agent pane: %w", err)
 		}
 		agentPane = mux.Pane{PaneID: pane, WindowID: mainWindow, Command: filepath.Base(os.Getenv("SHELL"))}
 	}
-	if err := markRigMainWindow(mainWindow, repo); err != nil {
-		return "", err
+	if err := rs.markMainWindow(mainWindow, repo); err != nil {
+		return rigSession{}, err
 	}
-	if err := backend.RenameWindow(mainWindow, mainWindowName(repo)); err != nil {
-		return "", err
+	if err := rs.b.RenameWindow(mainWindow, mainWindowName(repo)); err != nil {
+		return rigSession{}, err
 	}
-	if err := markRigPane(agentPane.PaneID, rigPaneAgent, repo); err != nil {
-		return "", err
+	if err := rs.markPane(agentPane.PaneID, rigPaneAgent, repo); err != nil {
+		return rigSession{}, err
 	}
 
-	panes, err = backend.Panes(session)
+	panes, err = rs.panes()
 	if err != nil {
-		return "", err
+		return rigSession{}, err
 	}
-	panes, err = ensureRepoRecto(session, basedir, repo, panes)
+	panes, err = ensureRepoRecto(rs, basedir, repo, panes)
 	if err != nil {
-		return "", fmt.Errorf("starting %s recto: %w", repo, err)
+		return rigSession{}, fmt.Errorf("starting %s recto: %w", repo, err)
 	}
-	if err := promoteRecto(session, basedir, repo, m); err != nil {
-		return "", err
+	if err := promoteRecto(rs, basedir, repo, m); err != nil {
+		return rigSession{}, err
 	}
-	if err := ensureBackgroundRectos(session, basedir, repo, m); err != nil {
-		return "", err
+	if err := ensureBackgroundRectos(rs, basedir, repo, m); err != nil {
+		return rigSession{}, err
 	}
 
 	// When resume is invoked from the stopped agent's own pane, replace this
 	// process directly. Sending keys there would feed this foreground command,
 	// not the shell waiting underneath it.
-	selfCaller := agentPane.PaneID == backend.CurrentPane()
+	selfCaller := agentPane.PaneID == rs.b.CurrentPane()
 	rigCaller := filepath.Base(strings.TrimSpace(agentPane.Command)) == filepath.Base(os.Args[0])
 	if selfCaller && (rigCaller || isShellCommand(agentPane.Command)) {
 		if err := os.Chdir(paneCwd); err != nil {
-			return "", err
+			return rigSession{}, err
 		}
 		if err := syscall.Exec("/bin/sh", []string{"sh", "-c", "exec " + command}, os.Environ()); err != nil {
-			return "", fmt.Errorf("resuming agent in current pane: %w", err)
+			return rigSession{}, fmt.Errorf("resuming agent in current pane: %w", err)
 		}
 	}
 	if isShellCommand(agentPane.Command) {
 		line := "cd " + shellQuote(paneCwd) + " && " + command
-		if err := backend.SendKeys(agentPane.PaneID, line); err != nil {
-			return "", fmt.Errorf("resuming agent: %w", err)
+		if err := rs.b.SendKeys(agentPane.PaneID, line); err != nil {
+			return rigSession{}, fmt.Errorf("resuming agent: %w", err)
 		}
 	}
-	if err := backend.SelectPane(agentPane.PaneID); err != nil {
-		return "", err
+	if err := rs.b.SelectPane(agentPane.PaneID); err != nil {
+		return rigSession{}, err
 	}
-	return session, nil
+	return rs, nil
 }
 
 // ensureProjectRuntime repairs the agent-only session used by a project rig.
 // It mirrors the agent half of ensureRigRuntime without inventing a fake repo
 // or starting Recto in a directory that has no jj workspace.
-func ensureProjectRuntime(basedir string, m manifest, prompt string) (string, error) {
-	session := rigSessionName(basedir)
+func ensureProjectRuntime(basedir string, m manifest, prompt string) (rigSession, error) {
+	rs := sessionFor(basedir, m)
 	command := rigResumeCommand(m, prompt)
-	if !backend.HasSession(session) {
-		return spawnProjectSession(basedir, sessionSpec{agent: m.agentKind(), command: command})
+	if !rs.live() {
+		return rs, spawnProjectSession(rs, basedir, sessionSpec{agent: m.agentKind(), command: command})
 	}
 
-	panes, err := backend.Panes(session)
+	panes, err := rs.panes()
 	if err != nil {
-		return "", err
+		return rigSession{}, err
 	}
 	var mainWindow, agentPane mux.Pane
 	for _, p := range panes {
@@ -319,7 +318,7 @@ func ensureProjectRuntime(basedir string, m manifest, prompt string) (string, er
 		}
 	}
 	if mainWindow.WindowID == "" {
-		return "", fmt.Errorf("project rig session %s has no main window", session)
+		return rigSession{}, fmt.Errorf("project rig session %s has no main window", rs.name)
 	}
 	if agentPane.PaneID == "" {
 		for _, p := range panes {
@@ -330,45 +329,45 @@ func ensureProjectRuntime(basedir string, m manifest, prompt string) (string, er
 		}
 	}
 	if agentPane.PaneID == "" {
-		pane, err := backend.SplitShell(mainWindow.WindowID, basedir)
+		pane, err := rs.b.SplitShell(mainWindow.WindowID, basedir)
 		if err != nil {
-			return "", fmt.Errorf("restoring project agent pane: %w", err)
+			return rigSession{}, fmt.Errorf("restoring project agent pane: %w", err)
 		}
 		agentPane = mux.Pane{PaneID: pane, WindowID: mainWindow.WindowID, Command: filepath.Base(os.Getenv("SHELL"))}
 	}
-	if err := markRigMainWindow(mainWindow.WindowID, ""); err != nil {
-		return "", err
+	if err := rs.markMainWindow(mainWindow.WindowID, ""); err != nil {
+		return rigSession{}, err
 	}
-	if err := backend.RenameWindow(mainWindow.WindowID, mainWindowName("")); err != nil {
-		return "", err
+	if err := rs.b.RenameWindow(mainWindow.WindowID, mainWindowName("")); err != nil {
+		return rigSession{}, err
 	}
-	if err := markRigPane(agentPane.PaneID, rigPaneAgent, ""); err != nil {
-		return "", err
+	if err := rs.markPane(agentPane.PaneID, rigPaneAgent, ""); err != nil {
+		return rigSession{}, err
 	}
 
-	selfCaller := agentPane.PaneID == backend.CurrentPane()
+	selfCaller := agentPane.PaneID == rs.b.CurrentPane()
 	rigCaller := filepath.Base(strings.TrimSpace(agentPane.Command)) == filepath.Base(os.Args[0])
 	if selfCaller && (rigCaller || isShellCommand(agentPane.Command)) {
 		if err := os.Chdir(basedir); err != nil {
-			return "", err
+			return rigSession{}, err
 		}
 		if err := syscall.Exec("/bin/sh", []string{"sh", "-c", "exec " + command}, os.Environ()); err != nil {
-			return "", fmt.Errorf("resuming project agent in current pane: %w", err)
+			return rigSession{}, fmt.Errorf("resuming project agent in current pane: %w", err)
 		}
 	}
 	if isShellCommand(agentPane.Command) {
 		line := "cd " + shellQuote(basedir) + " && " + command
-		if err := backend.SendKeys(agentPane.PaneID, line); err != nil {
-			return "", fmt.Errorf("resuming project agent: %w", err)
+		if err := rs.b.SendKeys(agentPane.PaneID, line); err != nil {
+			return rigSession{}, fmt.Errorf("resuming project agent: %w", err)
 		}
 	}
-	if err := backend.SelectPane(agentPane.PaneID); err != nil {
-		return "", err
+	if err := rs.b.SelectPane(agentPane.PaneID); err != nil {
+		return rigSession{}, err
 	}
-	return session, nil
+	return rs, nil
 }
 
-func ensureBackgroundRectos(session, basedir, mainRepo string, m manifest) error {
+func ensureBackgroundRectos(rs rigSession, basedir, mainRepo string, m manifest) error {
 	repos := make([]string, 0, len(m.Repos))
 	for repo := range m.Repos {
 		if repo != mainRepo && dirExists(filepath.Join(basedir, repo)) {
@@ -376,12 +375,12 @@ func ensureBackgroundRectos(session, basedir, mainRepo string, m manifest) error
 		}
 	}
 	sort.Strings(repos)
-	panes, err := backend.Panes(session)
+	panes, err := rs.panes()
 	if err != nil {
 		return err
 	}
 	for _, repo := range repos {
-		panes, err = ensureRepoRecto(session, basedir, repo, panes)
+		panes, err = ensureRepoRecto(rs, basedir, repo, panes)
 		if err != nil {
 			return fmt.Errorf("starting %s recto: %w", repo, err)
 		}

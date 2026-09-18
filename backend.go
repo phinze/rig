@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,33 +13,70 @@ import (
 	"golang.org/x/term"
 )
 
-// backend is the multiplexer every command drives. It's a package global
-// rather than a parameter because rig's commands are package-level functions
-// that already reached for tmux by name; main picks it once from the
-// preference ladder. See package mux for the seam itself.
-var backend mux.Backend = tmux.Backend{}
+// preferredBackend is the multiplexer a *new* rig is built on, picked once in
+// main from the preference ladder. It decides nothing about existing rigs:
+// each records the backend that hosts it, and sessionFor reads that back. The
+// commands that list across the whole machine (radar, switch, ls) ask every
+// known backend rather than this one, because a Mac in the middle of the Rex
+// trial has tmux rigs and Rex rigs side by side and the board has to show both.
+var preferredBackend mux.Backend = tmux.Backend{}
 
-// backendNames lists the backends rig knows, in the order `rig config` and a
-// typo's suggestion print them.
-var backendNames = []string{"tmux"}
+// backends is every backend this binary can drive, in the order `rig config`
+// and a typo's suggestion print them. tmux is first because it's the default
+// an empty name resolves to. Tests register a fake here for the routing they
+// can't otherwise exercise with one real multiplexer.
+var backends = []mux.Backend{tmux.Backend{}}
+
+// knownBackends is every registered backend, whether or not its server is
+// running. A backend whose server is down lists nothing, which is the cheap
+// and correct answer for a board.
+func knownBackends() []mux.Backend {
+	return backends
+}
+
+func backendNames() []string {
+	names := make([]string, 0, len(backends))
+	for _, b := range backends {
+		names = append(names, b.Name())
+	}
+	return names
+}
 
 // backendByName resolves a preference to a backend. Unknown names are an
 // error rather than a fallback, because a stale or misspelled preference that
 // silently landed you in tmux would be indistinguishable from the setting
 // never having taken.
 func backendByName(name string) (mux.Backend, error) {
-	switch name {
-	case "", "tmux":
+	if name == "" {
 		return tmux.Backend{}, nil
 	}
-	return nil, fmt.Errorf("unknown backend %q (expected one of %s)", name, strings.Join(backendNames, ", "))
+	for _, b := range backends {
+		if b.Name() == name {
+			return b, nil
+		}
+	}
+	return nil, fmt.Errorf("unknown backend %q (expected one of %s)", name, strings.Join(backendNames(), ", "))
+}
+
+// backendNamed is backendByName for a name rig itself recorded (a manifest, a
+// tombstone, a teardown job, a listed session) rather than one the user typed.
+// A name this binary no longer knows falls back to tmux, since a rig with no
+// multiplexer at all is worse than one looked for in the wrong place: that's
+// the downgraded-binary case, not the typo case, which the config command
+// refuses at write time.
+func backendNamed(name string) mux.Backend {
+	b, err := backendByName(name)
+	if err != nil {
+		return tmux.Backend{}
+	}
+	return b
 }
 
 // defaultBackend applies the same ladder defaultAgent does, narrowest scope
 // first: RIG_BACKEND for this shell, `rig config backend` for this user, then
 // tmux. The env var sits above the file for the reason the agent one does —
 // `RIG_BACKEND=rex rig new` has to mean something. Like the agent, it decides
-// only for a new rig; the manifest records the answer and rigBackend reads it
+// only for a new rig; the manifest records the answer and sessionFor reads it
 // back.
 func defaultBackend() (mux.Backend, error) {
 	name, _, _ := defaultBackendWithSource()
@@ -58,20 +96,27 @@ func defaultBackendWithSource() (name string, src agentSource, raw string) {
 	return "tmux", agentFromBuiltin, ""
 }
 
-// rigBackend is the multiplexer a particular rig's session lives in, read
-// from its manifest rather than from the preference: a preference is about
-// the next rig, and changing it must not make every existing rig's session
-// unfindable. Empty means tmux, as it does for every rig made before the
-// field existed. Only the per-rig lifecycle reads this today (teardown records
-// it); the commands that take a manifest still drive the global, and moving
-// them across is the first job of a second backend, when it's testable.
-func rigBackend(m manifest) mux.Backend {
-	b, err := backendByName(m.Backend)
-	if err != nil {
-		return tmux.Backend{}
-	}
-	return b
+// rigSession is one rig's session together with the multiplexer hosting it.
+// The two travel as a pair because a session name alone is ambiguous on a
+// machine with two multiplexers, and every command that used to hold the bare
+// string now holds this.
+type rigSession struct {
+	name string
+	b    mux.Backend
 }
+
+// sessionFor is the session a rig's basedir maps to, on the backend its
+// manifest records. Empty means tmux, as it does for every rig made before the
+// field existed.
+func sessionFor(basedir string, m manifest) rigSession {
+	return rigSession{name: rigSessionName(basedir), b: backendNamed(m.Backend)}
+}
+
+func (rs rigSession) live() bool { return rs.b.HasSession(rs.name) }
+
+func (rs rigSession) attach() error { return attachOrReport(rs.b, rs.name) }
+
+func (rs rigSession) panes() ([]mux.Pane, error) { return rs.b.Panes(rs.name) }
 
 // rigSessionName is the session a rig's basedir maps to. It's mux.SessionName
 // under a name that says what rig uses it for.
@@ -79,22 +124,64 @@ func rigSessionName(path string) string {
 	return mux.SessionName(path)
 }
 
+// currentSession is the session the current process runs inside and the
+// backend it belongs to, or nil and "" from a bare terminal. Each backend
+// answers from its own environment, so at most one says anything.
+func currentSession() (mux.Backend, string) {
+	for _, b := range knownBackends() {
+		if name := b.CurrentSession(); name != "" {
+			return b, name
+		}
+	}
+	return nil, ""
+}
+
 // insideSession reports whether the current process is running inside the
-// named session. False when not inside the multiplexer at all.
-func insideSession(name string) bool {
-	return name != "" && backend.CurrentSession() == name
+// given rig session. False when not inside any multiplexer.
+func insideSession(rs rigSession) bool {
+	b, name := currentSession()
+	return b != nil && b.Name() == rs.b.Name() && name == rs.name
+}
+
+// allSessions lists every live session across every known backend, each
+// tagged with the backend that listed it.
+func allSessions() []mux.Session {
+	var out []mux.Session
+	for _, b := range knownBackends() {
+		out = append(out, b.Sessions()...)
+	}
+	return out
 }
 
 // lastAttached maps each live session name to the unix time it was last
 // attached (0 if never). It's how `rig switch` sorts most-recently-touched
 // first, the same signal session-wizard's `t` sorts on.
 func lastAttached() map[string]int64 {
-	sessions := backend.Sessions()
+	sessions := allSessions()
 	m := make(map[string]int64, len(sessions))
 	for _, s := range sessions {
 		m[s.Name] = s.LastAttached
 	}
 	return m
+}
+
+// attachOrReport attaches to the target on the given backend when stdin is a
+// tty, otherwise prints how to attach manually (e.g. when invoked from a
+// script or test). A backend that can't switch the client says so and
+// succeeds: the session is ready, and the last step is yours.
+func attachOrReport(b mux.Backend, target string) error {
+	if !stdinIsTTY() {
+		fmt.Fprintf(os.Stderr, "rig: not a tty — session ready as %q, attach manually\n", target)
+		return nil
+	}
+	if err := b.Attach(target); err != nil {
+		if errors.Is(err, mux.ErrNoClientSwitch) {
+			fmt.Fprintf(os.Stderr, "rig: session %q is ready, but %v — switch to it by hand\n", target, err)
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 // agentChild is one agent-bearing window: what the radar dangles under a rig
@@ -103,6 +190,7 @@ func lastAttached() map[string]int64 {
 // Attach, and Context is the task the agent named for itself (empty when it's
 // still on the "Claude Code" placeholder).
 type agentChild struct {
+	Backend string
 	Session string
 	Window  string
 	Target  string
@@ -110,12 +198,15 @@ type agentChild struct {
 	Working bool // window produced output within agentActiveWindow
 }
 
-// liveAgentChildren is the radar's one sweep of every pane on the server,
-// filtered down to the agents. Nil when the server isn't running.
+// liveAgentChildren is the radar's one sweep of every pane on every known
+// backend, filtered down to the agents. A backend that can't be listed
+// contributes nothing rather than failing the sweep.
 func liveAgentChildren() map[string][]agentChild {
-	panes, err := backend.AllPanes()
-	if err != nil {
-		return nil
+	var panes []mux.Pane
+	for _, b := range knownBackends() {
+		if ps, err := b.AllPanes(); err == nil {
+			panes = append(panes, ps...)
+		}
 	}
 	return agentChildren(panes, time.Now().Unix())
 }
@@ -150,6 +241,7 @@ func agentChildren(panes []mux.Pane, now int64) map[string][]agentChild {
 		}
 		seen[key] = true
 		children[p.Session] = append(children[p.Session], agentChild{
+			Backend: p.Backend,
 			Session: p.Session,
 			Window:  p.WindowName,
 			Target:  p.Target,

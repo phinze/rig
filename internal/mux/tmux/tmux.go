@@ -86,6 +86,7 @@ func (Backend) Sessions() []mux.Session {
 			continue
 		}
 		sessions = append(sessions, mux.Session{
+			Backend:      "tmux",
 			Name:         fields[2],
 			Path:         fields[1],
 			LastAttached: secs,
@@ -253,6 +254,7 @@ func parsePanes(out string) []mux.Pane {
 		}
 		activity, _ := strconv.ParseInt(f[12], 10, 64)
 		panes = append(panes, mux.Pane{
+			Backend: "tmux",
 			Session: f[0], PaneID: f[1], PaneIdx: f[2],
 			WindowID: f[3], WindowIdx: f[4], WindowName: f[5],
 			Target:     f[0] + ":" + f[4] + "." + f[2],

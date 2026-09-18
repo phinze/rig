@@ -59,26 +59,26 @@ func TestRectoCarouselPreservesAdHocShell(t *testing.T) {
 	if err := writeManifest(basedir, m); err != nil {
 		t.Fatal(err)
 	}
-	session, err := spawnSession(basedir, filepath.Join(basedir, "runtime"), sessionSpec{
+	session := sessionFor(basedir, m)
+	if err := spawnSession(session, filepath.Join(basedir, "runtime"), sessionSpec{
 		rectoCmd: rectoCommand(), repo: "runtime", agent: agentClaude, prompt: "test",
-	})
-	if err != nil {
+	}); err != nil {
 		t.Fatal(err)
 	}
 	for _, repo := range []string{"cloud", "brand"} {
-		pane, window, err := backend.NewCommandWindow(session, repo, filepath.Join(basedir, repo), rectoCommand())
+		pane, window, err := session.b.NewCommandWindow(session.name, repo, filepath.Join(basedir, repo), rectoCommand())
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := markRigPane(pane, rigPaneRecto, repo); err != nil {
+		if err := session.markPane(pane, rigPaneRecto, repo); err != nil {
 			t.Fatal(err)
 		}
-		if err := markRigRepoWindow(window, repo); err != nil {
+		if err := session.markRepoWindow(window, repo); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	panes, err := backend.Panes(session)
+	panes, err := session.panes()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,14 +88,14 @@ func TestRectoCarouselPreservesAdHocShell(t *testing.T) {
 	}
 	// A normal tmux split from the full-screen Recto creates an ad hoc shell in
 	// the same repo window. It must survive when cloud is promoted.
-	if _, err := backend.SplitCommand(cloudRecto.PaneID, filepath.Join(basedir, "cloud"), "sleep infinity"); err != nil {
+	if _, err := session.b.SplitCommand(cloudRecto.PaneID, filepath.Join(basedir, "cloud"), "sleep infinity"); err != nil {
 		t.Fatal(err)
 	}
 	if err := promoteRecto(session, basedir, "cloud", m); err != nil {
 		t.Fatal(err)
 	}
 
-	panes, err = backend.Panes(session)
+	panes, err = session.panes()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestRectoCarouselPreservesAdHocShell(t *testing.T) {
 	if err := promoteRecto(session, basedir, "runtime", m); err != nil {
 		t.Fatal(err)
 	}
-	panes, err = backend.Panes(session)
+	panes, err = session.panes()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestRectoCarouselPreservesAdHocShell(t *testing.T) {
 	if args != wantArgs {
 		t.Errorf("delegated recto args = %q, want %q", args, wantArgs)
 	}
-	panes, err = backend.Panes(session)
+	panes, err = session.panes()
 	if err != nil {
 		t.Fatal(err)
 	}

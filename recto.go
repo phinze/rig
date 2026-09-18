@@ -24,16 +24,16 @@ func mainWindowName(repo string) string {
 	return "main/" + repo
 }
 
-func markRigPane(pane, role, repo string) error {
-	return backend.MarkPane(pane, role, repo)
+func (rs rigSession) markPane(pane, role, repo string) error {
+	return rs.b.MarkPane(pane, role, repo)
 }
 
-func markRigMainWindow(window, repo string) error {
-	return backend.MarkWindow(window, rigWindowMain, repo)
+func (rs rigSession) markMainWindow(window, repo string) error {
+	return rs.b.MarkWindow(window, rigWindowMain, repo)
 }
 
-func markRigRepoWindow(window, repo string) error {
-	return backend.MarkWindow(window, rigWindowRepo, repo)
+func (rs rigSession) markRepoWindow(window, repo string) error {
+	return rs.b.MarkWindow(window, rigWindowRepo, repo)
 }
 
 func repoForWorkspacePath(basedir string, m manifest, path string) string {
@@ -51,8 +51,8 @@ func repoForWorkspacePath(basedir string, m manifest, path string) string {
 // adoptLegacyRigPanes makes the carousel usable in sessions created before
 // pane metadata existed. Process/path discovery is deliberately only a
 // migration path; all newly created panes carry stable tmux user-options.
-func adoptLegacyRigPanes(session, basedir string, m manifest) ([]mux.Pane, error) {
-	panes, err := backend.Panes(session)
+func adoptLegacyRigPanes(rs rigSession, basedir string, m manifest) ([]mux.Pane, error) {
+	panes, err := rs.panes()
 	if err != nil {
 		return nil, err
 	}
@@ -64,10 +64,10 @@ func adoptLegacyRigPanes(session, basedir string, m manifest) ([]mux.Pane, error
 			repo = repoForWorkspacePath(basedir, m, p.Path)
 		}
 		if p.Role == "" && (p.Command == "recto" || strings.HasPrefix(p.Command, "recto")) {
-			_ = markRigPane(p.PaneID, rigPaneRecto, repo)
+			_ = rs.markPane(p.PaneID, rigPaneRecto, repo)
 		}
 		if p.Role == "" && isAgentCommand(p.Command) {
-			_ = markRigPane(p.PaneID, rigPaneAgent, repo)
+			_ = rs.markPane(p.PaneID, rigPaneAgent, repo)
 		}
 		if p.WindowRole == rigWindowMain || (mainWindow == "" && isAgentCommand(p.Command)) {
 			mainWindow = p.WindowID
@@ -84,7 +84,7 @@ func adoptLegacyRigPanes(session, basedir string, m manifest) ([]mux.Pane, error
 		}
 	}
 	if mainWindow == "" {
-		return nil, fmt.Errorf("cannot find main window in tmux session %s", session)
+		return nil, fmt.Errorf("cannot find main window in session %s", rs.name)
 	}
 	for _, p := range panes {
 		if p.WindowID == mainWindow && p.Command == "recto" {
@@ -93,17 +93,17 @@ func adoptLegacyRigPanes(session, basedir string, m manifest) ([]mux.Pane, error
 			}
 		}
 	}
-	_ = markRigMainWindow(mainWindow, mainRepo)
-	_ = backend.RenameWindow(mainWindow, mainWindowName(mainRepo))
+	_ = rs.markMainWindow(mainWindow, mainRepo)
+	_ = rs.b.RenameWindow(mainWindow, mainWindowName(mainRepo))
 	for _, p := range panes {
 		if p.WindowID == mainWindow || p.WindowRole != "" {
 			continue
 		}
 		if repo := repoForWorkspacePath(basedir, m, p.Path); repo != "" {
-			_ = markRigRepoWindow(p.WindowID, repo)
+			_ = rs.markRepoWindow(p.WindowID, repo)
 		}
 	}
-	return backend.Panes(session)
+	return rs.panes()
 }
 
 func resolveRectoRepo(m manifest, arg string) (string, error) {
@@ -173,40 +173,40 @@ func rectoCommand() string {
 	return "recto"
 }
 
-func ensureRepoRecto(session, basedir, repo string, panes []mux.Pane) ([]mux.Pane, error) {
+func ensureRepoRecto(rs rigSession, basedir, repo string, panes []mux.Pane) ([]mux.Pane, error) {
 	if _, ok := findRectoPane(panes, repo); ok {
 		return panes, nil
 	}
 	repoDir := filepath.Join(basedir, repo)
 	if w, ok := findRepoWindow(panes, repo, ""); ok {
-		pane, err := backend.SplitCommand(w.PaneID, repoDir, rectoCommand())
+		pane, err := rs.b.SplitCommand(w.PaneID, repoDir, rectoCommand())
 		if err != nil {
 			return nil, err
 		}
-		if err := markRigPane(pane, rigPaneRecto, repo); err != nil {
+		if err := rs.markPane(pane, rigPaneRecto, repo); err != nil {
 			return nil, err
 		}
 	} else {
-		pane, window, err := backend.NewCommandWindow(session, repo, repoDir, rectoCommand())
+		pane, window, err := rs.b.NewCommandWindow(rs.name, repo, repoDir, rectoCommand())
 		if err != nil {
 			return nil, err
 		}
-		if err := markRigPane(pane, rigPaneRecto, repo); err != nil {
+		if err := rs.markPane(pane, rigPaneRecto, repo); err != nil {
 			return nil, err
 		}
-		if err := markRigRepoWindow(window, repo); err != nil {
+		if err := rs.markRepoWindow(window, repo); err != nil {
 			return nil, err
 		}
 	}
-	return backend.Panes(session)
+	return rs.panes()
 }
 
-func promoteRecto(session, basedir, repo string, m manifest) error {
-	panes, err := adoptLegacyRigPanes(session, basedir, m)
+func promoteRecto(rs rigSession, basedir, repo string, m manifest) error {
+	panes, err := adoptLegacyRigPanes(rs, basedir, m)
 	if err != nil {
 		return err
 	}
-	panes, err = ensureRepoRecto(session, basedir, repo, panes)
+	panes, err = ensureRepoRecto(rs, basedir, repo, panes)
 	if err != nil {
 		return fmt.Errorf("starting %s recto: %w", repo, err)
 	}
@@ -219,8 +219,8 @@ func promoteRecto(session, basedir, repo string, m manifest) error {
 		return fmt.Errorf("cannot find %s recto pane", repo)
 	}
 	if target.WindowID == main.WindowID {
-		_ = markRigMainWindow(main.WindowID, repo)
-		return backend.RenameWindow(main.WindowID, mainWindowName(repo))
+		_ = rs.markMainWindow(main.WindowID, repo)
+		return rs.b.RenameWindow(main.WindowID, mainWindowName(repo))
 	}
 
 	if current.PaneID != "" {
@@ -229,32 +229,32 @@ func promoteRecto(session, basedir, repo string, m manifest) error {
 			outgoing = repoForWorkspacePath(basedir, m, current.Path)
 		}
 		if parking, ok := findRepoWindow(panes, outgoing, main.WindowID); ok {
-			if err := backend.JoinPane(current.PaneID, parking.PaneID); err != nil {
+			if err := rs.b.JoinPane(current.PaneID, parking.PaneID); err != nil {
 				return fmt.Errorf("parking %s recto: %w", outgoing, err)
 			}
-			_ = markRigRepoWindow(parking.WindowID, outgoing)
-			_ = backend.RenameWindow(parking.WindowID, outgoing)
+			_ = rs.markRepoWindow(parking.WindowID, outgoing)
+			_ = rs.b.RenameWindow(parking.WindowID, outgoing)
 		} else {
-			window, err := backend.BreakPane(current.PaneID, outgoing)
+			window, err := rs.b.BreakPane(current.PaneID, outgoing)
 			if err != nil {
 				return fmt.Errorf("parking %s recto: %w", outgoing, err)
 			}
-			if err := markRigRepoWindow(window, outgoing); err != nil {
+			if err := rs.markRepoWindow(window, outgoing); err != nil {
 				return err
 			}
 		}
 	}
 
-	if err := backend.JoinPane(target.PaneID, agent.PaneID); err != nil {
+	if err := rs.b.JoinPane(target.PaneID, agent.PaneID); err != nil {
 		return fmt.Errorf("promoting %s recto: %w", repo, err)
 	}
-	if err := markRigMainWindow(main.WindowID, repo); err != nil {
+	if err := rs.markMainWindow(main.WindowID, repo); err != nil {
 		return err
 	}
-	if err := backend.RenameWindow(main.WindowID, mainWindowName(repo)); err != nil {
+	if err := rs.b.RenameWindow(main.WindowID, mainWindowName(repo)); err != nil {
 		return err
 	}
-	return backend.SelectPane(agent.PaneID)
+	return rs.b.SelectPane(agent.PaneID)
 }
 
 // runRecto promotes a repository's persistent viewer into main's right-hand
@@ -281,11 +281,11 @@ func runRecto(args []string) error {
 	if err != nil {
 		return err
 	}
-	session := rigSessionName(basedir)
-	if !backend.HasSession(session) {
+	rs := sessionFor(basedir, m)
+	if !rs.live() {
 		return fmt.Errorf("rig session is not running")
 	}
-	if err := promoteRecto(session, basedir, repo, m); err != nil {
+	if err := promoteRecto(rs, basedir, repo, m); err != nil {
 		return err
 	}
 	if len(args) == 1 {

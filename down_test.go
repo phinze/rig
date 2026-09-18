@@ -280,8 +280,8 @@ func TestTeardownUsesRecordedTmuxSocket(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
-	if got := backend.Endpoint(); got != socket {
-		t.Fatalf("backend.Endpoint() = %q, want %q", got, socket)
+	if got := preferredBackend.Endpoint(); got != socket {
+		t.Fatalf("preferredBackend.Endpoint() = %q, want %q", got, socket)
 	}
 
 	// Model the systemd worker: the caller's TMUX connection is gone and its
@@ -289,7 +289,7 @@ func TestTeardownUsesRecordedTmuxSocket(t *testing.T) {
 	// must still be sufficient to find and kill the exact session.
 	t.Setenv("TMUX", "")
 	t.Setenv("TMUX_TMPDIR", filepath.Join(root, "wrong-tmux-dir"))
-	if err := backend.KillSessionAt(session, socket); err != nil {
+	if err := preferredBackend.KillSessionAt(session, socket); err != nil {
 		t.Fatal(err)
 	}
 	if err := exec.Command(realTmux, "-S", socket, "has-session", "-t", "="+session).Run(); err == nil {
@@ -312,7 +312,7 @@ func TestTeardownRetainsTmuxConnectionErrors(t *testing.T) {
 	}
 	t.Setenv("PATH", bin)
 
-	err := backend.KillSessionAt("rig-fail-closed", socket)
+	err := preferredBackend.KillSessionAt("rig-fail-closed", socket)
 	if err == nil || !strings.Contains(err.Error(), "connection failed") {
 		t.Fatalf("tmuxKillSessionAt error = %v, want connection failure", err)
 	}

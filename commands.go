@@ -67,11 +67,11 @@ func runAdd(args []string) error {
 	// then the window is also a useful full-screen diff. A shell is deliberately
 	// absent: tmux's normal split bindings can grow one from the Recto's repo cwd
 	// for the occasional poke without making empty shells permanent furniture.
-	session := rigSessionName(basedir)
-	if backend.HasSession(session) {
-		if pane, window, err := backend.NewCommandWindow(session, repo, repoDest, rectoCommand()); err == nil {
-			_ = markRigPane(pane, rigPaneRecto, repo)
-			_ = markRigRepoWindow(window, repo)
+	rs := sessionFor(basedir, m)
+	if rs.live() {
+		if pane, window, err := rs.b.NewCommandWindow(rs.name, repo, repoDest, rectoCommand()); err == nil {
+			_ = rs.markPane(pane, rigPaneRecto, repo)
+			_ = rs.markRepoWindow(window, repo)
 		}
 	}
 
@@ -192,6 +192,7 @@ type rigStatus struct {
 	Created     time.Time  `json:"created"`
 	LastTouched time.Time  `json:"last_touched"`
 	SessionLive bool       `json:"session_live"`
+	Backend     string     `json:"backend,omitempty"`     // multiplexer hosting the session; empty means tmux
 	Agent       string     `json:"agent"`                 // working | idle | "" (no session)
 	Parked      bool       `json:"parked"`                // dormant, awaiting review
 	LastActive  *time.Time `json:"last_active,omitempty"` // newest agent turn, if any
@@ -204,13 +205,13 @@ type rigStatus struct {
 	Notifications []notification `json:"notifications,omitempty"`
 
 	// radar-only, never serialized: a row that's a bare tmux session (not a
-	// rig) carries bare=true and the raw session name to attach to. A child row
-	// dangled under a parent carries child=true, session set to the window's
-	// session:index switch target, and childKey holding the window label. agents
+	// rig) carries bare=true and the session to attach to. A child row dangled
+	// under a parent carries child=true, session set to the agent pane's switch
+	// target on its backend, and childKey holding the window label. agents
 	// are the parent's agent windows, expanded into child rows at render.
 	bare     bool
 	child    bool
-	session  string
+	session  rigSession
 	childKey string
 	agents   []agentChild
 	// activity is the agent title of a row's lone agent, carried verbatim.
@@ -262,7 +263,8 @@ func rigStatuses(rigs []rigInfo, home string, now time.Time) []rigStatus {
 			Parked:      !r.Parked.IsZero(),
 			Repos:       r.Repos,
 			Building:    r.Building,
-			SessionLive: backend.HasSession(rigSessionName(r.Path)),
+			Backend:     r.Backend,
+			SessionLive: r.session().live(),
 		}
 		if ts := activity[r.Path]; ts > 0 {
 			t := time.Unix(ts, 0)
@@ -454,6 +456,14 @@ type rigInfo struct {
 	// create was interrupted before its workspace existed, so it can be
 	// finished but not entered.
 	Building string
+	// Backend is the manifest's, so a board can find the rig's session without
+	// re-reading the manifest; empty means tmux.
+	Backend string
+}
+
+// session is the rig's session on the backend its manifest recorded.
+func (r rigInfo) session() rigSession {
+	return rigSession{name: rigSessionName(r.Path), b: backendNamed(r.Backend)}
 }
 
 // manifestRepos flattens a manifest's repo table to its "owner/repo" slugs,
@@ -523,7 +533,7 @@ func listRigs() ([]rigInfo, error) {
 			ID: m.ID, Slug: e.Name(), Title: m.Title, Kind: m.Kind,
 			Tracker: m.Tracker, TrackerID: m.TrackerID, TrackerURL: m.TrackerURL,
 			Path: base, Created: created, LastTouched: touched, Parked: m.Parked,
-			Repos: manifestRepos(m), Building: m.BuildingRepo,
+			Repos: manifestRepos(m), Building: m.BuildingRepo, Backend: m.Backend,
 		})
 	}
 	sort.Slice(rigs, func(i, j int) bool { return rigs[i].Created.Before(rigs[j].Created) })

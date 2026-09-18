@@ -144,7 +144,7 @@ func runProject(args []string) error {
 		return err
 	}
 	m := manifest{
-		ID: rigID, Title: project.Name, Kind: "project", Agent: string(pick.kind), Backend: backend.Name(),
+		ID: rigID, Title: project.Name, Kind: "project", Agent: string(pick.kind), Backend: preferredBackend.Name(),
 		Tracker: "linear", TrackerID: project.ID, TrackerURL: project.URL,
 	}
 	if err := createBasedir(basedir, m); err != nil {
@@ -153,7 +153,8 @@ func runProject(args []string) error {
 	if err := writeRigAgentInstructions(basedir, m); err != nil {
 		return fmt.Errorf("writing project rig instructions: %w", err)
 	}
-	session, err := spawnProjectSession(basedir, sessionSpec{
+	rs := sessionFor(basedir, m)
+	err = spawnProjectSession(rs, basedir, sessionSpec{
 		agent:  pick.kind,
 		prompt: projectKickoff(project.Name),
 	})
@@ -161,7 +162,7 @@ func runProject(args []string) error {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "rig: project %s — %s\n", project.Name, basedir)
-	return attachOrReport(session)
+	return rs.attach()
 }
 
 func projectKickoff(name string) string {

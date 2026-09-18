@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"github.com/phinze/rig/internal/mux"
+	"github.com/phinze/rig/internal/mux/tmux"
 	"os"
 	"path/filepath"
 	"slices"
@@ -20,7 +21,7 @@ func TestRadarActionFailureStaysInCurrentModel(t *testing.T) {
 		filter:        "shell",
 		cursor:        0,
 		actionPending: true,
-		sessions:      []rigStatus{{bare: true, session: "shell", Title: "shell"}},
+		sessions:      []rigStatus{{bare: true, session: sess("shell"), Title: "shell"}},
 	}
 	updated, cmd := m.Update(radarActionMsg{err: wantErr})
 	m = updated.(radarModel)
@@ -36,14 +37,14 @@ func TestRadarActionFailureStaysInCurrentModel(t *testing.T) {
 }
 
 func TestRadarActionSuccessQuitsForFinalSwitch(t *testing.T) {
-	m := radarModel{sessions: []rigStatus{{bare: true, session: "shell", Title: "shell"}}}
+	m := radarModel{sessions: []rigStatus{{bare: true, session: sess("shell"), Title: "shell"}}}
 	m, cmd := m.handleKey("enter")
 	if cmd == nil || !m.actionPending || m.chosen != nil {
 		t.Fatalf("enter = pending:%v chosen:%v cmd:%v", m.actionPending, m.chosen, cmd != nil)
 	}
 	updated, quit := m.Update(cmd())
 	m = updated.(radarModel)
-	if quit == nil || m.actionPending || m.chosen == nil || m.chosen.session != "shell" {
+	if quit == nil || m.actionPending || m.chosen == nil || m.chosen.session.name != "shell" {
 		t.Fatalf("success = pending:%v chosen:%v quit:%v", m.actionPending, m.chosen, quit != nil)
 	}
 }
@@ -78,14 +79,14 @@ func TestBoardRowsMRU(t *testing.T) {
 			{Slug: "parked", Path: "/w/parked", Created: time.Unix(300, 0)}, // recency 300 (created)
 		},
 		sessions: []rigStatus{
-			{bare: true, session: "sess-old", Created: time.Unix(100, 0)}, // recency 100 (attach)
+			{bare: true, session: sess("sess-old"), Created: time.Unix(100, 0)}, // recency 100 (attach)
 		},
 	}
 
 	var got []string
 	for _, s := range m.boardRows() {
 		if s.bare {
-			got = append(got, s.session)
+			got = append(got, s.session.name)
 		} else {
 			got = append(got, s.Slug)
 		}
@@ -108,11 +109,11 @@ func TestRadarCurrentBareSessionIsContextNotDestination(t *testing.T) {
 			{Name: "newer", Path: "/home/me/newer", LastAttached: 200},
 		},
 	})
-	if m.currentRow == nil || !m.currentRow.bare || m.currentRow.session != "here" {
+	if m.currentRow == nil || !m.currentRow.bare || m.currentRow.session.name != "here" {
 		t.Fatalf("current row = %+v, want bare session here", m.currentRow)
 	}
 	rows := m.rows()
-	if len(rows) != 2 || rows[0].session != "newer" || rows[1].session != "older" {
+	if len(rows) != 2 || rows[0].session.name != "newer" || rows[1].session.name != "older" {
 		t.Fatalf("destinations = %+v, want newer then older", rows)
 	}
 	if m.cursor != 0 {
@@ -206,7 +207,7 @@ func TestRadarParentSections(t *testing.T) {
 			"changes":  {{prInfo: prInfo{State: "OPEN", Review: "CHANGES_REQUESTED"}}},
 		},
 		inflight: []rigStatus{{Slug: "live", Title: "live"}},
-		sessions: []rigStatus{{bare: true, session: "shell", Title: "shell"}},
+		sessions: []rigStatus{{bare: true, session: sess("shell"), Title: "shell"}},
 		parked: []rigStatus{
 			{Slug: "waiting", Parked: true, Created: time.Unix(1, 0), LastTouched: time.Unix(30, 0), PRs: []rigPR{{prInfo: prInfo{State: "OPEN"}}}},
 			{Slug: "approved", Parked: true, Created: time.Unix(2, 0), LastTouched: time.Unix(20, 0), PRs: []rigPR{{prInfo: prInfo{State: "OPEN", Review: "APPROVED"}}}},
@@ -482,8 +483,8 @@ func TestRankedRowsOrder(t *testing.T) {
 	if len(rows) != 2 {
 		t.Fatalf("rows = %d, want 2", len(rows))
 	}
-	if rows[0].session != "rig" {
-		t.Errorf("best match = %q, want rig", rows[0].session)
+	if rows[0].session.name != "rig" {
+		t.Errorf("best match = %q, want rig", rows[0].session.name)
 	}
 	if m.cursor != 0 {
 		t.Errorf("cursor = %d, want 0 (snapped to best)", m.cursor)
@@ -497,12 +498,12 @@ func TestRankedRowsOrder(t *testing.T) {
 // searched by directory instead of the task text the board actually shows.
 func TestRankByAgentContext(t *testing.T) {
 	nix := rigStatus{
-		bare: true, session: "~/src/github.com/phinze/nix-config",
+		bare: true, session: sess("~/src/github.com/phinze/nix-config"),
 		Title:  "~/src/github.com/phinze/nix-config",
 		agents: []agentChild{{Context: "Evaluate UPS options for homelab rack"}},
 	}
 	media := rigStatus{
-		bare: true, session: "~/src/github.com/phinze/media-stuff",
+		bare: true, session: sess("~/src/github.com/phinze/media-stuff"),
 		Title: "~/src/github.com/phinze/media-stuff",
 	}
 	// Sanity: the decoy really does match "ups" on its path alone, so the win
@@ -565,7 +566,7 @@ func TestRankByRepo(t *testing.T) {
 // its haystack matches on both the path-title and the raw session name.
 func TestRadarBareSession(t *testing.T) {
 	s := bareSession(mux.Session{Name: "~-src-rig", Path: "/home/me/src/rig", LastAttached: 42}, "/home/me")
-	if !s.bare || s.session != "~-src-rig" {
+	if !s.bare || s.session.name != "~-src-rig" {
 		t.Fatalf("bareSession identity = %+v", s)
 	}
 	if s.Title != "~/src/rig" {
@@ -762,13 +763,13 @@ func TestRadarNewRigSuccessBecomesDestination(t *testing.T) {
 	m := radarModel{}
 	m, _ = m.handleKey("ctrl+n")
 	updated, cmd := m.Update(newRigCreatedMsg{result: newRigResult{
-		ID: "new-rig", Basedir: "/work/new-rig", Session: "~/workspaces/new-rig",
+		ID: "new-rig", Basedir: "/work/new-rig", Session: sess("~/workspaces/new-rig"),
 	}})
 	m = updated.(radarModel)
 	if cmd == nil || m.newRig != nil || m.chosen == nil {
 		t.Fatalf("creation did not finish radar: wizard=%v chosen=%+v cmd=%v", m.newRig != nil, m.chosen, cmd != nil)
 	}
-	if !m.chosen.bare || m.chosen.session != "~/workspaces/new-rig" {
+	if !m.chosen.bare || m.chosen.session.name != "~/workspaces/new-rig" {
 		t.Fatalf("created destination = %+v", *m.chosen)
 	}
 }
@@ -819,7 +820,7 @@ func TestRadarParkToggleUsesChildRigIdentity(t *testing.T) {
 }
 
 func TestRadarParkToggleRejectsBareSession(t *testing.T) {
-	m := radarModel{sessions: []rigStatus{{bare: true, session: "shell", Title: "shell"}}}
+	m := radarModel{sessions: []rigStatus{{bare: true, session: sess("shell"), Title: "shell"}}}
 	m, cmd := m.handleKey("ctrl+p")
 	if cmd != nil || m.actionErr == nil || !strings.Contains(m.actionErr.Error(), "cannot be parked") {
 		t.Fatalf("bare-session toggle = err:%v cmd:%v", m.actionErr, cmd != nil)
@@ -874,7 +875,7 @@ func TestDisplayItemsSingleRigAgent(t *testing.T) {
 		t.Errorf("activity = %q, want the agent's title carried verbatim", items[1].row.activity)
 	}
 	rows := m.rows()
-	if len(rows) != 1 || !rows[0].child || rows[0].session != "s:0.1" || rows[0].Slug != "a" {
+	if len(rows) != 1 || !rows[0].child || rows[0].session.name != "s:0.1" || rows[0].Slug != "a" {
 		t.Fatalf("selectable row = %+v, want exact child target with rig metadata", rows)
 	}
 
@@ -906,7 +907,7 @@ func TestDisplayItemsChildren(t *testing.T) {
 			{Window: "runtime", Target: "s:0", Context: "Plan the saga"},
 			{Window: "rfd", Target: "s:1", Context: "Draft the RFD"},
 		}}},
-		sessions: []rigStatus{{bare: true, session: "meet", Title: "~/src/meet", agents: []agentChild{
+		sessions: []rigStatus{{bare: true, session: sess("meet"), Title: "~/src/meet", agents: []agentChild{
 			{Window: "claude", Target: "meet:0", Context: "Replace emoji"},
 		}}},
 	}
@@ -948,13 +949,13 @@ func TestDisplayItemsChildren(t *testing.T) {
 	if rowKey(rows[0]) == rowKey(rows[1]) {
 		t.Error("sibling children share a rowKey")
 	}
-	if rows[0].session != "s:0" {
-		t.Errorf("child switch target = %q, want s:0", rows[0].session)
+	if rows[0].session.name != "s:0" {
+		t.Errorf("child switch target = %q, want s:0", rows[0].session.name)
 	}
 	if rows[0].Slug != "a" {
 		t.Errorf("child lost parent rig identity: %+v", rows[0])
 	}
-	if !rows[2].bare || rows[2].session != "meet" || !rows[3].child {
+	if !rows[2].bare || rows[2].session.name != "meet" || !rows[3].child {
 		t.Errorf("bare session choices = %+v, want parent then lone child", rows[2:])
 	}
 
@@ -987,7 +988,7 @@ func mouseBoard() radarModel {
 			{Slug: "a", ID: "A", Title: "aa", agents: []agentChild{{Window: "w", Target: "a:0", Context: "doing"}}},
 			{Slug: "b", ID: "B", Title: "bb"},
 		},
-		sessions: []rigStatus{{bare: true, session: "s", Title: "~/s"}},
+		sessions: []rigStatus{{bare: true, session: sess("s"), Title: "~/s"}},
 	}
 }
 
@@ -1063,7 +1064,7 @@ func TestBoardLinesSkipMultiAgentParent(t *testing.T) {
 			{Target: "a:0.0", Context: "one"},
 			{Target: "a:1.0", Context: "two"},
 		}}},
-		sessions: []rigStatus{{bare: true, session: "s", Title: "~/s"}},
+		sessions: []rigStatus{{bare: true, session: sess("s"), Title: "~/s"}},
 	}
 
 	lines := m.boardLines()
@@ -1115,7 +1116,7 @@ func TestRadarMouse(t *testing.T) {
 	}
 	nm, quit := m.Update(cmd())
 	m = nm.(radarModel)
-	if quit == nil || m.chosen == nil || m.chosen.session != "s" {
+	if quit == nil || m.chosen == nil || m.chosen.session.name != "s" {
 		t.Fatalf("prepared click: chosen=%v quit=%v, want session", m.chosen, quit != nil)
 	}
 
@@ -1500,7 +1501,7 @@ func TestRadarKindMarksTheLeftEdge(t *testing.T) {
 }
 
 func TestRadarIDCellSkipsBareAndTombstones(t *testing.T) {
-	if cell := newRadarIDCell(rigStatus{bare: true, session: "shell", Title: "shell"}); !cell.empty() {
+	if cell := newRadarIDCell(rigStatus{bare: true, session: sess("shell"), Title: "shell"}); !cell.empty() {
 		t.Errorf("bare session drew an id cell: %q", cell.plain())
 	}
 	stone := rigStatus{ID: "mir-1755", Title: "Forced server shutdown", stone: &tombstone{ID: "mir-1755"}}
@@ -1698,7 +1699,7 @@ func TestRadarLeaveParksCurrentAfterPick(t *testing.T) {
 		t.Fatalf("failed pick applied leaving: leave=%q origin=%q chosen=%v", m.leave, m.leaveOrigin, m.chosen)
 	}
 
-	updated, quit := m.Update(radarActionMsg{destination: rigStatus{Slug: "a", Path: "/work/a", session: "s"}})
+	updated, quit := m.Update(radarActionMsg{destination: rigStatus{Slug: "a", Path: "/work/a", session: sess("s")}})
 	m = updated.(radarModel)
 	if quit == nil || m.chosen == nil || m.chosen.Slug != "a" {
 		t.Fatalf("pick did not finish radar: chosen=%+v quit=%v", m.chosen, quit != nil)
@@ -1744,7 +1745,7 @@ func TestRadarLeaveDownIsGatedBeforeItArms(t *testing.T) {
 	if !strings.Contains(m.leavingLine(), "tearing down MIR-9") {
 		t.Fatalf("banner = %q, want the armed verb", m.leavingLine())
 	}
-	updated, _ = m.Update(radarActionMsg{destination: rigStatus{Slug: "a", Path: "/work/a", session: "s"}})
+	updated, _ = m.Update(radarActionMsg{destination: rigStatus{Slug: "a", Path: "/work/a", session: sess("s")}})
 	m = updated.(radarModel)
 	if m.leave != leaveDown || m.leaveOrigin != "/work/cur" {
 		t.Fatalf("leave = %q origin = %q, want down of the hosting rig", m.leave, m.leaveOrigin)
@@ -1778,7 +1779,7 @@ func TestRadarLeaveHonorsNewRig(t *testing.T) {
 	m, _ = m.handleKey("p")
 	m, _ = m.handleKey("ctrl+n")
 	updated, _ := m.Update(newRigCreatedMsg{result: newRigResult{
-		ID: "new-rig", Basedir: "/work/new-rig", Session: "~/workspaces/new-rig",
+		ID: "new-rig", Basedir: "/work/new-rig", Session: sess("~/workspaces/new-rig"),
 	}})
 	m = updated.(radarModel)
 	if m.chosen == nil || m.leaveOrigin != "/work/cur" || m.leave != leavePark {
@@ -1813,14 +1814,14 @@ func TestRadarLeaveMenuCapturesKeysAndCancels(t *testing.T) {
 		t.Fatal("ctrl-x on an armed verb did not disarm")
 	}
 	// A plain Enter with nothing armed applies nothing.
-	updated, _ := m.Update(radarActionMsg{destination: rigStatus{Slug: "a", Path: "/work/a", session: "s"}})
+	updated, _ := m.Update(radarActionMsg{destination: rigStatus{Slug: "a", Path: "/work/a", session: sess("s")}})
 	if m = updated.(radarModel); m.leaveOrigin != "" || m.leave != "" {
 		t.Fatalf("unarmed pick set leave=%q origin=%q", m.leave, m.leaveOrigin)
 	}
 }
 
 func TestRadarLeaveRefusesNonRigCurrent(t *testing.T) {
-	bare := rigStatus{bare: true, session: "shell", Title: "shell"}
+	bare := rigStatus{bare: true, session: sess("shell"), Title: "shell"}
 	m := radarModel{currentRow: &bare}
 	m, _ = m.handleKey("ctrl+x")
 	if m.leaveMenu || m.actionErr == nil || !strings.Contains(m.actionErr.Error(), "cannot be parked") {
@@ -1844,4 +1845,10 @@ func TestRadarLeaveBannerCountsAsChrome(t *testing.T) {
 	if menu != before+2 || armed != before+2 {
 		t.Fatalf("prompt rows %d -> %d (menu) -> %d (armed), want the banner and its blank counted in both", before, menu, armed)
 	}
+}
+
+// sess is a tmux-hosted session for a test row, which is every row until a
+// second backend has a test of its own.
+func sess(name string) rigSession {
+	return rigSession{name: name, b: tmux.Backend{}}
 }

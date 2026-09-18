@@ -133,9 +133,10 @@ func radarPick(home string) (*radarChoice, error) {
 	if !stdinIsTTY() {
 		return nil, fmt.Errorf("radar is a TUI — run it from a terminal (or tmux popup)")
 	}
+	_, current := currentSession()
 	m := radarModel{
 		home:      home,
-		current:   backend.CurrentSession(),
+		current:   current,
 		prs:       map[string][]rigPR{},
 		fetchedAt: map[string]time.Time{},
 		pending:   map[string]bool{},
@@ -209,7 +210,7 @@ func radarPrepare(s rigStatus) (rigStatus, error) {
 		}
 		return rigStatus{}, err
 	}
-	s.session = rigSessionName(s.Path)
+	s.session = rigSession{name: rigSessionName(s.Path), b: backendNamed(s.Backend)}
 	return s, nil
 }
 
@@ -217,10 +218,10 @@ func radarPrepare(s rigStatus) (rigStatus, error) {
 // destination, so after Bubble Tea restores the terminal only the tmux switch
 // remains.
 func radarFinish(s rigStatus) error {
-	if s.session == "" {
-		return fmt.Errorf("radar destination has no tmux target")
+	if s.session.name == "" {
+		return fmt.Errorf("radar destination has no session to attach")
 	}
-	return attachOrReport(s.session)
+	return s.session.attach()
 }
 
 // radarModel is the Bubble Tea model. The framework layer stays thin: state is
@@ -315,7 +316,7 @@ func radarScanNow(home string) radarScanMsg {
 	// One list-sessions feeds both the in-flight attach-order map and the bare
 	// session rows, so the universal picker costs the same tmux round-trip the
 	// board already paid.
-	sessions := backend.Sessions()
+	sessions := allSessions()
 	attached := make(map[string]int64, len(sessions))
 	for _, s := range sessions {
 		attached[s.Name] = s.LastAttached
@@ -496,7 +497,7 @@ func (m radarModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if wizard.done {
 				m.newRig = nil
-				if wizard.result.Session != "" {
+				if wizard.result.Session.name != "" {
 					m.choose(rigStatus{bare: true, session: wizard.result.Session})
 					return m, tea.Quit
 				}
@@ -900,7 +901,7 @@ func (m *radarModel) apply(scan radarScanMsg) {
 	rigSession := func(s rigStatus) string { return rigSessionName(s.Path) }
 	attachAgents(inflight, rigSession)
 	attachAgents(parked, rigSession)
-	attachAgents(sessions, func(s rigStatus) string { return s.session })
+	attachAgents(sessions, func(s rigStatus) string { return s.session.name })
 	if currentRow != nil {
 		currentRow.agents = scan.agents[m.current]
 	}
@@ -964,7 +965,7 @@ func bareSession(ts mux.Session, home string) rigStatus {
 		Path:    ts.Path,
 		Created: created,
 		bare:    true,
-		session: ts.Name,
+		session: rigSession{name: ts.Name, b: backendNamed(ts.Backend)},
 	}
 }
 
@@ -984,9 +985,9 @@ func tildePath(path, home string) string {
 func rowKey(s rigStatus) string {
 	switch {
 	case s.child:
-		return "child:" + s.session // session holds the window target
+		return "child:" + s.session.name // session holds the window target
 	case s.bare:
-		return "sess:" + s.session
+		return "sess:" + s.session.name
 	default:
 		return "slug:" + s.Slug
 	}
@@ -1088,7 +1089,7 @@ func (m radarModel) displayItems() []radarLine {
 			display.activity = strings.TrimSpace(c.Context)
 			action := display
 			action.child = true
-			action.session = c.Target
+			action.session = rigSession{name: c.Target, b: backendNamed(c.Backend)}
 			items = append(items, radarLine{row: display, action: &action})
 			return
 		}
@@ -1115,10 +1116,11 @@ func (m radarModel) displayItems() []radarLine {
 			if c.Working {
 				agent = "working"
 			}
-			display := rigStatus{child: true, session: c.Target, Title: title, childKey: key, Agent: agent}
+			target := rigSession{name: c.Target, b: backendNamed(c.Backend)}
+			display := rigStatus{child: true, session: target, Title: title, childKey: key, Agent: agent}
 			action := p
 			action.child = true
-			action.session = c.Target
+			action.session = target
 			action.Title = title
 			action.childKey = key
 			action.Agent = agent
@@ -1212,7 +1214,7 @@ func (m radarModel) parentSections() []radarSection {
 func (m radarModel) recency(s rigStatus) int64 {
 	var r int64
 	if s.bare {
-		r = m.attached[s.session]
+		r = m.attached[s.session.name]
 	} else {
 		r = m.attached[rigSessionName(s.Path)]
 	}
@@ -1373,7 +1375,7 @@ type hayField struct {
 func radarHayFields(s rigStatus) []hayField {
 	var fields []hayField
 	if s.bare {
-		fields = []hayField{{s.Title, "title"}, {s.session, ""}}
+		fields = []hayField{{s.Title, "title"}, {s.session.name, ""}}
 	} else {
 		fields = []hayField{{s.ID, "id"}, {s.Title, "title"}}
 	}

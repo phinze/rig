@@ -1,9 +1,7 @@
 package main
 
 import (
-	"errors"
 	"fmt"
-	"github.com/phinze/rig/internal/mux"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -200,91 +198,72 @@ type sessionSpec struct {
 	command string
 }
 
-// spawnSession creates the rig's tmux session (recto right, agent left) if it
-// doesn't already exist, and returns the session name. The session is named
+// spawnSession creates the rig's session (recto right, agent left) on the
+// backend the rig records, if it doesn't already exist. The session is named
 // after the basedir (session-wizard convention) even though the panes start in
 // the primary repo dir: the basedir is the rig's unit, and multi-repo rigs
 // still get one session. Idempotent: an existing session is left untouched.
-func spawnSession(basedir, paneCwd string, sess sessionSpec) (string, error) {
-	session := rigSessionName(basedir)
-	if backend.HasSession(session) {
-		return session, nil
+func spawnSession(rs rigSession, paneCwd string, sess sessionSpec) error {
+	if rs.live() {
+		return nil
 	}
 	repo := sess.repo
 	if repo == "" {
 		repo = filepath.Base(paneCwd)
 	}
-	agentPane, mainWindow, err := backend.NewSession(session, mainWindowName(repo), paneCwd)
+	agentPane, mainWindow, err := rs.b.NewSession(rs.name, mainWindowName(repo), paneCwd)
 	if err != nil {
-		return "", fmt.Errorf("tmux new-session: %w", err)
+		return fmt.Errorf("tmux new-session: %w", err)
 	}
-	if err := markRigMainWindow(mainWindow, repo); err != nil {
-		return "", fmt.Errorf("marking main window: %w", err)
+	if err := rs.markMainWindow(mainWindow, repo); err != nil {
+		return fmt.Errorf("marking main window: %w", err)
 	}
-	if err := markRigPane(agentPane, rigPaneAgent, repo); err != nil {
-		return "", fmt.Errorf("marking agent pane: %w", err)
+	if err := rs.markPane(agentPane, rigPaneAgent, repo); err != nil {
+		return fmt.Errorf("marking agent pane: %w", err)
 	}
-	rectoPane, err := backend.SplitCommand(agentPane, paneCwd, sess.rectoCmd)
+	rectoPane, err := rs.b.SplitCommand(agentPane, paneCwd, sess.rectoCmd)
 	if err != nil {
-		return "", fmt.Errorf("tmux split-window: %w", err)
+		return fmt.Errorf("tmux split-window: %w", err)
 	}
-	if err := markRigPane(rectoPane, rigPaneRecto, repo); err != nil {
-		return "", fmt.Errorf("marking recto pane: %w", err)
+	if err := rs.markPane(rectoPane, rigPaneRecto, repo); err != nil {
+		return fmt.Errorf("marking recto pane: %w", err)
 	}
-	if err := backend.SelectPane(agentPane); err != nil {
-		return "", fmt.Errorf("tmux select-pane: %w", err)
+	if err := rs.b.SelectPane(agentPane); err != nil {
+		return fmt.Errorf("tmux select-pane: %w", err)
 	}
 	agentLine := sess.command
 	if agentLine == "" {
 		agentLine = sess.agent.launchCommand(sess.prompt)
 	}
-	if err := backend.SendKeys(agentPane, agentLine); err != nil {
-		return "", fmt.Errorf("tmux send-keys: %w", err)
+	if err := rs.b.SendKeys(agentPane, agentLine); err != nil {
+		return fmt.Errorf("tmux send-keys: %w", err)
 	}
-	return session, nil
+	return nil
 }
 
 // spawnProjectSession creates the repositoryless control-plane variant of a
 // rig session. Its agent starts at the basedir root and there is deliberately
 // no Recto split: a project rig observes task rigs rather than owning a diff.
-func spawnProjectSession(basedir string, sess sessionSpec) (string, error) {
-	session := rigSessionName(basedir)
-	if backend.HasSession(session) {
-		return session, nil
+func spawnProjectSession(rs rigSession, basedir string, sess sessionSpec) error {
+	if rs.live() {
+		return nil
 	}
-	agentPane, mainWindow, err := backend.NewSession(session, mainWindowName(""), basedir)
+	agentPane, mainWindow, err := rs.b.NewSession(rs.name, mainWindowName(""), basedir)
 	if err != nil {
-		return "", fmt.Errorf("tmux new-session: %w", err)
+		return fmt.Errorf("tmux new-session: %w", err)
 	}
-	if err := markRigMainWindow(mainWindow, ""); err != nil {
-		return "", fmt.Errorf("marking main window: %w", err)
+	if err := rs.markMainWindow(mainWindow, ""); err != nil {
+		return fmt.Errorf("marking main window: %w", err)
 	}
-	if err := markRigPane(agentPane, rigPaneAgent, ""); err != nil {
-		return "", fmt.Errorf("marking agent pane: %w", err)
+	if err := rs.markPane(agentPane, rigPaneAgent, ""); err != nil {
+		return fmt.Errorf("marking agent pane: %w", err)
 	}
 	agentLine := sess.command
 	if agentLine == "" {
 		agentLine = sess.agent.launchProjectCommand(sess.prompt)
 	}
-	if err := backend.SendKeys(agentPane, agentLine); err != nil {
-		return "", fmt.Errorf("tmux send-keys: %w", err)
-	}
-	return session, nil
-}
-
-// attachOrReport attaches to the session when stdin is a tty, otherwise prints
-// how to attach manually (e.g. when invoked from a script or test).
-func attachOrReport(session string) error {
-	if !stdinIsTTY() {
-		fmt.Fprintf(os.Stderr, "rig: not a tty — session ready as %q, attach manually\n", session)
-		return nil
-	}
-	if err := backend.Attach(session); err != nil {
-		if errors.Is(err, mux.ErrNoClientSwitch) {
-			fmt.Fprintf(os.Stderr, "rig: session %q is ready, but %v — switch to it by hand\n", session, err)
-			return nil
-		}
-		return err
+	if err := rs.b.SendKeys(agentPane, agentLine); err != nil {
+		return fmt.Errorf("tmux send-keys: %w", err)
 	}
 	return nil
 }

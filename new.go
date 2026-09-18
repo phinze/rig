@@ -46,7 +46,7 @@ func runNew(args []string) error {
 			return err
 		}
 		fmt.Fprintf(os.Stderr, "rig: new %s — %s\n", result.ID, result.Basedir)
-		return attachOrReport(result.Session)
+		return result.Session.attach()
 	}
 
 	kickoff := strings.TrimSpace(strings.Join(args, " "))
@@ -58,14 +58,14 @@ func runNew(args []string) error {
 	if err != nil {
 		return err
 	}
-	if final.cancelled || final.result.Session == "" {
+	if final.cancelled || final.result.Session.name == "" {
 		if final.err != nil {
 			return final.err
 		}
 		return nil
 	}
 	fmt.Fprintf(os.Stderr, "rig: new %s — %s\n", final.result.ID, final.result.Basedir)
-	return attachOrReport(final.result.Session)
+	return final.result.Session.attach()
 }
 
 // newRigTarget is the stable identity derived from the kickoff. Preparing it
@@ -80,7 +80,7 @@ type newRigTarget struct {
 type newRigResult struct {
 	ID      string
 	Basedir string
-	Session string
+	Session rigSession
 }
 
 func prepareNewRig(kickoff string) (newRigTarget, error) {
@@ -122,7 +122,7 @@ func createNewRig(target newRigTarget, context string, repo repoRef, agent agent
 	}
 
 	m := manifest{
-		ID: target.ID, Title: target.Kickoff, Agent: string(agent), MainRepo: repo.Name, Backend: backend.Name(),
+		ID: target.ID, Title: target.Kickoff, Agent: string(agent), MainRepo: repo.Name, Backend: preferredBackend.Name(),
 		BuildingRepo: repo.nameWithOwner(),
 	}
 	if err := createBasedir(target.Basedir, m); err != nil {
@@ -149,11 +149,11 @@ func createNewRig(target newRigTarget, context string, repo repoRef, agent agent
 		agent:    agent,
 		prompt:   kickoffPrompt(target.Kickoff, context != ""),
 	}
-	session, err := spawnSession(target.Basedir, repoDest, sess)
-	if err != nil {
+	rs := sessionFor(target.Basedir, m)
+	if err := spawnSession(rs, repoDest, sess); err != nil {
 		return newRigResult{}, err
 	}
-	return newRigResult{ID: target.ID, Basedir: target.Basedir, Session: session}, nil
+	return newRigResult{ID: target.ID, Basedir: target.Basedir, Session: rs}, nil
 }
 
 // kickoffPrompt is the opening message the agent wakes up to. Pasted context

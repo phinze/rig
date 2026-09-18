@@ -56,8 +56,8 @@ func runDown(args []string) error {
 		return err
 	}
 
-	session := rigSessionName(basedir)
-	inDoomed := insideSession(session)
+	rs := sessionFor(basedir, m)
+	inDoomed := insideSession(rs)
 
 	if inDoomed && stdinIsTTY() {
 		// The picker can sit open indefinitely. Do not make that think time an

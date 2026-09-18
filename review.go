@@ -305,7 +305,7 @@ func reviewPickupPR(pr *prRef, meta prMeta, pick *agentPick) error {
 	m := manifest{
 		ID: rigID, Title: meta.Title, Kind: "review",
 		ReviewPRs: map[string]string{pr.Repo: pr.URL()},
-		Agent:     string(pick.kind), Backend: backend.Name(), MainRepo: pr.Repo,
+		Agent:     string(pick.kind), Backend: preferredBackend.Name(), MainRepo: pr.Repo,
 		BuildingRepo: pr.Owner + "/" + pr.Repo,
 	}
 	if err := createBasedir(basedir, m); err != nil {
@@ -327,13 +327,13 @@ func reviewPickupPR(pr *prRef, meta prMeta, pick *agentPick) error {
 			pr.Number, meta.Title,
 		),
 	}
-	session, err := spawnSession(basedir, repoDest, sess)
-	if err != nil {
+	rs := sessionFor(basedir, m)
+	if err := spawnSession(rs, repoDest, sess); err != nil {
 		return err
 	}
 
 	fmt.Fprintf(os.Stderr, "rig: review %s/%s#%d — %s\n", pr.Owner, pr.Repo, pr.Number, basedir)
-	return attachOrReport(session)
+	return rs.attach()
 }
 
 // prRigIdentity derives an authoring pickup's rig id and basedir slug. Linear's
@@ -406,7 +406,7 @@ func authorPickupPR(pr *prRef, meta prMeta, pick *agentPick) error {
 	}
 
 	m := manifest{
-		ID: rigID, Title: meta.Title, Agent: string(pick.kind), Backend: backend.Name(), MainRepo: pr.Repo,
+		ID: rigID, Title: meta.Title, Agent: string(pick.kind), Backend: preferredBackend.Name(), MainRepo: pr.Repo,
 		BuildingRepo: pr.Owner + "/" + pr.Repo,
 	} // kind "" = authoring
 	if tk, ok := primaryLinkedLinearTask(linked); ok {
@@ -436,13 +436,13 @@ func authorPickupPR(pr *prRef, meta prMeta, pick *agentPick) error {
 			pr.Number, meta.Title,
 		),
 	}
-	session, err := spawnSession(basedir, repoDest, sess)
-	if err != nil {
+	rs := sessionFor(basedir, m)
+	if err := spawnSession(rs, repoDest, sess); err != nil {
 		return err
 	}
 
 	fmt.Fprintf(os.Stderr, "rig: up %s/%s#%d — %s\n", pr.Owner, pr.Repo, pr.Number, basedir)
-	return attachOrReport(session)
+	return rs.attach()
 }
 
 type prRef struct {

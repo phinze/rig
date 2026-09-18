@@ -26,8 +26,11 @@ func runPark(args []string) error {
 	if err != nil {
 		return err
 	}
-	session := rigSessionName(basedir)
-	proceed, err := sessionExitHandoff(insideSession(session))
+	m, err := readManifest(basedir)
+	if err != nil {
+		return fmt.Errorf("reading manifest: %w", err)
+	}
+	proceed, err := sessionExitHandoff(insideSession(sessionFor(basedir, m)))
 	if err != nil {
 		return err
 	}
@@ -82,13 +85,13 @@ func setRigParked(basedir string, parked, nonblocking bool, afterWrite func(mani
 		afterWrite(m)
 	}
 
-	session := rigSessionName(basedir)
+	rs := sessionFor(basedir, m)
 	if parked {
 		// Kill last so a caller running inside this session gets the manifest and
 		// any announcement safely onto disk/the terminal first.
-		if backend.HasSession(session) {
-			if err := backend.KillSession(session); err != nil {
-				return fmt.Errorf("tmux kill-session %s: %w", session, err)
+		if rs.live() {
+			if err := rs.b.KillSession(rs.name); err != nil {
+				return fmt.Errorf("killing session %s: %w", rs.name, err)
 			}
 		}
 		return nil

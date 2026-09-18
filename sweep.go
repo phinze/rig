@@ -475,7 +475,7 @@ func planSweep(rigs []rigInfo, statuses []rigStatus, home string, fetched map[st
 	}
 
 	now := time.Now()
-	current := backend.CurrentSession()
+	_, current := currentSession()
 	plans := make([]sweepPlan, 0, len(statuses))
 	for _, s := range statuses {
 		r, ok := byPath[s.Path]

@@ -69,9 +69,9 @@ func dispatchRig(r rigInfo, prompt string) error {
 		return fmt.Errorf("cannot dispatch a project overview rig")
 	}
 
-	session := rigSessionName(r.Path)
-	if backend.HasSession(session) {
-		panes, err := adoptLegacyRigPanes(session, r.Path, m)
+	rs := sessionFor(r.Path, m)
+	if rs.live() {
+		panes, err := adoptLegacyRigPanes(rs, r.Path, m)
 		if err != nil {
 			return fmt.Errorf("inspecting %s agent: %w", m.ID, err)
 		}

@@ -115,7 +115,7 @@ func runUp(args []string) error {
 	}
 
 	m := manifest{
-		ID: tk.rigID(), Title: tk.Title, Agent: string(pick.kind), MainRepo: repo.Name, Backend: backend.Name(),
+		ID: tk.rigID(), Title: tk.Title, Agent: string(pick.kind), MainRepo: repo.Name, Backend: preferredBackend.Name(),
 		Tracker: string(tk.source()), TrackerID: tk.Identifier, TrackerURL: tk.URL,
 		BuildingRepo: repo.nameWithOwner(),
 	}
@@ -156,13 +156,13 @@ func runUp(args []string) error {
 		agent:    pick.kind,
 		prompt:   pickupPrompt(tk, context != ""),
 	}
-	session, err := spawnSession(basedir, repoDest, sess)
-	if err != nil {
+	rs := sessionFor(basedir, m)
+	if err := spawnSession(rs, repoDest, sess); err != nil {
 		return err
 	}
 
 	fmt.Fprintf(os.Stderr, "rig: up %s — %s\n", tk.Identifier, basedir)
-	return attachOrReport(session)
+	return rs.attach()
 }
 
 // pickupPrompt is the opening message for an issue pickup. Each source names
@@ -330,5 +330,5 @@ func activateRig(r rigInfo) error {
 	}); err != nil {
 		return err
 	}
-	return attachOrReport(rigSessionName(r.Path))
+	return r.session().attach()
 }

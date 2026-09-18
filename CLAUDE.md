@@ -444,42 +444,51 @@ you don't get asked what you just said.
 
 ### The multiplexer backend
 
-Every command drives its multiplexer through `backend`, a package-level
-`mux.Backend` chosen once in `main` from the same ladder the agent uses:
-`RIG_BACKEND` for this shell, `rig config backend` for this user, then tmux.
-The seam is `internal/mux`, and it sits at rig's own vocabulary rather than
-tmux's verbs — `MarkPane(pane, agent, repo)`, `Panes(session)`,
-`NewCommandWindow`, `JoinPane`, `Attach` — so a caller never says "set a user
-option" and the backend decides how a mark survives. `internal/mux/tmux` keeps
-them as `@rig-*` options, and that detail lives nowhere else. Three things
-there are deliberate. `mux` does not know what an agent is: `AllPanes` hands
-back every pane with its command and title, and `agentChildren` in the root
-package decides which are agents and what they're doing, so a second backend
-never re-learns Claude's title glyph. `mux.SessionName` is a function rather
-than a backend method: a rig's session is the same string whichever
-multiplexer hosts it, which is what lets the manifest, the tombstone, and the
-teardown job stay backend-agnostic. And an unknown backend name is fatal at
-startup rather than a fallback to tmux, because `rig config backend` refuses
-to store one, so it can only arrive via `RIG_BACKEND`, and a typo that silently
-built the rig in the wrong multiplexer would be indistinguishable from the
-setting never having taken. `config` and `help` dispatch without resolving
-it, because `rig config backend --unset` is how you repair a stored name this
-binary doesn't know, and it can't do that if it dies first.
+Rig drives its multiplexer through `internal/mux`, an interface at rig's own
+vocabulary rather than tmux's verbs — `MarkPane(pane, agent, repo)`,
+`Panes(session)`, `NewCommandWindow`, `JoinPane`, `Attach` — so a caller never
+says "set a user option" and the backend decides how a mark survives.
+`internal/mux/tmux` keeps them as `@rig-*` options, and that detail lives
+nowhere else. Three things there are deliberate. `mux` does not know what an
+agent is: `AllPanes` hands back every pane with its command and title, and
+`agentChildren` in the root package decides which are agents and what they're
+doing, so a second backend never re-learns Claude's title glyph.
+`mux.SessionName` is a function rather than a backend method: a rig's session
+is the same string whichever multiplexer hosts it, which is what lets the
+manifest, the tombstone, and the teardown job stay backend-agnostic. And an
+unknown backend name is fatal at startup rather than a fallback to tmux,
+because `rig config backend` refuses to store one, so it can only arrive via
+`RIG_BACKEND`, and a typo that silently built the rig in the wrong multiplexer
+would be indistinguishable from the setting never having taken. `config` and
+`help` dispatch without resolving it, because `rig config backend --unset` is
+how you repair a stored name this binary doesn't know, and it can't do that if
+it dies first.
 
-The preference decides only for a *new* rig. The manifest records `backend`
-(empty means tmux, exactly as an empty `agent` means Claude), the tombstone
-and teardown job carry it forward, and `rigBackend(m)` reads it back. That
-last part matters most on Linux, where the systemd teardown worker inherits
-none of the invoking shell's preferences and must not hand one multiplexer's
-endpoint to another. Today only the teardown path routes per rig; the commands
-that hold a manifest still drive the global, and moving them across is the
-first job of a second backend, when a mixed machine is something a test can
-build. A second review also caught `TMUX_PANE` leaking past the seam in
-resume's "am I in the seat I'm about to fill" check; that's `CurrentPane` now,
-next to `CurrentSession`, and the two env reads live in `internal/mux/tmux`.
-`Attach` names `mux.ErrNoClientSwitch` for a backend that can't move the
-user's client between sessions; `attachOrReport` turns it into a "switch by
-hand" line rather than a failed command.
+The backend is per rig, not per invocation. `preferredBackend`, picked once in
+`main` from the agent's ladder (`RIG_BACKEND`, then `rig config backend`, then
+tmux), decides only for a *new* rig; the manifest records `backend` (empty
+means tmux, exactly as an empty `agent` means Claude), the tombstone and
+teardown job carry it forward, and `sessionFor(basedir, m)` reads it back as a
+`rigSession`, the name and its backend as one value. Every command that holds
+a manifest holds one of those instead of a bare session string, because on a
+Mac hosting two multiplexers a name alone is ambiguous: this rig lives
+in tmux and the next one won't. The commands that list across the machine
+(radar, switch, ls) ask every backend in `backends` and union the answers,
+with `mux.Session` and `mux.Pane` each tagged by the backend that listed it so
+a row knows where Enter should go. The teardown job is the sharp case: the
+Linux systemd worker inherits none of the invoking shell's preferences and
+must not hand one multiplexer's endpoint to another, so it kills on the
+backend it recorded. A name the binary no longer knows (a downgrade) resolves
+to tmux via `backendNamed` rather than leaving the rig with no multiplexer;
+that's distinct from the typo case, which the config command refuses at write
+time. `backend_test.go` registers a fake backend to prove the routing, since
+one real multiplexer can't.
+
+A second review caught `TMUX_PANE` leaking past the seam in resume's "am I in
+the seat I'm about to fill" check; that's `CurrentPane` now, next to
+`CurrentSession`, and the two env reads live in `internal/mux/tmux`. `Attach`
+names `mux.ErrNoClientSwitch` for a backend that can't move the user's client
+between sessions; `attachOrReport` turns it into a "switch by hand" line rather than a failed command.
 
 The seam exists for a second multiplexer (see
 `memex/Projects/Ideas/rex-trial-tmux-profile.md` for that trial's notes,

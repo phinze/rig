@@ -33,7 +33,7 @@ func runSwitch(args []string) error {
 
 	// Drop the rig we're currently sitting in — you never switch to where you
 	// already are.
-	if cur := backend.CurrentSession(); cur != "" {
+	if _, cur := currentSession(); cur != "" {
 		kept := statuses[:0]
 		for _, s := range statuses {
 			if rigSessionName(s.Path) != cur {
@@ -78,11 +78,11 @@ func runSwitch(args []string) error {
 	if chosen == nil {
 		return nil
 	}
-	session, err := resumeRigRuntime(chosen.Path, false, false)
+	rs, err := resumeRigRuntime(chosen.Path, false, false)
 	if err != nil {
 		return err
 	}
-	return attachOrReport(session)
+	return rs.attach()
 }
 
 // pickRigStatus resolves a single rig from statuses. An arg substring-matches

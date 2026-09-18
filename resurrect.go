@@ -26,26 +26,26 @@ func runResurrect(args []string) error {
 	if len(args) != 1 || args[0] == "" {
 		return fmt.Errorf("usage: rig resurrect <rig-id>")
 	}
-	session, err := prepareResurrect(args[0], false, os.Stderr)
+	rs, err := prepareResurrect(args[0], false, os.Stderr)
 	if err != nil {
 		return err
 	}
-	return attachOrReport(session)
+	return rs.attach()
 }
 
 // prepareResurrect rebuilds a tombstoned rig without attaching to it. Radar
 // runs this inside its live Bubble Tea model and performs the final tmux switch
 // only after the TUI exits; the CLI passes stderr and attaches immediately.
-func prepareResurrect(id string, nonblocking bool, report io.Writer) (string, error) {
+func prepareResurrect(id string, nonblocking bool, report io.Writer) (rigSession, error) {
 	if report == nil {
 		report = io.Discard
 	}
 	t, err := findTombstone(id, time.Now())
 	if err != nil {
-		return "", err
+		return rigSession{}, err
 	}
 	if t == nil {
-		return "", fmt.Errorf("no tombstone for %q — nothing torn down in the last %s has that id (`rig history` lists what's left)",
+		return rigSession{}, fmt.Errorf("no tombstone for %q — nothing torn down in the last %s has that id (`rig history` lists what's left)",
 			id, tombstoneRetentionLabel())
 	}
 
@@ -57,15 +57,15 @@ func prepareResurrect(id string, nonblocking bool, report io.Writer) (string, er
 			if r.ID == t.ID {
 				fmt.Fprintf(report, "rig: %s is already up — switching instead\n", t.ID)
 				if err := setRigParked(r.Path, false, nonblocking, nil); err != nil {
-					return "", err
+					return rigSession{}, err
 				}
-				return rigSessionName(r.Path), nil
+				return r.session(), nil
 			}
 		}
 	}
 
 	if dirExists(t.Basedir) {
-		return "", fmt.Errorf("%s already exists; move it aside before resurrecting %s", t.Basedir, t.ID)
+		return rigSession{}, fmt.Errorf("%s already exists; move it aside before resurrecting %s", t.Basedir, t.ID)
 	}
 
 	m := manifest{
@@ -83,11 +83,11 @@ func prepareResurrect(id string, nonblocking bool, report io.Writer) (string, er
 		PRs:        t.PRs,
 	}
 	if err := createBasedir(t.Basedir, m); err != nil {
-		return "", err
+		return rigSession{}, err
 	}
 	if m.isProject() {
 		if err := writeRigAgentInstructions(t.Basedir, m); err != nil {
-			return "", err
+			return rigSession{}, err
 		}
 		agent, err := parseAgent(t.Agent)
 		if err != nil {
@@ -100,12 +100,12 @@ func prepareResurrect(id string, nonblocking bool, report io.Writer) (string, er
 			fmt.Fprintf(report, "rig: no session recorded for %s — rebuilding overview only\n", t.ID)
 			sess.prompt = fmt.Sprintf("This project overview rig (%s) was rebuilt from a tombstone. Start with `rig project status --format=json` and ask me for any missing context.", t.ID)
 		}
-		session, err := spawnProjectSession(t.Basedir, sess)
-		if err != nil {
-			return "", err
+		rs := sessionFor(t.Basedir, m)
+		if err := spawnProjectSession(rs, t.Basedir, sess); err != nil {
+			return rigSession{}, err
 		}
 		fmt.Fprintf(report, "rig: resurrected %s — %s\n", t.ID, t.Basedir)
-		return session, nil
+		return rs, nil
 	}
 
 	// Rebuild workspaces in a stable order so the primary repo (the one the
@@ -135,22 +135,22 @@ func prepareResurrect(id string, nonblocking bool, report io.Writer) (string, er
 		}
 		dest, err := addRepoWorkspace(t.Basedir, t.ID, repo, resolveStartRev(source, branch), branch)
 		if err != nil {
-			return "", fmt.Errorf("restoring %s: %w", sub, err)
+			return rigSession{}, fmt.Errorf("restoring %s: %w", sub, err)
 		}
 		if primary == "" {
 			primary = dest
 		}
 	}
 	if primary == "" {
-		return "", fmt.Errorf("no repos could be restored for %s (sources missing)", t.ID)
+		return rigSession{}, fmt.Errorf("no repos could be restored for %s (sources missing)", t.ID)
 	}
 	m, err = readManifest(t.Basedir)
 	if err != nil {
-		return "", err
+		return rigSession{}, err
 	}
 	m.MainRepo = filepath.Base(primary)
 	if err := writeManifest(t.Basedir, m); err != nil {
-		return "", err
+		return rigSession{}, err
 	}
 
 	agent, err := parseAgent(t.Agent)
@@ -172,9 +172,9 @@ func prepareResurrect(id string, nonblocking bool, report io.Writer) (string, er
 		sess.prompt = fmt.Sprintf("This rig (%s) was rebuilt from a tombstone after teardown; its previous agent session could not be recovered. Ask me for context before assuming any.", t.ID)
 	}
 
-	session, err := spawnSession(t.Basedir, primary, sess)
-	if err != nil {
-		return "", err
+	rs := sessionFor(t.Basedir, m)
+	if err := spawnSession(rs, primary, sess); err != nil {
+		return rigSession{}, err
 	}
 
 	fmt.Fprintf(report, "rig: resurrected %s — %s\n", t.ID, t.Basedir)
@@ -182,7 +182,7 @@ func prepareResurrect(id string, nonblocking bool, report io.Writer) (string, er
 		fmt.Fprintf(report, "rig: resuming %s session %s (uncommitted work from before teardown is not recoverable)\n",
 			t.Session.Agent, t.Session.ID)
 	}
-	return session, nil
+	return rs, nil
 }
 
 // runHistory implements `rig history`: what's died lately and what can still be

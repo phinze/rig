@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/phinze/rig/internal/mux"
-	"github.com/phinze/rig/internal/mux/tmux"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -57,16 +56,9 @@ type teardownJob struct {
 	path            string
 }
 
-// backend is the multiplexer this job's session lives in. A name this binary
-// no longer knows falls back to tmux rather than failing the job, since the
-// rest of teardown is idempotent and the session is the one step a retry can
-// only ever repeat.
+// backend is the multiplexer this job's session lives in.
 func (job *teardownJob) backend() mux.Backend {
-	b, err := backendByName(job.Backend)
-	if err != nil {
-		return tmux.Backend{}
-	}
-	return b
+	return backendNamed(job.Backend)
 }
 
 // supersededByNewRig reports whether the basedir this job targets is now
@@ -268,7 +260,7 @@ func prepareTeardownJob(basedir string, m manifest) (*teardownJob, error) {
 		Basedir:         basedir,
 		Session:         rigSessionName(basedir),
 		Backend:         m.Backend,
-		TmuxSocket:      rigBackend(m).Endpoint(),
+		TmuxSocket:      backendNamed(m.Backend).Endpoint(),
 		Created:         time.Now(),
 		RigCreated:      m.Created,
 		ForgetGroups:    map[string][]string{},

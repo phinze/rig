@@ -88,6 +88,9 @@ type Backend interface {
 // and when it was last attached (0 if never), so non-rig sessions can sort MRU
 // alongside the rigs.
 type Session struct {
+	// Backend is the Name of the backend that listed this session, so a list
+	// merged across backends stays attributable and Attach knows where to go.
+	Backend      string
 	Name         string
 	Path         string
 	LastAttached int64
@@ -95,6 +98,8 @@ type Session struct {
 
 // Pane is one pane with rig's marks read back alongside what the backend knows.
 type Pane struct {
+	// Backend is the Name of the backend that listed this pane; see Session.
+	Backend    string
 	Session    string
 	PaneID     string
 	PaneIdx    string
