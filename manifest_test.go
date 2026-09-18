@@ -420,15 +420,16 @@ func TestManifestBackendRoundTrip(t *testing.T) {
 		t.Errorf("backend = %q resolving to %s, want empty resolving to tmux", got.Backend, backendNamed(got.Backend).Name())
 	}
 
-	if err := writeManifest(dir, manifest{ID: "x", Title: "t", Backend: "rex"}); err != nil {
+	registerFakeBackend(t, &fakeBackend{name: "fake"})
+	if err := writeManifest(dir, manifest{ID: "x", Title: "t", Backend: "fake"}); err != nil {
 		t.Fatal(err)
 	}
 	got, err = readManifest(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Backend != "rex" || backendNamed(got.Backend).Name() != "rex" {
-		t.Errorf("backend = %q, want rex resolving to rex", got.Backend)
+	if got.Backend != "fake" || backendNamed(got.Backend).Name() != "fake" {
+		t.Errorf("backend = %q, want fake resolving to fake", got.Backend)
 	}
 	// A backend this binary doesn't know still resolves, to tmux, rather than
 	// leaving a rig with no multiplexer at all; that's a fallback for a

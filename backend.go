@@ -22,14 +22,19 @@ import (
 // trial has tmux rigs and Rex rigs side by side and the board has to show both.
 var preferredBackend mux.Backend = tmux.Backend{}
 
-// knownBackends is every backend this binary can drive, whether or not its
-// server is running, in the order `rig config` and a typo's suggestion print
-// them. tmux is first because it's the default an empty name resolves to. A
-// backend whose server is down lists nothing, which is the cheap and correct
-// answer for a board. It's computed per call rather than at init so the Rex
-// marks dir follows XDG_STATE_HOME, which tests pin after init.
+// knownBackends is every backend this binary can drive on this machine, in
+// the order `rig config` and a typo's suggestion print them. tmux is first
+// because it's the default an empty name resolves to. Rex is included only
+// where its CLI exists: a backend whose server is down lists nothing, which
+// is the cheap and correct answer for a board, but a backend that isn't
+// installed shouldn't cost a failed exec per listing on every Linux host.
+// It's computed per call rather than at init so the Rex marks dir follows
+// XDG_STATE_HOME, which tests pin after init.
 func knownBackends() []mux.Backend {
-	list := []mux.Backend{tmux.Backend{}, rex.Backend{MarksDir: rexMarksDir()}}
+	list := []mux.Backend{tmux.Backend{}}
+	if rex.Installed() {
+		list = append(list, rex.Backend{MarksDir: rexMarksDir()})
+	}
 	return append(list, extraBackends...)
 }
 
