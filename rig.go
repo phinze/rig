@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"github.com/phinze/rig/internal/mux"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -204,15 +206,15 @@ type sessionSpec struct {
 // the primary repo dir: the basedir is the rig's unit, and multi-repo rigs
 // still get one session. Idempotent: an existing session is left untouched.
 func spawnSession(basedir, paneCwd string, sess sessionSpec) (string, error) {
-	session := tmuxSessionName(basedir)
-	if tmuxHasSession(session) {
+	session := rigSessionName(basedir)
+	if backend.HasSession(session) {
 		return session, nil
 	}
 	repo := sess.repo
 	if repo == "" {
 		repo = filepath.Base(paneCwd)
 	}
-	agentPane, mainWindow, err := tmuxNewRigSession(session, mainWindowName(repo), paneCwd)
+	agentPane, mainWindow, err := backend.NewSession(session, mainWindowName(repo), paneCwd)
 	if err != nil {
 		return "", fmt.Errorf("tmux new-session: %w", err)
 	}
@@ -222,21 +224,21 @@ func spawnSession(basedir, paneCwd string, sess sessionSpec) (string, error) {
 	if err := markRigPane(agentPane, rigPaneAgent, repo); err != nil {
 		return "", fmt.Errorf("marking agent pane: %w", err)
 	}
-	rectoPane, err := tmuxSplitHID(agentPane, paneCwd, sess.rectoCmd)
+	rectoPane, err := backend.SplitCommand(agentPane, paneCwd, sess.rectoCmd)
 	if err != nil {
 		return "", fmt.Errorf("tmux split-window: %w", err)
 	}
 	if err := markRigPane(rectoPane, rigPaneRecto, repo); err != nil {
 		return "", fmt.Errorf("marking recto pane: %w", err)
 	}
-	if err := tmuxSelectPane(agentPane); err != nil {
+	if err := backend.SelectPane(agentPane); err != nil {
 		return "", fmt.Errorf("tmux select-pane: %w", err)
 	}
 	agentLine := sess.command
 	if agentLine == "" {
 		agentLine = sess.agent.launchCommand(sess.prompt)
 	}
-	if err := tmuxSendKeys(agentPane, agentLine); err != nil {
+	if err := backend.SendKeys(agentPane, agentLine); err != nil {
 		return "", fmt.Errorf("tmux send-keys: %w", err)
 	}
 	return session, nil
@@ -246,11 +248,11 @@ func spawnSession(basedir, paneCwd string, sess sessionSpec) (string, error) {
 // rig session. Its agent starts at the basedir root and there is deliberately
 // no Recto split: a project rig observes task rigs rather than owning a diff.
 func spawnProjectSession(basedir string, sess sessionSpec) (string, error) {
-	session := tmuxSessionName(basedir)
-	if tmuxHasSession(session) {
+	session := rigSessionName(basedir)
+	if backend.HasSession(session) {
 		return session, nil
 	}
-	agentPane, mainWindow, err := tmuxNewRigSession(session, mainWindowName(""), basedir)
+	agentPane, mainWindow, err := backend.NewSession(session, mainWindowName(""), basedir)
 	if err != nil {
 		return "", fmt.Errorf("tmux new-session: %w", err)
 	}
@@ -264,7 +266,7 @@ func spawnProjectSession(basedir string, sess sessionSpec) (string, error) {
 	if agentLine == "" {
 		agentLine = sess.agent.launchProjectCommand(sess.prompt)
 	}
-	if err := tmuxSendKeys(agentPane, agentLine); err != nil {
+	if err := backend.SendKeys(agentPane, agentLine); err != nil {
 		return "", fmt.Errorf("tmux send-keys: %w", err)
 	}
 	return session, nil
@@ -277,7 +279,14 @@ func attachOrReport(session string) error {
 		fmt.Fprintf(os.Stderr, "rig: not a tty — session ready as %q, attach manually\n", session)
 		return nil
 	}
-	return tmuxAttach(session)
+	if err := backend.Attach(session); err != nil {
+		if errors.Is(err, mux.ErrNoClientSwitch) {
+			fmt.Fprintf(os.Stderr, "rig: session %q is ready, but %v — switch to it by hand\n", session, err)
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func dirExists(p string) bool {

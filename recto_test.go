@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"github.com/phinze/rig/internal/mux"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -65,7 +66,7 @@ func TestRectoCarouselPreservesAdHocShell(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, repo := range []string{"cloud", "brand"} {
-		pane, window, err := tmuxNewCommandWindow(session, repo, filepath.Join(basedir, repo), rectoCommand())
+		pane, window, err := backend.NewCommandWindow(session, repo, filepath.Join(basedir, repo), rectoCommand())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -77,7 +78,7 @@ func TestRectoCarouselPreservesAdHocShell(t *testing.T) {
 		}
 	}
 
-	panes, err := tmuxRigPanes(session)
+	panes, err := backend.Panes(session)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,20 +88,20 @@ func TestRectoCarouselPreservesAdHocShell(t *testing.T) {
 	}
 	// A normal tmux split from the full-screen Recto creates an ad hoc shell in
 	// the same repo window. It must survive when cloud is promoted.
-	if _, err := tmuxSplitHID(cloudRecto.PaneID, filepath.Join(basedir, "cloud"), "sleep infinity"); err != nil {
+	if _, err := backend.SplitCommand(cloudRecto.PaneID, filepath.Join(basedir, "cloud"), "sleep infinity"); err != nil {
 		t.Fatal(err)
 	}
 	if err := promoteRecto(session, basedir, "cloud", m); err != nil {
 		t.Fatal(err)
 	}
 
-	panes, err = tmuxRigPanes(session)
+	panes, err = backend.Panes(session)
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertMainRecto(t, panes, "cloud")
 	cloudWindow, ok := findRepoWindow(panes, "cloud", "")
-	if !ok || cloudWindow.PaneRole != "" {
+	if !ok || cloudWindow.Role != "" {
 		t.Fatalf("cloud shell window did not survive promotion: %+v", cloudWindow)
 	}
 	if _, ok := findRepoWindow(panes, "runtime", ""); !ok {
@@ -112,7 +113,7 @@ func TestRectoCarouselPreservesAdHocShell(t *testing.T) {
 	if err := promoteRecto(session, basedir, "runtime", m); err != nil {
 		t.Fatal(err)
 	}
-	panes, err = tmuxRigPanes(session)
+	panes, err = backend.Panes(session)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +142,7 @@ func TestRectoCarouselPreservesAdHocShell(t *testing.T) {
 	if args != wantArgs {
 		t.Errorf("delegated recto args = %q, want %q", args, wantArgs)
 	}
-	panes, err = tmuxRigPanes(session)
+	panes, err = backend.Panes(session)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,14 +156,14 @@ func TestRectoCarouselPreservesAdHocShell(t *testing.T) {
 	}
 }
 
-func assertMainRecto(t *testing.T, panes []rigTmuxPane, repo string) {
+func assertMainRecto(t *testing.T, panes []mux.Pane, repo string) {
 	t.Helper()
 	main, _, recto, err := findMainParts(panes)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if main.WindowName != mainWindowName(repo) || recto.PaneRepo != repo {
-		t.Errorf("main = %q with recto %q, want %q", main.WindowName, recto.PaneRepo, mainWindowName(repo))
+	if main.WindowName != mainWindowName(repo) || recto.Repo != repo {
+		t.Errorf("main = %q with recto %q, want %q", main.WindowName, recto.Repo, mainWindowName(repo))
 	}
 }
 

@@ -33,10 +33,10 @@ func runSwitch(args []string) error {
 
 	// Drop the rig we're currently sitting in — you never switch to where you
 	// already are.
-	if cur := currentTmuxSession(); cur != "" {
+	if cur := backend.CurrentSession(); cur != "" {
 		kept := statuses[:0]
 		for _, s := range statuses {
-			if tmuxSessionName(s.Path) != cur {
+			if rigSessionName(s.Path) != cur {
 				kept = append(kept, s)
 			}
 		}
@@ -61,10 +61,10 @@ func runSwitch(args []string) error {
 	// Most-recently-attached first; sessionless rigs (last-attached 0) sink to
 	// the bottom, ties broken by newest-created so a fresh rig outranks a stale
 	// one.
-	attached := tmuxLastAttached()
+	attached := lastAttached()
 	sort.SliceStable(statuses, func(i, j int) bool {
-		ai := attached[tmuxSessionName(statuses[i].Path)]
-		aj := attached[tmuxSessionName(statuses[j].Path)]
+		ai := attached[rigSessionName(statuses[i].Path)]
+		aj := attached[rigSessionName(statuses[j].Path)]
 		if ai != aj {
 			return ai > aj
 		}

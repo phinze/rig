@@ -67,9 +67,9 @@ func runAdd(args []string) error {
 	// then the window is also a useful full-screen diff. A shell is deliberately
 	// absent: tmux's normal split bindings can grow one from the Recto's repo cwd
 	// for the occasional poke without making empty shells permanent furniture.
-	session := tmuxSessionName(basedir)
-	if tmuxHasSession(session) {
-		if pane, window, err := tmuxNewCommandWindow(session, repo, repoDest, rectoCommand()); err == nil {
+	session := rigSessionName(basedir)
+	if backend.HasSession(session) {
+		if pane, window, err := backend.NewCommandWindow(session, repo, repoDest, rectoCommand()); err == nil {
 			_ = markRigPane(pane, rigPaneRecto, repo)
 			_ = markRigRepoWindow(window, repo)
 		}
@@ -262,7 +262,7 @@ func rigStatuses(rigs []rigInfo, home string, now time.Time) []rigStatus {
 			Parked:      !r.Parked.IsZero(),
 			Repos:       r.Repos,
 			Building:    r.Building,
-			SessionLive: tmuxHasSession(tmuxSessionName(r.Path)),
+			SessionLive: backend.HasSession(rigSessionName(r.Path)),
 		}
 		if ts := activity[r.Path]; ts > 0 {
 			t := time.Unix(ts, 0)

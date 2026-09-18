@@ -26,8 +26,8 @@ func runPark(args []string) error {
 	if err != nil {
 		return err
 	}
-	session := tmuxSessionName(basedir)
-	proceed, err := sessionExitHandoff(insideTmuxSession(session))
+	session := rigSessionName(basedir)
+	proceed, err := sessionExitHandoff(insideSession(session))
 	if err != nil {
 		return err
 	}
@@ -82,12 +82,12 @@ func setRigParked(basedir string, parked, nonblocking bool, afterWrite func(mani
 		afterWrite(m)
 	}
 
-	session := tmuxSessionName(basedir)
+	session := rigSessionName(basedir)
 	if parked {
 		// Kill last so a caller running inside this session gets the manifest and
 		// any announcement safely onto disk/the terminal first.
-		if tmuxHasSession(session) {
-			if err := tmuxKillSession(session); err != nil {
+		if backend.HasSession(session) {
+			if err := backend.KillSession(session); err != nil {
 				return fmt.Errorf("tmux kill-session %s: %w", session, err)
 			}
 		}

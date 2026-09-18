@@ -122,7 +122,7 @@ func createNewRig(target newRigTarget, context string, repo repoRef, agent agent
 	}
 
 	m := manifest{
-		ID: target.ID, Title: target.Kickoff, Agent: string(agent), MainRepo: repo.Name,
+		ID: target.ID, Title: target.Kickoff, Agent: string(agent), MainRepo: repo.Name, Backend: backend.Name(),
 		BuildingRepo: repo.nameWithOwner(),
 	}
 	if err := createBasedir(target.Basedir, m); err != nil {

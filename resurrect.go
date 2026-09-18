@@ -59,7 +59,7 @@ func prepareResurrect(id string, nonblocking bool, report io.Writer) (string, er
 				if err := setRigParked(r.Path, false, nonblocking, nil); err != nil {
 					return "", err
 				}
-				return tmuxSessionName(r.Path), nil
+				return rigSessionName(r.Path), nil
 			}
 		}
 	}
@@ -73,6 +73,7 @@ func prepareResurrect(id string, nonblocking bool, report io.Writer) (string, er
 		Title:      t.Title,
 		Kind:       t.Kind,
 		Agent:      t.Agent,
+		Backend:    t.Backend,
 		Tracker:    t.Tracker,
 		TrackerID:  t.TrackerID,
 		TrackerURL: t.TrackerURL,

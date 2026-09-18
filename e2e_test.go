@@ -189,7 +189,7 @@ func TestProjectRigCreatesRepositorylessRuntimeAndJoinedStatus(t *testing.T) {
 		}
 	}
 
-	session := tmuxSessionName(basedir)
+	session := rigSessionName(basedir)
 	layout, err := exec.Command(realTmux, "-u", "-L", "rig-project-e2e", "list-panes", "-s", "-t", session, "-F",
 		"#{pane_current_path}\t#{@rig-window-role}\t#{@rig-pane-role}").CombinedOutput()
 	if err != nil {

@@ -40,6 +40,12 @@ type manifest struct {
 	// Agent is the terminal agent this rig was created for. Empty means Claude,
 	// preserving the behavior of manifests written before agent selection.
 	Agent string
+	// Backend is the multiplexer hosting this rig's session. Empty means tmux,
+	// for the same reason an empty Agent means Claude: every rig made before
+	// the field existed lives there, and the preference ladder only ever
+	// decides for a new rig. A parked rig has no session, but it still records
+	// the backend so wake rebuilds it where it was.
+	Backend string
 	// MainRepo is the repo currently occupying the carousel's main window. It
 	// lets a killed tmux session come back in the same working directory. Older
 	// manifests leave it empty and deterministically fall back to their first
@@ -145,6 +151,9 @@ func writeManifest(basedir string, m manifest) error {
 	}
 	if m.Agent != "" && m.Agent != string(agentClaude) {
 		fmt.Fprintf(&b, "agent = %q\n", m.Agent)
+	}
+	if m.Backend != "" && m.Backend != "tmux" {
+		fmt.Fprintf(&b, "backend = %q\n", m.Backend)
 	}
 	if m.MainRepo != "" {
 		fmt.Fprintf(&b, "main_repo = %q\n", m.MainRepo)
@@ -337,6 +346,8 @@ func readManifest(basedir string) (manifest, error) {
 				m.Kind = val
 			case "agent":
 				m.Agent = val
+			case "backend":
+				m.Backend = val
 			case "main_repo":
 				m.MainRepo = val
 			case "session_id":

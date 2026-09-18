@@ -115,7 +115,7 @@ func runUp(args []string) error {
 	}
 
 	m := manifest{
-		ID: tk.rigID(), Title: tk.Title, Agent: string(pick.kind), MainRepo: repo.Name,
+		ID: tk.rigID(), Title: tk.Title, Agent: string(pick.kind), MainRepo: repo.Name, Backend: backend.Name(),
 		Tracker: string(tk.source()), TrackerID: tk.Identifier, TrackerURL: tk.URL,
 		BuildingRepo: repo.nameWithOwner(),
 	}
@@ -330,5 +330,5 @@ func activateRig(r rigInfo) error {
 	}); err != nil {
 		return err
 	}
-	return attachOrReport(tmuxSessionName(r.Path))
+	return attachOrReport(rigSessionName(r.Path))
 }

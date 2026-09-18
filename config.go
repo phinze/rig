@@ -27,7 +27,8 @@ const configName = "config.toml"
 // rigConfig is the whole settable surface. Add a field here, add its entry to
 // configSettings, and both the reader and `rig config` pick it up.
 type rigConfig struct {
-	Agent string
+	Agent   string
+	Backend string
 }
 
 func rigConfigDir() (string, error) {
@@ -79,6 +80,8 @@ func readRigConfig() rigConfig {
 		switch strings.TrimSpace(key) {
 		case "agent":
 			c.Agent = parseTOMLString(val)
+		case "backend":
+			c.Backend = parseTOMLString(val)
 		}
 	}
 	return c
@@ -93,6 +96,9 @@ func writeRigConfig(c rigConfig) error {
 	b.WriteString("# rig settings. `rig config` reads and writes this file.\n")
 	if c.Agent != "" {
 		fmt.Fprintf(&b, "agent = %q\n", c.Agent)
+	}
+	if c.Backend != "" {
+		fmt.Fprintf(&b, "backend = %q\n", c.Backend)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
@@ -214,6 +220,39 @@ var configSettings = []configSetting{{
 		// Store the canonical long name rather than whatever shorthand was
 		// typed, so the file reads the way the docs talk about agents.
 		c.Agent = string(kind)
+		return nil
+	},
+}, {
+	name: "backend",
+	effective: func() (string, string) {
+		name, src, _ := defaultBackendWithSource()
+		switch src {
+		case agentFromConfig:
+			return name, configOriginPath()
+		case agentFromEnv:
+			return name, "RIG_BACKEND"
+		default:
+			return name, "built-in default"
+		}
+	},
+	note: func() string {
+		_, src, raw := defaultBackendWithSource()
+		stored := readRigConfig().Backend
+		if src != agentFromEnv || stored == "" {
+			return ""
+		}
+		return fmt.Sprintf("note: %s says %s, but RIG_BACKEND=%s in your shell wins over it. Unset RIG_BACKEND to use the file.",
+			configOriginPath(), stored, raw)
+	},
+	set: func(c *rigConfig, value string) error {
+		if value == "" {
+			c.Backend = ""
+			return nil
+		}
+		if _, err := backendByName(value); err != nil {
+			return err
+		}
+		c.Backend = value
 		return nil
 	},
 }}

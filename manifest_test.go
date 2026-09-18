@@ -399,3 +399,41 @@ func TestAddBranchToManifest(t *testing.T) {
 		t.Errorf("branches = %v, want %v", m.Branches["rig"], want)
 	}
 }
+
+// A rig records the multiplexer that hosts it the way it records its agent:
+// tmux is the empty default so every manifest written before the field existed
+// still means what it meant, and only a non-default backend costs a line.
+func TestManifestBackendRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	if err := writeManifest(dir, manifest{ID: "x", Title: "t", Backend: "tmux"}); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(filepath.Join(dir, ".rig", "manifest.toml"))
+	if strings.Contains(string(raw), "backend") {
+		t.Errorf("tmux should be the unwritten default, got:\n%s", raw)
+	}
+	got, err := readManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Backend != "" || rigBackend(got).Name() != "tmux" {
+		t.Errorf("backend = %q resolving to %s, want empty resolving to tmux", got.Backend, rigBackend(got).Name())
+	}
+
+	if err := writeManifest(dir, manifest{ID: "x", Title: "t", Backend: "rex"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = readManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Backend != "rex" {
+		t.Errorf("backend = %q, want rex", got.Backend)
+	}
+	// A backend this binary doesn't know still resolves, to tmux, rather than
+	// leaving a rig with no multiplexer at all; that's a fallback for a
+	// downgraded binary, not for a typo, which the config command refuses.
+	if rigBackend(got).Name() != "tmux" {
+		t.Errorf("unknown backend resolved to %s, want tmux", rigBackend(got).Name())
+	}
+}

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/phinze/rig/internal/mux"
+	"github.com/phinze/rig/internal/mux/tmux"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,13 +26,20 @@ const teardownJobVersion = 1
 // can be retried after the active path has been quarantined, and a process dying
 // halfway through teardown does not erase the only inventory of what remains.
 type teardownJob struct {
-	Version     int       `json:"version"`
-	ID          string    `json:"id"`
-	Basedir     string    `json:"basedir"`
-	Quarantined string    `json:"quarantined,omitempty"`
-	Session     string    `json:"session"`
-	TmuxSocket  string    `json:"tmux_socket,omitempty"`
-	Created     time.Time `json:"created"`
+	Version     int    `json:"version"`
+	ID          string `json:"id"`
+	Basedir     string `json:"basedir"`
+	Quarantined string `json:"quarantined,omitempty"`
+	Session     string `json:"session"`
+	// Backend names the multiplexer that owns Session, and TmuxSocket is that
+	// backend's endpoint (the field predates the seam and keeps its name so
+	// older jobs still parse). Both are recorded here rather than resolved at
+	// retry time because the Linux worker runs from systemd with none of the
+	// invoking shell's preferences, and the one thing it must not do is hand
+	// one multiplexer's endpoint to another.
+	Backend    string    `json:"backend,omitempty"`
+	TmuxSocket string    `json:"tmux_socket,omitempty"`
+	Created    time.Time `json:"created"`
 	// RigCreated is the manifest timestamp of the rig this job was made for. It
 	// exists because everything else here is derived from the rig's *identity* —
 	// the tmux session name, the iso session, the jj workspace names, the agent
@@ -46,6 +55,18 @@ type teardownJob struct {
 	ScratchDirs     []string            `json:"scratch_dirs,omitempty"`
 	RectoWorkspaces []string            `json:"recto_workspaces,omitempty"`
 	path            string
+}
+
+// backend is the multiplexer this job's session lives in. A name this binary
+// no longer knows falls back to tmux rather than failing the job, since the
+// rest of teardown is idempotent and the session is the one step a retry can
+// only ever repeat.
+func (job *teardownJob) backend() mux.Backend {
+	b, err := backendByName(job.Backend)
+	if err != nil {
+		return tmux.Backend{}
+	}
+	return b
 }
 
 // supersededByNewRig reports whether the basedir this job targets is now
@@ -245,8 +266,9 @@ func prepareTeardownJob(basedir string, m manifest) (*teardownJob, error) {
 		Version:         teardownJobVersion,
 		ID:              m.ID,
 		Basedir:         basedir,
-		Session:         tmuxSessionName(basedir),
-		TmuxSocket:      tmuxSocketPath(),
+		Session:         rigSessionName(basedir),
+		Backend:         m.Backend,
+		TmuxSocket:      rigBackend(m).Endpoint(),
 		Created:         time.Now(),
 		RigCreated:      m.Created,
 		ForgetGroups:    map[string][]string{},
@@ -340,7 +362,7 @@ func executeTeardownJobForPlatform(job *teardownJob, platform string) error {
 
 	killFirst := platform == "linux"
 	if killFirst {
-		if err := tmuxKillSessionAt(job.Session, job.TmuxSocket); err != nil {
+		if err := job.backend().KillSessionAt(job.Session, job.TmuxSocket); err != nil {
 			return fmt.Errorf("tmux kill-session %s: %w", job.Session, err)
 		}
 		if err := stopRigProcessScopes(job.ID); err != nil {
@@ -446,7 +468,7 @@ func executeTeardownJobForPlatform(job *teardownJob, platform string) error {
 		return fmt.Errorf("removing teardown job: %w", err)
 	}
 	if !killFirst {
-		if err := tmuxKillSessionAt(job.Session, job.TmuxSocket); err != nil {
+		if err := job.backend().KillSessionAt(job.Session, job.TmuxSocket); err != nil {
 			// Everything else is already idempotently gone, but retain a retry
 			// record when tmux itself refused the final step.
 			if persistErr := writeTeardownJob(job); persistErr != nil {

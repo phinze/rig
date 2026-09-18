@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/phinze/rig/internal/mux"
 	"os"
 	"path/filepath"
 	"sort"
@@ -77,9 +78,9 @@ func resumeRigRuntime(basedir string, nonblocking, refreshSession bool) (string,
 // discovery is comparatively expensive for Codex, so ordinary activation only
 // does it when no id is recorded; park and explicit resume ask for a refresh.
 func captureRigRuntimeHints(basedir string, m *manifest, refreshSession bool) {
-	session := tmuxSessionName(basedir)
-	if tmuxHasSession(session) {
-		if panes, err := tmuxRigPanes(session); err == nil {
+	session := rigSessionName(basedir)
+	if backend.HasSession(session) {
+		if panes, err := backend.Panes(session); err == nil {
 			if repo := mainRepoFromPanes(basedir, *m, panes); repo != "" {
 				m.MainRepo = repo
 			}
@@ -122,7 +123,7 @@ func firstRigRepo(basedir string, m manifest) string {
 	return repos[0]
 }
 
-func mainRepoFromPanes(basedir string, m manifest, panes []rigTmuxPane) string {
+func mainRepoFromPanes(basedir string, m manifest, panes []mux.Pane) string {
 	for _, p := range panes {
 		if p.WindowRole == rigWindowMain && m.Repos[p.WindowRepo] != "" {
 			return p.WindowRepo
@@ -132,8 +133,8 @@ func mainRepoFromPanes(basedir string, m manifest, panes []rigTmuxPane) string {
 		if p.WindowRole != rigWindowMain {
 			continue
 		}
-		if m.Repos[p.PaneRepo] != "" {
-			return p.PaneRepo
+		if m.Repos[p.Repo] != "" {
+			return p.Repo
 		}
 		if repo := repoForWorkspacePath(basedir, m, p.Path); repo != "" {
 			return repo
@@ -194,10 +195,10 @@ func ensureRigRuntimeWithPrompt(basedir string, m manifest, prompt string) (stri
 		return "", fmt.Errorf("rig %s has no available repo workspace", m.ID)
 	}
 	paneCwd := filepath.Join(basedir, repo)
-	session := tmuxSessionName(basedir)
+	session := rigSessionName(basedir)
 	command := rigResumeCommand(m, prompt)
 
-	if !tmuxHasSession(session) {
+	if !backend.HasSession(session) {
 		var err error
 		session, err = spawnSession(basedir, paneCwd, sessionSpec{
 			rectoCmd: rectoCommand(), repo: repo, agent: m.agentKind(), command: command,
@@ -216,13 +217,13 @@ func ensureRigRuntimeWithPrompt(basedir string, m manifest, prompt string) (stri
 		return "", err
 	}
 	mainWindow := ""
-	var agentPane rigTmuxPane
+	var agentPane mux.Pane
 	for _, p := range panes {
 		if p.WindowRole != rigWindowMain {
 			continue
 		}
 		mainWindow = p.WindowID
-		if p.PaneRole == rigPaneAgent {
+		if p.Role == rigPaneAgent {
 			agentPane = p
 		}
 	}
@@ -231,30 +232,30 @@ func ensureRigRuntimeWithPrompt(basedir string, m manifest, prompt string) (stri
 	}
 	if agentPane.PaneID == "" {
 		for _, p := range panes {
-			if p.WindowID == mainWindow && p.PaneRole != rigPaneRecto {
+			if p.WindowID == mainWindow && p.Role != rigPaneRecto {
 				agentPane = p
 				break
 			}
 		}
 	}
 	if agentPane.PaneID == "" {
-		pane, err := tmuxSplitShell(mainWindow, paneCwd)
+		pane, err := backend.SplitShell(mainWindow, paneCwd)
 		if err != nil {
 			return "", fmt.Errorf("restoring agent pane: %w", err)
 		}
-		agentPane = rigTmuxPane{PaneID: pane, WindowID: mainWindow, Command: filepath.Base(os.Getenv("SHELL"))}
+		agentPane = mux.Pane{PaneID: pane, WindowID: mainWindow, Command: filepath.Base(os.Getenv("SHELL"))}
 	}
 	if err := markRigMainWindow(mainWindow, repo); err != nil {
 		return "", err
 	}
-	if err := tmuxRenameWindow(mainWindow, mainWindowName(repo)); err != nil {
+	if err := backend.RenameWindow(mainWindow, mainWindowName(repo)); err != nil {
 		return "", err
 	}
 	if err := markRigPane(agentPane.PaneID, rigPaneAgent, repo); err != nil {
 		return "", err
 	}
 
-	panes, err = tmuxRigPanes(session)
+	panes, err = backend.Panes(session)
 	if err != nil {
 		return "", err
 	}
@@ -272,7 +273,7 @@ func ensureRigRuntimeWithPrompt(basedir string, m manifest, prompt string) (stri
 	// When resume is invoked from the stopped agent's own pane, replace this
 	// process directly. Sending keys there would feed this foreground command,
 	// not the shell waiting underneath it.
-	selfCaller := agentPane.PaneID == os.Getenv("TMUX_PANE")
+	selfCaller := agentPane.PaneID == backend.CurrentPane()
 	rigCaller := filepath.Base(strings.TrimSpace(agentPane.Command)) == filepath.Base(os.Args[0])
 	if selfCaller && (rigCaller || isShellCommand(agentPane.Command)) {
 		if err := os.Chdir(paneCwd); err != nil {
@@ -284,11 +285,11 @@ func ensureRigRuntimeWithPrompt(basedir string, m manifest, prompt string) (stri
 	}
 	if isShellCommand(agentPane.Command) {
 		line := "cd " + shellQuote(paneCwd) + " && " + command
-		if err := tmuxSendKeys(agentPane.PaneID, line); err != nil {
+		if err := backend.SendKeys(agentPane.PaneID, line); err != nil {
 			return "", fmt.Errorf("resuming agent: %w", err)
 		}
 	}
-	if err := tmuxSelectPane(agentPane.PaneID); err != nil {
+	if err := backend.SelectPane(agentPane.PaneID); err != nil {
 		return "", err
 	}
 	return session, nil
@@ -298,22 +299,22 @@ func ensureRigRuntimeWithPrompt(basedir string, m manifest, prompt string) (stri
 // It mirrors the agent half of ensureRigRuntime without inventing a fake repo
 // or starting Recto in a directory that has no jj workspace.
 func ensureProjectRuntime(basedir string, m manifest, prompt string) (string, error) {
-	session := tmuxSessionName(basedir)
+	session := rigSessionName(basedir)
 	command := rigResumeCommand(m, prompt)
-	if !tmuxHasSession(session) {
+	if !backend.HasSession(session) {
 		return spawnProjectSession(basedir, sessionSpec{agent: m.agentKind(), command: command})
 	}
 
-	panes, err := tmuxRigPanes(session)
+	panes, err := backend.Panes(session)
 	if err != nil {
 		return "", err
 	}
-	var mainWindow, agentPane rigTmuxPane
+	var mainWindow, agentPane mux.Pane
 	for _, p := range panes {
 		if p.WindowRole == rigWindowMain || (mainWindow.WindowID == "" && p.WindowIdx == "0") {
 			mainWindow = p
 		}
-		if p.PaneRole == rigPaneAgent {
+		if p.Role == rigPaneAgent {
 			agentPane = p
 		}
 	}
@@ -322,30 +323,30 @@ func ensureProjectRuntime(basedir string, m manifest, prompt string) (string, er
 	}
 	if agentPane.PaneID == "" {
 		for _, p := range panes {
-			if p.WindowID == mainWindow.WindowID && p.PaneRole != rigPaneRecto {
+			if p.WindowID == mainWindow.WindowID && p.Role != rigPaneRecto {
 				agentPane = p
 				break
 			}
 		}
 	}
 	if agentPane.PaneID == "" {
-		pane, err := tmuxSplitShell(mainWindow.WindowID, basedir)
+		pane, err := backend.SplitShell(mainWindow.WindowID, basedir)
 		if err != nil {
 			return "", fmt.Errorf("restoring project agent pane: %w", err)
 		}
-		agentPane = rigTmuxPane{PaneID: pane, WindowID: mainWindow.WindowID, Command: filepath.Base(os.Getenv("SHELL"))}
+		agentPane = mux.Pane{PaneID: pane, WindowID: mainWindow.WindowID, Command: filepath.Base(os.Getenv("SHELL"))}
 	}
 	if err := markRigMainWindow(mainWindow.WindowID, ""); err != nil {
 		return "", err
 	}
-	if err := tmuxRenameWindow(mainWindow.WindowID, mainWindowName("")); err != nil {
+	if err := backend.RenameWindow(mainWindow.WindowID, mainWindowName("")); err != nil {
 		return "", err
 	}
 	if err := markRigPane(agentPane.PaneID, rigPaneAgent, ""); err != nil {
 		return "", err
 	}
 
-	selfCaller := agentPane.PaneID == os.Getenv("TMUX_PANE")
+	selfCaller := agentPane.PaneID == backend.CurrentPane()
 	rigCaller := filepath.Base(strings.TrimSpace(agentPane.Command)) == filepath.Base(os.Args[0])
 	if selfCaller && (rigCaller || isShellCommand(agentPane.Command)) {
 		if err := os.Chdir(basedir); err != nil {
@@ -357,11 +358,11 @@ func ensureProjectRuntime(basedir string, m manifest, prompt string) (string, er
 	}
 	if isShellCommand(agentPane.Command) {
 		line := "cd " + shellQuote(basedir) + " && " + command
-		if err := tmuxSendKeys(agentPane.PaneID, line); err != nil {
+		if err := backend.SendKeys(agentPane.PaneID, line); err != nil {
 			return "", fmt.Errorf("resuming project agent: %w", err)
 		}
 	}
-	if err := tmuxSelectPane(agentPane.PaneID); err != nil {
+	if err := backend.SelectPane(agentPane.PaneID); err != nil {
 		return "", err
 	}
 	return session, nil
@@ -375,7 +376,7 @@ func ensureBackgroundRectos(session, basedir, mainRepo string, m manifest) error
 		}
 	}
 	sort.Strings(repos)
-	panes, err := tmuxRigPanes(session)
+	panes, err := backend.Panes(session)
 	if err != nil {
 		return err
 	}

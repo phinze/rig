@@ -52,6 +52,7 @@ type tombstone struct {
 	Basedir    string `json:"basedir"`
 	Kind       string `json:"kind,omitempty"`
 	Agent      string `json:"agent,omitempty"`
+	Backend    string `json:"backend,omitempty"`
 	Tracker    string `json:"tracker,omitempty"`
 	TrackerID  string `json:"tracker_id,omitempty"`
 	TrackerURL string `json:"tracker_url,omitempty"`
@@ -134,6 +135,7 @@ func recordTombstone(basedir string, m manifest, sources map[string]string) erro
 		Basedir:    resolvePath(basedir),
 		Kind:       m.Kind,
 		Agent:      string(agent),
+		Backend:    m.Backend,
 		Tracker:    m.Tracker,
 		TrackerID:  m.TrackerID,
 		TrackerURL: m.TrackerURL,

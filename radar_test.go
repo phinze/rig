@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"github.com/phinze/rig/internal/mux"
 	"os"
 	"path/filepath"
 	"slices"
@@ -66,8 +67,8 @@ func TestBoardRowsMRU(t *testing.T) {
 	at := func(u int64) *time.Time { tm := time.Unix(u, 0); return &tm }
 	m := radarModel{
 		attached: map[string]int64{
-			tmuxSessionName("/w/live"): 500, // live rig, attached recently
-			"sess-old":                 100, // bare session, old attach
+			rigSessionName("/w/live"): 500, // live rig, attached recently
+			"sess-old":                100, // bare session, old attach
 		},
 		inflight: []rigStatus{
 			{Slug: "live", Path: "/w/live", Created: time.Unix(1, 0)},                        // recency 500 (attach)
@@ -101,7 +102,7 @@ func TestRadarCurrentBareSessionIsContextNotDestination(t *testing.T) {
 	m := radarModel{home: "/home/me", current: "here", prs: map[string][]rigPR{}}
 	m.apply(radarScanMsg{
 		attached: map[string]int64{"here": 300, "newer": 200, "older": 100},
-		sessions: []tmuxSession{
+		sessions: []mux.Session{
 			{Name: "here", Path: "/home/me/current", LastAttached: 300},
 			{Name: "older", Path: "/home/me/older", LastAttached: 100},
 			{Name: "newer", Path: "/home/me/newer", LastAttached: 200},
@@ -142,14 +143,14 @@ func TestRadarCurrentBareSessionIsContextNotDestination(t *testing.T) {
 
 func TestRadarCurrentRigKeepsRigIdentity(t *testing.T) {
 	path := "/work/current"
-	session := tmuxSessionName(path)
+	session := rigSessionName(path)
 	m := radarModel{current: session, prs: map[string][]rigPR{}}
 	m.apply(radarScanMsg{
 		statuses: []rigStatus{
 			{Slug: "current", ID: "MIR-1", Title: "durable title", Path: path},
 			{Slug: "other", ID: "MIR-2", Title: "other", Path: "/work/other"},
 		},
-		sessions: []tmuxSession{{Name: session, Path: path}},
+		sessions: []mux.Session{{Name: session, Path: path}},
 		agents: map[string][]agentChild{
 			session: {{Target: session + ":0", Context: "live task context"}},
 		},
@@ -187,11 +188,11 @@ func TestRadarTouchedAt(t *testing.T) {
 		Created:     time.Unix(100, 0),
 		LastTouched: time.Unix(200, 0),
 	}
-	m := radarModel{attached: map[string]int64{tmuxSessionName(s.Path): 300}}
+	m := radarModel{attached: map[string]int64{rigSessionName(s.Path): 300}}
 	if got := m.touchedAt(s); !got.Equal(time.Unix(300, 0)) {
 		t.Fatalf("touchedAt = %v, want live attach time", got)
 	}
-	delete(m.attached, tmuxSessionName(s.Path))
+	delete(m.attached, rigSessionName(s.Path))
 	if got := m.touchedAt(s); !got.Equal(s.LastTouched) {
 		t.Fatalf("touchedAt without session = %v, want durable touch %v", got, s.LastTouched)
 	}
@@ -430,7 +431,7 @@ func TestRadarMatchFields(t *testing.T) {
 	}
 
 	// A bare session matched only through its raw name lights up no cell.
-	b := bareSession(tmuxSession{Name: "notes-box", Path: "/n"}, "")
+	b := bareSession(mux.Session{Name: "notes-box", Path: "/n"}, "")
 	_, tHits := radarMatchFields("box", b)
 	if len(tHits) != 0 {
 		t.Errorf("session-name-only match lit the title: %v", tHits)
@@ -472,8 +473,8 @@ func TestHighlightRunesBase(t *testing.T) {
 func TestRankedRowsOrder(t *testing.T) {
 	m := radarModel{
 		sessions: []rigStatus{
-			bareSession(tmuxSession{Name: "raging", Path: "/raging"}, ""),
-			bareSession(tmuxSession{Name: "rig", Path: "/rig"}, ""),
+			bareSession(mux.Session{Name: "raging", Path: "/raging"}, ""),
+			bareSession(mux.Session{Name: "rig", Path: "/rig"}, ""),
 		},
 	}
 	m.setFilter("rig")
@@ -563,7 +564,7 @@ func TestRankByRepo(t *testing.T) {
 // A bare session renders as a neutral row: the open-ring glyph, no PR tail, and
 // its haystack matches on both the path-title and the raw session name.
 func TestRadarBareSession(t *testing.T) {
-	s := bareSession(tmuxSession{Name: "~-src-rig", Path: "/home/me/src/rig", LastAttached: 42}, "/home/me")
+	s := bareSession(mux.Session{Name: "~-src-rig", Path: "/home/me/src/rig", LastAttached: 42}, "/home/me")
 	if !s.bare || s.session != "~-src-rig" {
 		t.Fatalf("bareSession identity = %+v", s)
 	}
@@ -594,7 +595,7 @@ func TestRadarFilterRows(t *testing.T) {
 	m := radarModel{
 		inflight: []rigStatus{{Slug: "a", ID: "PROJ-1", Title: "add radar"}},
 		parked:   []rigStatus{{Slug: "b", Parked: true, ID: "PROJ-2", Title: "fix waiting"}},
-		sessions: []rigStatus{bareSession(tmuxSession{Name: "notes", Path: "/n"}, "")},
+		sessions: []rigStatus{bareSession(mux.Session{Name: "notes", Path: "/n"}, "")},
 	}
 	if got := len(m.rows()); got != 3 {
 		t.Fatalf("unfiltered rows = %d, want 3", got)
@@ -664,7 +665,7 @@ func TestViewFitsHeight(t *testing.T) {
 	}
 	for i := range 30 {
 		name := "sess" + string(rune('a'+i))
-		s := bareSession(tmuxSession{Name: name, Path: "/home/me/" + name, LastAttached: int64(1000 - i)}, "/home/me")
+		s := bareSession(mux.Session{Name: name, Path: "/home/me/" + name, LastAttached: int64(1000 - i)}, "/home/me")
 		// Dangle an agent under every other session so children pad the viewport.
 		if i%2 == 0 {
 			s.agents = []agentChild{{Window: "claude", Target: name + ":0", Context: "working on " + name}}
@@ -1126,26 +1127,31 @@ func TestRadarMouse(t *testing.T) {
 	}
 }
 
-// parseAgentPanes keeps one child per distinct agent: two panes sharing a window
+// agentChildren keeps one child per distinct agent: two panes sharing a window
 // and the exact same context collapse (a claude mirrored across a split), but
 // two different tasks in one window both survive. Shells drop out; the
 // placeholder and cwd-basename titles become empty contexts.
-func TestParseAgentPanes(t *testing.T) {
+func TestAgentChildren(t *testing.T) {
 	now := int64(1_000_000)
-	recent, stale := "999990", "900000" // 10s ago (working) vs ~28h ago (idle)
-	// fields: session, window, pane, window name, command, window activity, cwd, title
-	out := strings.Join([]string{
-		"s\t0\t0\twin\tclaude\t" + recent + "\t/work/one\t✳ Task A",
-		"s\t0\t1\twin\tclaude\t" + recent + "\t/work/one\t✳ Task A",   // dup: same window + context → collapse
-		"s\t0\t2\twin\tclaude\t" + recent + "\t/work/one\t⠂ Task B",   // distinct task, same window → keep
-		"s\t1\t0\twin\tfish\t" + recent + "\t/work/x\t~/x - fish",     // shell → skip
-		"s\t2\t0\tcw\tclaude\t" + stale + "\t/work/cw\t✳ Claude Code", // placeholder, idle
-		"s\t3\t0\tmain/rig\tcodex-raw\t" + recent + "\t/work/rig\t⠴ rig",
-		"s\t4\t0\tagy\tagy\t" + recent + "\t/work/agy\tAntigravity",
-		"s\t5\t0\tmain/rig\tcodex\t" + recent + "\t/work/rig\tFix sparse radar titles",
-	}, "\n")
+	recent, stale := int64(999990), int64(900000) // 10s ago (working) vs ~28h ago (idle)
+	pane := func(win, idx, wname, cmd string, activity int64, cwd, title string) mux.Pane {
+		return mux.Pane{
+			Session: "s", WindowIdx: win, PaneIdx: idx, WindowName: wname,
+			Target: "s:" + win + "." + idx, Command: cmd, Activity: activity, Path: cwd, Title: title,
+		}
+	}
+	panes := []mux.Pane{
+		pane("0", "0", "win", "claude", recent, "/work/one", "✳ Task A"),
+		pane("0", "1", "win", "claude", recent, "/work/one", "✳ Task A"),   // dup: same window + context → collapse
+		pane("0", "2", "win", "claude", recent, "/work/one", "⠂ Task B"),   // distinct task, same window → keep
+		pane("1", "0", "win", "fish", recent, "/work/x", "~/x - fish"),     // shell → skip
+		pane("2", "0", "cw", "claude", stale, "/work/cw", "✳ Claude Code"), // placeholder, idle
+		pane("3", "0", "main/rig", "codex-raw", recent, "/work/rig", "⠴ rig"),
+		pane("4", "0", "agy", "agy", recent, "/work/agy", "Antigravity"),
+		pane("5", "0", "main/rig", "codex", recent, "/work/rig", "Fix sparse radar titles"),
+	}
 
-	kids := parseAgentPanes(out, now)["s"]
+	kids := agentChildren(panes, now)["s"]
 	if len(kids) != 6 {
 		t.Fatalf("children = %d (%+v), want 6", len(kids), kids)
 	}

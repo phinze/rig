@@ -218,3 +218,49 @@ func TestConfigListNamesItsSource(t *testing.T) {
 		t.Errorf("note = %q, want it to name the fix", note)
 	}
 }
+
+func TestConfigBackendFollowsTheAgentLadder(t *testing.T) {
+	isolateRigConfig(t)
+
+	if err := runConfigCmd([]string{"backend", "tmux"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := readRigConfig().Backend; got != "tmux" {
+		t.Errorf("stored backend = %q, want tmux", got)
+	}
+	// Both settings share the file, so writing one must not drop the other.
+	if err := runConfigCmd([]string{"agent", "cdx"}); err != nil {
+		t.Fatal(err)
+	}
+	if c := readRigConfig(); c.Backend != "tmux" || c.Agent != "codex" {
+		t.Errorf("config = %+v, want both settings kept", c)
+	}
+
+	// An unknown backend is refused at write time, and refused again at
+	// startup if it arrives through the environment, because a preference
+	// that silently fell back to tmux would be indistinguishable from one
+	// that never took.
+	if err := runConfigCmd([]string{"backend", "screen"}); err == nil || !strings.Contains(err.Error(), "tmux") {
+		t.Errorf("unknown backend error = %v, want it to name the known ones", err)
+	}
+	t.Setenv("RIG_BACKEND", "screen")
+	if _, err := defaultBackend(); err == nil {
+		t.Error("RIG_BACKEND=screen should fail to resolve rather than fall back")
+	}
+	name, src, _ := defaultBackendWithSource()
+	if name != "screen" || src != agentFromEnv {
+		t.Errorf("source = %q from %q, want the env var to win over the file", name, src)
+	}
+
+	t.Setenv("RIG_BACKEND", "")
+	if err := runConfigCmd([]string{"backend", "--unset"}); err != nil {
+		t.Fatal(err)
+	}
+	name, src, _ = defaultBackendWithSource()
+	if name != "tmux" || src != agentFromBuiltin {
+		t.Errorf("after unset = %q from %q, want the built-in tmux", name, src)
+	}
+	if _, err := defaultBackend(); err != nil {
+		t.Errorf("built-in default should resolve: %v", err)
+	}
+}

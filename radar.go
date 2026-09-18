@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/phinze/rig/internal/mux"
 	"io"
 	"math"
 	"os"
@@ -134,7 +135,7 @@ func radarPick(home string) (*radarChoice, error) {
 	}
 	m := radarModel{
 		home:      home,
-		current:   currentTmuxSession(),
+		current:   backend.CurrentSession(),
 		prs:       map[string][]rigPR{},
 		fetchedAt: map[string]time.Time{},
 		pending:   map[string]bool{},
@@ -208,7 +209,7 @@ func radarPrepare(s rigStatus) (rigStatus, error) {
 		}
 		return rigStatus{}, err
 	}
-	s.session = tmuxSessionName(s.Path)
+	s.session = rigSessionName(s.Path)
 	return s, nil
 }
 
@@ -264,7 +265,7 @@ type radarModel struct {
 
 type radarScanMsg struct {
 	statuses []rigStatus
-	sessions []tmuxSession
+	sessions []mux.Session
 	attached map[string]int64
 	agents   map[string][]agentChild // session name → its claude windows
 	stones   []rigStatus             // torn-down rigs still inside the regret window
@@ -314,7 +315,7 @@ func radarScanNow(home string) radarScanMsg {
 	// One list-sessions feeds both the in-flight attach-order map and the bare
 	// session rows, so the universal picker costs the same tmux round-trip the
 	// board already paid.
-	sessions := tmuxSessions()
+	sessions := backend.Sessions()
 	attached := make(map[string]int64, len(sessions))
 	for _, s := range sessions {
 		attached[s.Name] = s.LastAttached
@@ -323,7 +324,7 @@ func radarScanNow(home string) radarScanMsg {
 		statuses: rigStatuses(rigs, home, time.Now()),
 		sessions: sessions,
 		attached: attached,
-		agents:   tmuxAgentChildren(),
+		agents:   liveAgentChildren(),
 		stones:   tombstoneRows(time.Now()),
 	}
 }
@@ -859,7 +860,7 @@ func (m *radarModel) apply(scan radarScanMsg) {
 	var currentRow *rigStatus
 	var inflight, parked []rigStatus
 	for _, s := range scan.statuses {
-		session := tmuxSessionName(s.Path)
+		session := rigSessionName(s.Path)
 		rigSessions[session] = true
 		if prs, ok := m.prs[s.Slug]; ok {
 			s.PRs = prs
@@ -896,7 +897,7 @@ func (m *radarModel) apply(scan radarScanMsg) {
 			rows[i].agents = scan.agents[sessionOf(rows[i])]
 		}
 	}
-	rigSession := func(s rigStatus) string { return tmuxSessionName(s.Path) }
+	rigSession := func(s rigStatus) string { return rigSessionName(s.Path) }
 	attachAgents(inflight, rigSession)
 	attachAgents(parked, rigSession)
 	attachAgents(sessions, func(s rigStatus) string { return s.session })
@@ -936,7 +937,7 @@ func (m *radarModel) applyParked(path string, parked bool) {
 	found.SessionLive = !parked
 	found.Agent = ""
 	found.agents = nil
-	delete(m.attached, tmuxSessionName(path))
+	delete(m.attached, rigSessionName(path))
 	if parked {
 		m.parked = append(m.parked, found)
 	} else {
@@ -949,7 +950,7 @@ func (m *radarModel) applyParked(path string, parked bool) {
 // directory (home-relativized) reads as the title, and its last-attached time
 // stands in for Created so the age column shows how long since you were there
 // and MRU sorting falls out of the same field the rigs use.
-func bareSession(ts tmuxSession, home string) rigStatus {
+func bareSession(ts mux.Session, home string) rigStatus {
 	var created time.Time
 	if ts.LastAttached > 0 {
 		created = time.Unix(ts.LastAttached, 0)
@@ -1213,7 +1214,7 @@ func (m radarModel) recency(s rigStatus) int64 {
 	if s.bare {
 		r = m.attached[s.session]
 	} else {
-		r = m.attached[tmuxSessionName(s.Path)]
+		r = m.attached[rigSessionName(s.Path)]
 	}
 	if t := s.LastTouched.Unix(); t > r {
 		r = t

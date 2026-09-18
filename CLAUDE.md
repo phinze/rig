@@ -442,6 +442,54 @@ you don't get asked what you just said.
 
 ## Architecture
 
+### The multiplexer backend
+
+Every command drives its multiplexer through `backend`, a package-level
+`mux.Backend` chosen once in `main` from the same ladder the agent uses:
+`RIG_BACKEND` for this shell, `rig config backend` for this user, then tmux.
+The seam is `internal/mux`, and it sits at rig's own vocabulary rather than
+tmux's verbs — `MarkPane(pane, agent, repo)`, `Panes(session)`,
+`NewCommandWindow`, `JoinPane`, `Attach` — so a caller never says "set a user
+option" and the backend decides how a mark survives. `internal/mux/tmux` keeps
+them as `@rig-*` options, and that detail lives nowhere else. Three things
+there are deliberate. `mux` does not know what an agent is: `AllPanes` hands
+back every pane with its command and title, and `agentChildren` in the root
+package decides which are agents and what they're doing, so a second backend
+never re-learns Claude's title glyph. `mux.SessionName` is a function rather
+than a backend method: a rig's session is the same string whichever
+multiplexer hosts it, which is what lets the manifest, the tombstone, and the
+teardown job stay backend-agnostic. And an unknown backend name is fatal at
+startup rather than a fallback to tmux, because `rig config backend` refuses
+to store one, so it can only arrive via `RIG_BACKEND`, and a typo that silently
+built the rig in the wrong multiplexer would be indistinguishable from the
+setting never having taken. `config` and `help` dispatch without resolving
+it, because `rig config backend --unset` is how you repair a stored name this
+binary doesn't know, and it can't do that if it dies first.
+
+The preference decides only for a *new* rig. The manifest records `backend`
+(empty means tmux, exactly as an empty `agent` means Claude), the tombstone
+and teardown job carry it forward, and `rigBackend(m)` reads it back. That
+last part matters most on Linux, where the systemd teardown worker inherits
+none of the invoking shell's preferences and must not hand one multiplexer's
+endpoint to another. Today only the teardown path routes per rig; the commands
+that hold a manifest still drive the global, and moving them across is the
+first job of a second backend, when a mixed machine is something a test can
+build. A second review also caught `TMUX_PANE` leaking past the seam in
+resume's "am I in the seat I'm about to fill" check; that's `CurrentPane` now,
+next to `CurrentSession`, and the two env reads live in `internal/mux/tmux`.
+`Attach` names `mux.ErrNoClientSwitch` for a backend that can't move the
+user's client between sessions; `attachOrReport` turns it into a "switch by
+hand" line rather than a failed command.
+
+The seam exists for a second multiplexer (see
+`memex/Projects/Ideas/rex-trial-tmux-profile.md` for that trial's notes,
+which stay out of this repo). `Panes` reading marks *back* is what lets a
+backend choose where marks live, and why the interface has no "set option". A
+pane's `Target` is likewise the backend's to fill in (tmux's
+`session:window.pane`, an opaque id elsewhere), so the radar's jump never
+learns a target syntax.
+
+
 TODO: fill in as the shape solidifies. For now, see DESIGN.md §"Shape
 sketch" and §"CLI shape".
 

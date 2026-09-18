@@ -69,14 +69,14 @@ func dispatchRig(r rigInfo, prompt string) error {
 		return fmt.Errorf("cannot dispatch a project overview rig")
 	}
 
-	session := tmuxSessionName(r.Path)
-	if tmuxHasSession(session) {
+	session := rigSessionName(r.Path)
+	if backend.HasSession(session) {
 		panes, err := adoptLegacyRigPanes(session, r.Path, m)
 		if err != nil {
 			return fmt.Errorf("inspecting %s agent: %w", m.ID, err)
 		}
 		for _, pane := range panes {
-			if pane.PaneRole == rigPaneAgent && !isShellCommand(pane.Command) {
+			if pane.Role == rigPaneAgent && !isShellCommand(pane.Command) {
 				return fmt.Errorf("%s already has a running agent; enter the rig to hand it more work", m.ID)
 			}
 		}

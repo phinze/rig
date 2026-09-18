@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/phinze/rig/internal/mux"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,29 +11,11 @@ import (
 )
 
 const (
-	rigPaneRoleOption   = "@rig-pane-role"
-	rigPaneRepoOption   = "@rig-pane-repo"
-	rigWindowRoleOption = "@rig-window-role"
-	rigWindowRepoOption = "@rig-window-repo"
-
 	rigPaneAgent  = "agent"
 	rigPaneRecto  = "recto"
 	rigWindowMain = "main"
 	rigWindowRepo = "repo"
 )
-
-type rigTmuxPane struct {
-	PaneID     string
-	WindowID   string
-	WindowIdx  string
-	WindowName string
-	PaneRole   string
-	PaneRepo   string
-	WindowRole string
-	WindowRepo string
-	Command    string
-	Path       string
-}
 
 func mainWindowName(repo string) string {
 	if repo == "" {
@@ -42,54 +25,15 @@ func mainWindowName(repo string) string {
 }
 
 func markRigPane(pane, role, repo string) error {
-	if err := tmuxSetPaneOption(pane, rigPaneRoleOption, role); err != nil {
-		return err
-	}
-	return tmuxSetPaneOption(pane, rigPaneRepoOption, repo)
+	return backend.MarkPane(pane, role, repo)
 }
 
 func markRigMainWindow(window, repo string) error {
-	if err := tmuxSetWindowOption(window, rigWindowRoleOption, rigWindowMain); err != nil {
-		return err
-	}
-	return tmuxSetWindowOption(window, rigWindowRepoOption, repo)
+	return backend.MarkWindow(window, rigWindowMain, repo)
 }
 
 func markRigRepoWindow(window, repo string) error {
-	if err := tmuxSetWindowOption(window, rigWindowRoleOption, rigWindowRepo); err != nil {
-		return err
-	}
-	return tmuxSetWindowOption(window, rigWindowRepoOption, repo)
-}
-
-func tmuxRigPanes(session string) ([]rigTmuxPane, error) {
-	format := strings.Join([]string{
-		"#{pane_id}", "#{window_id}", "#{window_index}", "#{window_name}",
-		"#{@rig-pane-role}", "#{@rig-pane-repo}",
-		"#{@rig-window-role}", "#{@rig-window-repo}",
-		"#{pane_current_command}", "#{pane_current_path}",
-	}, "\t")
-	cmd := tmuxCmd("list-panes", "-s", "-t", session, "-F", format)
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, err
-	}
-	var panes []rigTmuxPane
-	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
-		if line == "" {
-			continue
-		}
-		f := strings.SplitN(line, "\t", 10)
-		if len(f) != 10 {
-			continue
-		}
-		panes = append(panes, rigTmuxPane{
-			PaneID: f[0], WindowID: f[1], WindowIdx: f[2], WindowName: f[3],
-			PaneRole: f[4], PaneRepo: f[5], WindowRole: f[6], WindowRepo: f[7],
-			Command: f[8], Path: f[9],
-		})
-	}
-	return panes, nil
+	return backend.MarkWindow(window, rigWindowRepo, repo)
 }
 
 func repoForWorkspacePath(basedir string, m manifest, path string) string {
@@ -107,22 +51,22 @@ func repoForWorkspacePath(basedir string, m manifest, path string) string {
 // adoptLegacyRigPanes makes the carousel usable in sessions created before
 // pane metadata existed. Process/path discovery is deliberately only a
 // migration path; all newly created panes carry stable tmux user-options.
-func adoptLegacyRigPanes(session, basedir string, m manifest) ([]rigTmuxPane, error) {
-	panes, err := tmuxRigPanes(session)
+func adoptLegacyRigPanes(session, basedir string, m manifest) ([]mux.Pane, error) {
+	panes, err := backend.Panes(session)
 	if err != nil {
 		return nil, err
 	}
 	mainWindow := ""
 	mainRepo := ""
 	for _, p := range panes {
-		repo := p.PaneRepo
+		repo := p.Repo
 		if repo == "" {
 			repo = repoForWorkspacePath(basedir, m, p.Path)
 		}
-		if p.PaneRole == "" && (p.Command == "recto" || strings.HasPrefix(p.Command, "recto")) {
+		if p.Role == "" && (p.Command == "recto" || strings.HasPrefix(p.Command, "recto")) {
 			_ = markRigPane(p.PaneID, rigPaneRecto, repo)
 		}
-		if p.PaneRole == "" && isAgentCommand(p.Command) {
+		if p.Role == "" && isAgentCommand(p.Command) {
 			_ = markRigPane(p.PaneID, rigPaneAgent, repo)
 		}
 		if p.WindowRole == rigWindowMain || (mainWindow == "" && isAgentCommand(p.Command)) {
@@ -150,7 +94,7 @@ func adoptLegacyRigPanes(session, basedir string, m manifest) ([]rigTmuxPane, er
 		}
 	}
 	_ = markRigMainWindow(mainWindow, mainRepo)
-	_ = tmuxRenameWindow(mainWindow, mainWindowName(mainRepo))
+	_ = backend.RenameWindow(mainWindow, mainWindowName(mainRepo))
 	for _, p := range panes {
 		if p.WindowID == mainWindow || p.WindowRole != "" {
 			continue
@@ -159,7 +103,7 @@ func adoptLegacyRigPanes(session, basedir string, m manifest) ([]rigTmuxPane, er
 			_ = markRigRepoWindow(p.WindowID, repo)
 		}
 	}
-	return tmuxRigPanes(session)
+	return backend.Panes(session)
 }
 
 func resolveRectoRepo(m manifest, arg string) (string, error) {
@@ -184,16 +128,16 @@ func resolveRectoRepo(m manifest, arg string) (string, error) {
 	}
 }
 
-func findMainParts(panes []rigTmuxPane) (window, agent, recto rigTmuxPane, err error) {
+func findMainParts(panes []mux.Pane) (window, agent, recto mux.Pane, err error) {
 	for _, p := range panes {
 		if p.WindowRole != rigWindowMain {
 			continue
 		}
 		window = p
-		if p.PaneRole == rigPaneAgent {
+		if p.Role == rigPaneAgent {
 			agent = p
 		}
-		if p.PaneRole == rigPaneRecto {
+		if p.Role == rigPaneRecto {
 			recto = p
 		}
 	}
@@ -203,22 +147,22 @@ func findMainParts(panes []rigTmuxPane) (window, agent, recto rigTmuxPane, err e
 	return window, agent, recto, nil
 }
 
-func findRepoWindow(panes []rigTmuxPane, repo, exceptWindow string) (rigTmuxPane, bool) {
+func findRepoWindow(panes []mux.Pane, repo, exceptWindow string) (mux.Pane, bool) {
 	for _, p := range panes {
 		if p.WindowID != exceptWindow && p.WindowRole == rigWindowRepo && p.WindowRepo == repo {
 			return p, true
 		}
 	}
-	return rigTmuxPane{}, false
+	return mux.Pane{}, false
 }
 
-func findRectoPane(panes []rigTmuxPane, repo string) (rigTmuxPane, bool) {
+func findRectoPane(panes []mux.Pane, repo string) (mux.Pane, bool) {
 	for _, p := range panes {
-		if p.PaneRole == rigPaneRecto && p.PaneRepo == repo {
+		if p.Role == rigPaneRecto && p.Repo == repo {
 			return p, true
 		}
 	}
-	return rigTmuxPane{}, false
+	return mux.Pane{}, false
 }
 
 // rectoCommand is how every Recto in a rig starts, review or authoring. Recto
@@ -229,13 +173,13 @@ func rectoCommand() string {
 	return "recto"
 }
 
-func ensureRepoRecto(session, basedir, repo string, panes []rigTmuxPane) ([]rigTmuxPane, error) {
+func ensureRepoRecto(session, basedir, repo string, panes []mux.Pane) ([]mux.Pane, error) {
 	if _, ok := findRectoPane(panes, repo); ok {
 		return panes, nil
 	}
 	repoDir := filepath.Join(basedir, repo)
 	if w, ok := findRepoWindow(panes, repo, ""); ok {
-		pane, err := tmuxSplitHID(w.PaneID, repoDir, rectoCommand())
+		pane, err := backend.SplitCommand(w.PaneID, repoDir, rectoCommand())
 		if err != nil {
 			return nil, err
 		}
@@ -243,7 +187,7 @@ func ensureRepoRecto(session, basedir, repo string, panes []rigTmuxPane) ([]rigT
 			return nil, err
 		}
 	} else {
-		pane, window, err := tmuxNewCommandWindow(session, repo, repoDir, rectoCommand())
+		pane, window, err := backend.NewCommandWindow(session, repo, repoDir, rectoCommand())
 		if err != nil {
 			return nil, err
 		}
@@ -254,7 +198,7 @@ func ensureRepoRecto(session, basedir, repo string, panes []rigTmuxPane) ([]rigT
 			return nil, err
 		}
 	}
-	return tmuxRigPanes(session)
+	return backend.Panes(session)
 }
 
 func promoteRecto(session, basedir, repo string, m manifest) error {
@@ -276,22 +220,22 @@ func promoteRecto(session, basedir, repo string, m manifest) error {
 	}
 	if target.WindowID == main.WindowID {
 		_ = markRigMainWindow(main.WindowID, repo)
-		return tmuxRenameWindow(main.WindowID, mainWindowName(repo))
+		return backend.RenameWindow(main.WindowID, mainWindowName(repo))
 	}
 
 	if current.PaneID != "" {
-		outgoing := current.PaneRepo
+		outgoing := current.Repo
 		if outgoing == "" {
 			outgoing = repoForWorkspacePath(basedir, m, current.Path)
 		}
 		if parking, ok := findRepoWindow(panes, outgoing, main.WindowID); ok {
-			if err := tmuxJoinPane(current.PaneID, parking.PaneID); err != nil {
+			if err := backend.JoinPane(current.PaneID, parking.PaneID); err != nil {
 				return fmt.Errorf("parking %s recto: %w", outgoing, err)
 			}
 			_ = markRigRepoWindow(parking.WindowID, outgoing)
-			_ = tmuxRenameWindow(parking.WindowID, outgoing)
+			_ = backend.RenameWindow(parking.WindowID, outgoing)
 		} else {
-			window, err := tmuxBreakPane(current.PaneID, outgoing)
+			window, err := backend.BreakPane(current.PaneID, outgoing)
 			if err != nil {
 				return fmt.Errorf("parking %s recto: %w", outgoing, err)
 			}
@@ -301,16 +245,16 @@ func promoteRecto(session, basedir, repo string, m manifest) error {
 		}
 	}
 
-	if err := tmuxJoinPane(target.PaneID, agent.PaneID); err != nil {
+	if err := backend.JoinPane(target.PaneID, agent.PaneID); err != nil {
 		return fmt.Errorf("promoting %s recto: %w", repo, err)
 	}
 	if err := markRigMainWindow(main.WindowID, repo); err != nil {
 		return err
 	}
-	if err := tmuxRenameWindow(main.WindowID, mainWindowName(repo)); err != nil {
+	if err := backend.RenameWindow(main.WindowID, mainWindowName(repo)); err != nil {
 		return err
 	}
-	return tmuxSelectPane(agent.PaneID)
+	return backend.SelectPane(agent.PaneID)
 }
 
 // runRecto promotes a repository's persistent viewer into main's right-hand
@@ -337,8 +281,8 @@ func runRecto(args []string) error {
 	if err != nil {
 		return err
 	}
-	session := tmuxSessionName(basedir)
-	if !tmuxHasSession(session) {
+	session := rigSessionName(basedir)
+	if !backend.HasSession(session) {
 		return fmt.Errorf("rig session is not running")
 	}
 	if err := promoteRecto(session, basedir, repo, m); err != nil {

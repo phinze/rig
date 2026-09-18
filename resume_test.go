@@ -43,7 +43,7 @@ func TestEnsureRigRuntimeUpgradesLegacyBareSession(t *testing.T) {
 	if err := writeManifest(basedir, m); err != nil {
 		t.Fatal(err)
 	}
-	session := tmuxSessionName(basedir)
+	session := rigSessionName(basedir)
 	if out, err := exec.Command("tmux", "new-session", "-d", "-s", session, "-c", basedir).CombinedOutput(); err != nil {
 		t.Fatalf("starting legacy bare session: %v\n%s", err, out)
 	}

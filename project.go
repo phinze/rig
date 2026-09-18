@@ -144,7 +144,7 @@ func runProject(args []string) error {
 		return err
 	}
 	m := manifest{
-		ID: rigID, Title: project.Name, Kind: "project", Agent: string(pick.kind),
+		ID: rigID, Title: project.Name, Kind: "project", Agent: string(pick.kind), Backend: backend.Name(),
 		Tracker: "linear", TrackerID: project.ID, TrackerURL: project.URL,
 	}
 	if err := createBasedir(basedir, m); err != nil {

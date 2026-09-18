@@ -305,7 +305,7 @@ func reviewPickupPR(pr *prRef, meta prMeta, pick *agentPick) error {
 	m := manifest{
 		ID: rigID, Title: meta.Title, Kind: "review",
 		ReviewPRs: map[string]string{pr.Repo: pr.URL()},
-		Agent:     string(pick.kind), MainRepo: pr.Repo,
+		Agent:     string(pick.kind), Backend: backend.Name(), MainRepo: pr.Repo,
 		BuildingRepo: pr.Owner + "/" + pr.Repo,
 	}
 	if err := createBasedir(basedir, m); err != nil {
@@ -406,7 +406,7 @@ func authorPickupPR(pr *prRef, meta prMeta, pick *agentPick) error {
 	}
 
 	m := manifest{
-		ID: rigID, Title: meta.Title, Agent: string(pick.kind), MainRepo: pr.Repo,
+		ID: rigID, Title: meta.Title, Agent: string(pick.kind), Backend: backend.Name(), MainRepo: pr.Repo,
 		BuildingRepo: pr.Owner + "/" + pr.Repo,
 	} // kind "" = authoring
 	if tk, ok := primaryLinkedLinearTask(linked); ok {

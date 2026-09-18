@@ -26,6 +26,19 @@ func main() {
 		os.Exit(2)
 	}
 
+	// The multiplexer preference is resolved once here and every command
+	// drives it through the backend global. An unknown name is fatal rather
+	// than a fallback to tmux, because a typo that silently built a rig in the
+	// wrong multiplexer would look exactly like the setting never taking. The
+	// two commands that don't touch a multiplexer are exempt, and config has
+	// to be: it's the one that repairs a stored name this binary doesn't know.
+	if cmd != "config" && cmd != "help" {
+		if backend, err = defaultBackend(); err != nil {
+			fmt.Fprintf(os.Stderr, "rig: %v\n", err)
+			os.Exit(2)
+		}
+	}
+
 	switch cmd {
 	case "up":
 		err = runUp(args)
