@@ -235,3 +235,46 @@ func TestPickupPromptNamesEachSourcesTool(t *testing.T) {
 		t.Errorf("vikunja prompt = %q", vk)
 	}
 }
+
+func TestIssueRowsSurfacesFetchError(t *testing.T) {
+	// A config dir that doesn't exist makes the Vikunja source fail before it
+	// touches the network, the same way an unreachable server would later.
+	t.Setenv("PERSONAL_TASKS_CONFIG", filepath.Join(t.TempDir(), "missing"))
+	out := issueRows(sourceVikunja, "")
+	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("want exactly one error row, got %d:\n%s", len(lines), out)
+	}
+	cols := strings.Split(lines[0], "\t")
+	if len(cols) != 4 {
+		t.Fatalf("want 4 columns, got %d: %q", len(cols), lines[0])
+	}
+	if cols[0] != "" || cols[1] != "error" || cols[3] != string(sourceVikunja) {
+		t.Errorf("row = %q; want blank id, state error, source vikunja", lines[0])
+	}
+	if !strings.HasPrefix(cols[2], "tasks: ") || !strings.Contains(cols[2], "personal-tasks domains") {
+		t.Errorf("title = %q; want the source label and the fetch error", cols[2])
+	}
+
+	// Picking that row fails with its message rather than reading as a cancel
+	// or as a task with no id.
+	if _, err := parseIssueSelection(lines[0]); err == nil || err.Error() != cols[2] {
+		t.Errorf("selecting the error row = %v; want %q", err, cols[2])
+	}
+}
+
+func TestParseIssueSelection(t *testing.T) {
+	got, err := parseIssueSelection("PERS-3\topen\tFix the thing\tvikunja")
+	if err != nil || got != (taskRef{source: sourceVikunja, id: "PERS-3"}) {
+		t.Errorf("= (%+v, %v)", got, err)
+	}
+	if _, err := parseIssueSelection(""); err == nil {
+		t.Error("empty selection should be an error, not a blank task")
+	}
+}
+
+func TestOneLine(t *testing.T) {
+	if got := oneLine("a\tb\n  c"); got != "a b c" {
+		t.Errorf("= %q", got)
+	}
+}

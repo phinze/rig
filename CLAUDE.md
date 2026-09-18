@@ -328,6 +328,14 @@ where it came from without a sync back. ctrl-t is the radar's show-torn-down
 key, but the two never share a screen; ctrl-s would be the honest mnemonic and
 is XOFF on any terminal without `-ixon`.
 
+A source that can't be reached shows up as one row where its rows would be:
+blank id, state `error`, the message as the title. It used to yield nothing,
+which made a tracker outage read as "no open tasks" and sent a whole evening
+after a rig bug that wasn't one. stderr isn't an option there, since fzf runs
+`__issues` on a keypress and would draw the splat over its own UI. Enter on that
+row fails with the message rather than cancelling; the blank id is what
+`parseIssueSelection` keys on.
+
 An exact id routes by shape. `owner/repo#9` and an issue URL are GitHub. A
 `TEAM-123` id is Linear's shape and Vikunja's both (PERS-3, CTL-1, NDSM-2 are
 per-project indexes), so `resolveTask` asks the personal-tasks domains whether

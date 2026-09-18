@@ -78,8 +78,23 @@ func resolveIssueID(args []string, pick *agentPick, source taskSource) (taskRef,
 	if sel == "" {
 		return taskRef{}, nil
 	}
+	return parseIssueSelection(sel)
+}
+
+// parseIssueSelection reads the row fzf handed back. A row with no identifier
+// is the error row issueRows prints when a source can't be reached, and
+// picking it fails with that message rather than quietly cancelling, so the
+// reason lands on stderr where you're already looking.
+func parseIssueSelection(sel string) (taskRef, error) {
 	cols := strings.Split(sel, "\t")
 	ref := taskRef{id: strings.TrimSpace(cols[0])}
+	if ref.id == "" {
+		msg := "picker returned an empty row"
+		if len(cols) >= 3 && cols[2] != "" {
+			msg = cols[2]
+		}
+		return taskRef{}, fmt.Errorf("%s", msg)
+	}
 	if len(cols) >= 4 {
 		if s, err := parseTaskSource(cols[3]); err == nil {
 			ref.source = s
@@ -92,9 +107,7 @@ func resolveIssueID(args []string, pick *agentPick, source taskSource) (taskRef,
 // fzf shells out to). Its first argument is the picker's source state file;
 // the rest is the query. It prints tab-delimited Identifier\tState\tTitle\tSource
 // rows — empty query lists each source's default open set, anything else feeds
-// that source's search. Because fzf runs it on a keypress, it stays quiet on
-// failure: a lookup error yields no rows rather than a stderr splat in the
-// middle of the picker UI.
+// that source's search.
 func runIssueRows(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: rig __issues STATEFILE [QUERY...]")
@@ -104,16 +117,33 @@ func runIssueRows(args []string) error {
 		source = sourceLinear
 	}
 	query := strings.TrimSpace(strings.Join(args[1:], " "))
+	_, _ = os.Stdout.WriteString(issueRows(source, query))
+	return nil
+}
+
+// issueRows renders the picker's rows for one source and query. Because fzf
+// runs this on a keypress, a lookup failure can't go to stderr without
+// splatting over the UI; it used to yield no rows at all, which made a tracker
+// outage indistinguishable from having nothing to pick up. It now yields one
+// row with the error where the rows would be: a blank identifier (so
+// parseIssueSelection knows to refuse it), the state `error`, and the message
+// as the title.
+func issueRows(source taskSource, query string) string {
 	cands, err := fetchSourceIssues(source, query, 25)
 	if err != nil {
-		return nil // stay quiet; the picker just shows no rows for this query
+		return fmt.Sprintf("\terror\t%s: %s\t%s\n", source.label(), oneLine(err.Error()), source)
 	}
 	var b strings.Builder
 	for _, c := range cands {
 		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\n", c.Identifier, c.State, c.Title, source)
 	}
-	_, _ = os.Stdout.WriteString(b.String())
-	return nil
+	return b.String()
+}
+
+// oneLine flattens an error message onto a single row: a newline would become
+// a second, identifier-less row and a tab would shift the columns.
+func oneLine(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // fetchSourceIssues is the picker's one fan-out point over sources.
