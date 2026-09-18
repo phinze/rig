@@ -484,6 +484,14 @@ that's distinct from the typo case, which the config command refuses at write
 time. `backend_test.go` registers a fake backend to prove the routing, since
 one real multiplexer can't.
 
+`internal/mux/rex` is the second backend, for Rex, selected with `rig config
+backend rex` or `RIG_BACKEND=rex`; every rig then records it and routes to it
+as above. Marks live in a sidecar under `$XDG_STATE_HOME/rig/rex-marks/`,
+removed with the session. Rex is a private alpha: the API notes, the reasons
+behind each workaround in that package, and the running list of findings live
+in memex (`Projects/Ideas/rex-trial-tmux-profile.md` and `rex-feedback.md`),
+not here.
+
 A second review caught `TMUX_PANE` leaking past the seam in resume's "am I in
 the seat I'm about to fill" check; that's `CurrentPane` now, next to
 `CurrentSession`, and the two env reads live in `internal/mux/tmux`. `Attach`

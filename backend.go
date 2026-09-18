@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/phinze/rig/internal/mux"
+	"github.com/phinze/rig/internal/mux/rex"
 	"github.com/phinze/rig/internal/mux/tmux"
 	"golang.org/x/term"
 )
@@ -17,24 +18,38 @@ import (
 // main from the preference ladder. It decides nothing about existing rigs:
 // each records the backend that hosts it, and sessionFor reads that back. The
 // commands that list across the whole machine (radar, switch, ls) ask every
-// known backend rather than this one, because a Mac in the middle of the Rex
-// trial has tmux rigs and Rex rigs side by side and the board has to show both.
+// known backend rather than this one, because a machine hosting two
+// multiplexers has rigs on each and the board has to show both.
 var preferredBackend mux.Backend = tmux.Backend{}
 
-// backends is every backend this binary can drive, in the order `rig config`
-// and a typo's suggestion print them. tmux is first because it's the default
-// an empty name resolves to. Tests register a fake here for the routing they
-// can't otherwise exercise with one real multiplexer.
-var backends = []mux.Backend{tmux.Backend{}}
-
-// knownBackends is every registered backend, whether or not its server is
-// running. A backend whose server is down lists nothing, which is the cheap
-// and correct answer for a board.
+// knownBackends is every backend this binary can drive, whether or not its
+// server is running, in the order `rig config` and a typo's suggestion print
+// them. tmux is first because it's the default an empty name resolves to. A
+// backend whose server is down lists nothing, which is the cheap and correct
+// answer for a board. It's computed per call rather than at init so the Rex
+// marks dir follows XDG_STATE_HOME, which tests pin after init.
 func knownBackends() []mux.Backend {
-	return backends
+	list := []mux.Backend{tmux.Backend{}, rex.Backend{MarksDir: rexMarksDir()}}
+	return append(list, extraBackends...)
+}
+
+// extraBackends is where a test registers a fake, since one real multiplexer
+// can't exercise the routing between two.
+var extraBackends []mux.Backend
+
+// rexMarksDir is where the Rex backend keeps its per-session mark sidecars:
+// derived state, so under the state dir beside everything else rig writes
+// down.
+func rexMarksDir() string {
+	dir, err := rigStateDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(dir, "rex-marks")
 }
 
 func backendNames() []string {
+	backends := knownBackends()
 	names := make([]string, 0, len(backends))
 	for _, b := range backends {
 		names = append(names, b.Name())
@@ -50,7 +65,7 @@ func backendByName(name string) (mux.Backend, error) {
 	if name == "" {
 		return tmux.Backend{}, nil
 	}
-	for _, b := range backends {
+	for _, b := range knownBackends() {
 		if b.Name() == name {
 			return b, nil
 		}
@@ -252,7 +267,13 @@ func agentChildren(panes []mux.Pane, now int64) map[string][]agentChild {
 	return children
 }
 
+// isAgentCommand recognises an agent by its foreground process name. Nix
+// wraps binaries as `.<name>-wrapped` around `.<name>-unwrapped`, and Rex
+// reports the real process where tmux reports the wrapper, so both spellings
+// are folded back to the name.
 func isAgentCommand(cmd string) bool {
+	cmd = strings.TrimPrefix(cmd, ".")
+	cmd = strings.TrimSuffix(strings.TrimSuffix(cmd, "-unwrapped"), "-wrapped")
 	return cmd == "claude" || strings.HasPrefix(cmd, "codex") || cmd == "agy" || strings.HasPrefix(cmd, "antigravity")
 }
 

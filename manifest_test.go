@@ -427,13 +427,13 @@ func TestManifestBackendRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Backend != "rex" {
-		t.Errorf("backend = %q, want rex", got.Backend)
+	if got.Backend != "rex" || backendNamed(got.Backend).Name() != "rex" {
+		t.Errorf("backend = %q, want rex resolving to rex", got.Backend)
 	}
 	// A backend this binary doesn't know still resolves, to tmux, rather than
 	// leaving a rig with no multiplexer at all; that's a fallback for a
 	// downgraded binary, not for a typo, which the config command refuses.
-	if backendNamed(got.Backend).Name() != "tmux" {
-		t.Errorf("unknown backend resolved to %s, want tmux", backendNamed(got.Backend).Name())
+	if backendNamed("screen").Name() != "tmux" {
+		t.Errorf("unknown backend resolved to %s, want tmux", backendNamed("screen").Name())
 	}
 }

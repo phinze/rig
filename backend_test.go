@@ -35,9 +35,9 @@ func (f *fakeBackend) KillSessionAt(name, endpoint string) error {
 
 func registerFakeBackend(t *testing.T, f *fakeBackend) {
 	t.Helper()
-	saved := backends
-	backends = append(append([]mux.Backend{}, saved...), f)
-	t.Cleanup(func() { backends = saved })
+	saved := extraBackends
+	extraBackends = append(append([]mux.Backend{}, saved...), f)
+	t.Cleanup(func() { extraBackends = saved })
 }
 
 // A rig's session lives on the backend its manifest names, not on whichever
