@@ -337,6 +337,35 @@ func TestTeardownQuarantinesBeforeRemoval(t *testing.T) {
 	t.Setenv("PATH", t.TempDir()) // Skip optional iso and docker cleanup.
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 
+	// A rig that built anything under Go's module cache leaves directories
+	// stamped 0555. They used to strand teardown outright; now they are the
+	// ordinary case and must go away on the first pass.
+	t.Run("read-only build output does not strand teardown", func(t *testing.T) {
+		root := t.TempDir()
+		basedir := filepath.Join(root, "rig")
+		mod := filepath.Join(basedir, "runtime", "tmp", "cache", "example.com", "mod@v1.0.0")
+		if err := os.MkdirAll(mod, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(mod, "session_manager.go"), nil, 0o444); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(mod, 0o555); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := teardownRig(basedir, manifest{ID: "mir-readonly"}); err != nil {
+			t.Fatalf("read-only module cache should not block teardown: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(root, ".rig-trash")); !os.IsNotExist(err) {
+			t.Errorf("quarantine should be empty and gone: %v", err)
+		}
+		jobs, err := pendingTeardownJobs()
+		if err != nil || len(jobs) != 0 {
+			t.Fatalf("pending jobs = %v, %v; want none", jobs, err)
+		}
+	})
+
 	t.Run("permission failure leaves only quarantined debris", func(t *testing.T) {
 		root := t.TempDir()
 		basedir := filepath.Join(root, "rig")
@@ -347,10 +376,9 @@ func TestTeardownQuarantinesBeforeRemoval(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(bin, "miren"), nil, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Chmod(bin, 0o555); err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = os.Chmod(bin, 0o755) })
+		// Genuinely root-owned, not merely read-only: the quarantine-before-
+		// removal ordering only matters for residue we cannot clear ourselves.
+		foreignOwnedDir(t, bin)
 
 		err := teardownRig(basedir, manifest{ID: "mir-locked"})
 		if err == nil {
@@ -370,15 +398,13 @@ func TestTeardownQuarantinesBeforeRemoval(t *testing.T) {
 		}
 		quarantinedBin := filepath.Join(trashRoot, entries[0].Name(), "runtime", "bin")
 		if _, err := os.Stat(filepath.Join(quarantinedBin, "miren")); err != nil {
-			t.Errorf("root-owned stand-in was not left in quarantine: %v", err)
+			t.Errorf("root-owned residue was not left in quarantine: %v", err)
 		}
 		jobs, err := pendingTeardownJobs()
 		if err != nil || len(jobs) != 1 {
 			t.Fatalf("pending jobs = %v, %v; want one retryable tombstone", jobs, err)
 		}
-		if err := os.Chmod(quarantinedBin, 0o755); err != nil {
-			t.Fatal(err)
-		}
+		giveBack(t, quarantinedBin)
 		if err := executeTeardownJobFile(jobs[0], false); err != nil {
 			t.Fatalf("retrying durable teardown: %v", err)
 		}

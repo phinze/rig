@@ -92,11 +92,13 @@ func TestSupersededJobCleansOnlyItsOwnTrash(t *testing.T) {
 	}
 }
 
-// Trash that can't be unlinked still keeps the job (see
-// TestTeardownQuarantinesBeforeRemoval — the bytes are real and somebody has to
-// collect them), but the error has to name the cause. Retrying a permission
-// failure gets nowhere on its own; the operator needs to know to reach for sudo.
-func TestQuarantineRemovalNamesPermissionCause(t *testing.T) {
+// Trash whose directories deny their own owner write access is the shape that
+// stranded every teardown job rig has ever accumulated, and it needs no
+// privilege at all: a rig that populated GOMODCACHE leaves thousands of 0555
+// directories full of files we own. This used to be diagnosed as root-owned
+// container output and handed to the operator with a note about sudo, which
+// sent them after an elevation they never needed.
+func TestQuarantineRemovalRepairsOwnReadOnlyDirs(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("running as root, which can unlink anything")
 	}
@@ -104,21 +106,41 @@ func TestQuarantineRemovalNamesPermissionCause(t *testing.T) {
 	if err := os.Mkdir(locked, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(locked, "artifact"), []byte("big binary"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(locked, "artifact"), []byte("big binary"), 0o444); err != nil {
 		t.Fatal(err)
 	}
-	// Stripping write permission from the parent is what root ownership
-	// effectively does to us: the file inside cannot be unlinked.
 	if err := os.Chmod(locked, 0o555); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
 
+	if err := removeQuarantined(&teardownJob{Version: teardownJobVersion, ID: "mir-822", Quarantined: locked}); err != nil {
+		t.Fatalf("a tree this user owns should need no elevation: %v", err)
+	}
+	if _, err := os.Stat(locked); !os.IsNotExist(err) {
+		t.Errorf("quarantined trash still exists: %v", err)
+	}
+}
+
+// Trash we genuinely cannot unlink still keeps the job (see
+// TestTeardownQuarantinesBeforeRemoval — the bytes are real and somebody has to
+// collect them), and the error has to name the directories at fault rather than
+// guessing at the cause, since they are the exact paths an elevated pass acts on.
+func TestQuarantineRemovalNamesForeignOwners(t *testing.T) {
+	locked := filepath.Join(t.TempDir(), "locked")
+	if err := os.Mkdir(locked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(locked, "artifact"), []byte("big binary"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	foreignOwnedDir(t, locked)
+
 	err := removeQuarantined(&teardownJob{Version: teardownJobVersion, ID: "mir-822", Quarantined: locked})
 	if err == nil {
 		t.Fatal("undeletable trash should keep the job for retry")
 	}
-	for _, want := range []string{"elevated permissions", "root-owned", locked} {
+	for _, want := range []string{"belong to another user", locked} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q should mention %q", err, want)
 		}

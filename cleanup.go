@@ -362,7 +362,7 @@ func executeTeardownJobForPlatform(job *teardownJob, platform string) error {
 		}
 	}
 	for _, dir := range job.ScratchDirs {
-		if err := os.RemoveAll(dir); err != nil {
+		if err := removeAllForce(dir); err != nil {
 			return fmt.Errorf("removing agent scratch %s: %w", dir, err)
 		}
 	}
@@ -505,20 +505,25 @@ func sortedKeys(m map[string][]string) []string {
 // the job for a later retry, which is deliberate: the bytes are still there and
 // somebody has to collect them.
 //
-// The common cause is worth naming in the error, because it isn't obvious and
-// it isn't fixable by retrying. A container that ran as root leaves root-owned
-// build output inside a root-owned directory, and unlinking a file needs write
-// access to its *parent*, which the rig's own user doesn't have. Retrying that
-// forever gets nowhere; the operator needs to know to reach for sudo.
+// removeAllForce already handles the case that produced every stranded job so
+// far, which is a Go module cache full of 0555 directories we own. What
+// survives it is genuine foreign-uid residue, and that is worth naming in the
+// error because retrying gets nowhere: unlinking a file needs write access to
+// its *parent*, and chmod on a parent we do not own is refused. The error
+// carries the exact directories so the message can point at them rather than
+// guessing.
 func removeQuarantined(job *teardownJob) error {
 	if job.Quarantined == "" {
 		return nil
 	}
-	if err := os.RemoveAll(job.Quarantined); err != nil {
-		if os.IsPermission(err) {
+	if err := removeAllForce(job.Quarantined); err != nil {
+		var residue *permissionResidue
+		if errors.As(err, &residue) {
 			return fmt.Errorf("removing quarantined basedir %s: %w\n"+
-				"      it holds files this user cannot unlink, usually root-owned container output;\n"+
-				"      clear it with elevated permissions and rerun `rig reap`", job.Quarantined, err)
+				"      these directories belong to another user, usually root-owned container or iso output:\n"+
+				"        %s\n"+
+				"      rerun `rig reap` to retry with elevation", job.Quarantined,
+				residue.Err, strings.Join(residue.Blocked, "\n        "))
 		}
 		return fmt.Errorf("removing quarantined basedir %s: %w", job.Quarantined, err)
 	}
@@ -764,7 +769,10 @@ func cleanupOrphanedRigRuntime(active, tearingDown map[string]bool, dryRun bool)
 		}
 		if scope.Basedir != "" && pathInside(resolvePath(workspaceRoot), resolvePath(scope.Basedir)) {
 			for _, dir := range claudeScratchDirs(scope.Basedir) {
-				if err := os.RemoveAll(dir); err != nil {
+				// removeAllForce, but never the elevated pass: this path is
+				// derived from a scope's RIG_BASEDIR with no teardown job
+				// behind it, so there is no recorded decision to carry.
+				if err := removeAllForce(dir); err != nil {
 					return cleaned, fmt.Errorf("removing orphan scratch %s: %w", dir, err)
 				}
 			}
