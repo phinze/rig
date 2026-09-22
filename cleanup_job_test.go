@@ -122,11 +122,11 @@ func TestQuarantineRemovalRepairsOwnReadOnlyDirs(t *testing.T) {
 	}
 }
 
-// Trash we genuinely cannot unlink still keeps the job (see
-// TestTeardownQuarantinesBeforeRemoval — the bytes are real and somebody has to
-// collect them), and the error has to name the directories at fault rather than
-// guessing at the cause, since they are the exact paths an elevated pass acts on.
-func TestQuarantineRemovalNamesForeignOwners(t *testing.T) {
+// Root-owned residue is what the iso dev environment leaves behind routinely,
+// and by teardown time the decision to destroy it has already been made and
+// written down. So it gets reclaimed and removed rather than handed back to
+// the operator with homework.
+func TestQuarantineRemovalReclaimsForeignOwners(t *testing.T) {
 	locked := filepath.Join(t.TempDir(), "locked")
 	if err := os.Mkdir(locked, 0o755); err != nil {
 		t.Fatal(err)
@@ -136,11 +136,34 @@ func TestQuarantineRemovalNamesForeignOwners(t *testing.T) {
 	}
 	foreignOwnedDir(t, locked)
 
+	job := &teardownJob{Version: teardownJobVersion, ID: "mir-822", Quarantined: locked}
+	if err := removeQuarantined(job); err != nil {
+		t.Fatalf("root-owned trash inside the quarantine should be reclaimed: %v", err)
+	}
+	if _, err := os.Stat(locked); !os.IsNotExist(err) {
+		t.Errorf("quarantined trash still exists: %v", err)
+	}
+}
+
+// When elevation is not available at all the job has to survive for a later
+// retry, and say which directories a human would have to deal with. This is
+// the shape a machine without passwordless sudo sees on every reap.
+func TestQuarantineRemovalKeepsJobWhenElevationUnavailable(t *testing.T) {
+	locked := filepath.Join(t.TempDir(), "locked")
+	if err := os.Mkdir(locked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(locked, "artifact"), []byte("big binary"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	foreignOwnedDir(t, locked)
+	t.Setenv("PATH", t.TempDir()) // no sudo to be found
+
 	err := removeQuarantined(&teardownJob{Version: teardownJobVersion, ID: "mir-822", Quarantined: locked})
 	if err == nil {
-		t.Fatal("undeletable trash should keep the job for retry")
+		t.Fatal("unreclaimable trash should keep the job for retry")
 	}
-	for _, want := range []string{"belong to another user", locked} {
+	for _, want := range []string{"reclaimed by hand", locked} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q should mention %q", err, want)
 		}

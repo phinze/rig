@@ -362,7 +362,7 @@ func executeTeardownJobForPlatform(job *teardownJob, platform string) error {
 		}
 	}
 	for _, dir := range job.ScratchDirs {
-		if err := removeAllForce(dir); err != nil {
+		if err := removeAllForJob(job, dir); err != nil {
 			return fmt.Errorf("removing agent scratch %s: %w", dir, err)
 		}
 	}
@@ -505,26 +505,17 @@ func sortedKeys(m map[string][]string) []string {
 // the job for a later retry, which is deliberate: the bytes are still there and
 // somebody has to collect them.
 //
-// removeAllForce already handles the case that produced every stranded job so
-// far, which is a Go module cache full of 0555 directories we own. What
-// survives it is genuine foreign-uid residue, and that is worth naming in the
-// error because retrying gets nowhere: unlinking a file needs write access to
-// its *parent*, and chmod on a parent we do not own is refused. The error
-// carries the exact directories so the message can point at them rather than
-// guessing.
+// removeAllForJob handles both causes: a Go module cache full of 0555
+// directories we own is repaired unprivileged, and genuine foreign-uid residue
+// is reclaimed under the job's authority. What reaches the error here survived
+// both, so it is wrapped rather than reformatted — it already names the
+// directories at fault and why reclaiming them did not work, and those are two
+// different things the operator needs.
 func removeQuarantined(job *teardownJob) error {
 	if job.Quarantined == "" {
 		return nil
 	}
-	if err := removeAllForce(job.Quarantined); err != nil {
-		var residue *permissionResidue
-		if errors.As(err, &residue) {
-			return fmt.Errorf("removing quarantined basedir %s: %w\n"+
-				"      these directories belong to another user, usually root-owned container or iso output:\n"+
-				"        %s\n"+
-				"      rerun `rig reap` to retry with elevation", job.Quarantined,
-				residue.Err, strings.Join(residue.Blocked, "\n        "))
-		}
+	if err := removeAllForJob(job, job.Quarantined); err != nil {
 		return fmt.Errorf("removing quarantined basedir %s: %w", job.Quarantined, err)
 	}
 	_ = os.Remove(filepath.Dir(job.Quarantined))

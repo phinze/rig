@@ -378,6 +378,9 @@ func TestTeardownQuarantinesBeforeRemoval(t *testing.T) {
 		}
 		// Genuinely root-owned, not merely read-only: the quarantine-before-
 		// removal ordering only matters for residue we cannot clear ourselves.
+		// The cleared PATH above also means no sudo, so this exercises the
+		// machine that cannot elevate, which is the one that still needs the
+		// job to survive for a later retry.
 		foreignOwnedDir(t, bin)
 
 		err := teardownRig(basedir, manifest{ID: "mir-locked"})
