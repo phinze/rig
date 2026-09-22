@@ -185,6 +185,54 @@ stranded teardown jobs and stops orphaned tmux/iso scopes, nothing more, and
 find yourself adding a policy gate to reap, that's the signal the decision
 belongs in sweep instead. See DESIGN.md §"Reaping".
 
+Teardown deletes through `removeAllForce`, which separates two failures that
+wear the same "permission denied" face and need opposite treatment. The common
+one by far is a directory that denies write access to its own owner: Go stamps
+its module cache 0555, and since unlinking is a write to the *parent*, a tree
+of files we own can refuse to go away. Nothing privileged is involved and
+retrying never helps. That used to be diagnosed as root-owned container output
+with a note to reach for sudo, and it was wrong every time it fired — both jobs
+stranded when this was written were 100% owned by the invoking user, one of
+them 656MB of module cache. The repair is a single walk restoring the write bit
+before one retry, rather than chmod-parent-and-retry, because `RemoveAll` only
+ever names the first path it tripped on and a 1,570-directory cache would
+otherwise cost 1,570 full walks.
+
+What survives that is genuine foreign-uid residue, which the iso dev
+environment produces routinely, and `removeAllForJob` reclaims it under the
+teardown job's authority. That authority is the entire justification and it is
+narrower than it looks: a teardown job is a durable record of a human running
+`down` or `sweep`, written before anything is destroyed, and reap only replays
+one. Elevation is therefore not a policy gate of the kind the paragraph above
+warns about — reap still decides nothing, it carries a decision already made to
+the files it was always about. The tell is that paths with *no* job behind them
+get no elevation at all: `cleanupOrphanedRigRuntime` derives its target from a
+scope's `RIG_BASEDIR`, so there is no record to carry and it gets the
+unprivileged repair alone.
+
+What gets elevated is `chown`, never `rm`, and only the directories that
+actually block an unlink — no `-R`, since write access to a directory is all an
+unlink needs. Keeping the privileged step non-destructive is what makes a
+scoping bug survivable: it changes an owner rather than destroying a tree, the
+deletion itself stays unprivileged under every guard that already governs it,
+and a run that dies halfway leaves a tree we fully own, so the next retry needs
+no sudo. `authorizeElevation` fails closed on each target — absolute, a
+directory by `Lstat` so a symlink can never stand in for what it points at,
+resolving inside the quarantined basedir or a recorded scratch dir, and
+actually owned by somebody else. Scope is checked before ownership because both
+refuse a sibling rig but only one of them names the trespass. `Basedir` is
+deliberately not a root: by removal time it has been renamed into the trash, so
+a live directory answering to the old name belongs to whatever rig was built
+there since. sudo runs `-n` first so the hourly timer fails instead of blocking
+on a prompt nobody will see, asking interactively only when stdin is a
+terminal.
+
+The foreign-uid tests need a second uid to be honest, which is
+unprivileged-impossible, so they skip unless `RIG_TEST_PRIVILEGED=1` and
+passwordless sudo are both there. Do not replace them with a chmod standing in
+for root ownership: that is exactly the conflation that produced the bug, and
+the tests encoded it for as long as the code did.
+
 Teardown is reversible for a week. `prepareTeardownJob` writes a tombstone
 before it destroys anything, so `down` and `sweep` both get it without knowing
 it exists and nothing can kill a rig by a path that skips it. The field that
