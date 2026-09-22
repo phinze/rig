@@ -17,7 +17,11 @@
       system:
       let
         pkgs = import nixpkgs { inherit system; };
-        rig = pkgs.buildGoModule {
+        # Pinned rather than taking pkgs.go, which still tracks 1.26 in
+        # nixpkgs. go.mod names the same version, so the toolchain a devShell
+        # gets and the one the package builds with cannot drift apart.
+        go = pkgs.go_1_27;
+        rig = (pkgs.buildGoModule.override { inherit go; }) {
           pname = "rig";
           version = "0.0.1";
           src = ./.;
@@ -33,12 +37,12 @@
         checks.default = rig;
 
         devShells.default = pkgs.mkShell {
-          packages = with pkgs; [
+          packages = [
             go
-            gopls
-            gotools
-            golangci-lint
-            gnumake
+            pkgs.gopls
+            pkgs.gotools
+            pkgs.golangci-lint
+            pkgs.gnumake
           ];
         };
       }
