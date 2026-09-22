@@ -620,7 +620,7 @@ func discoverComposeProjects(basedir string) (map[string]string, error) {
 	}
 	base := resolvePath(basedir)
 	found := map[string]string{}
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
 		project, workdir, ok := strings.Cut(line, "\t")
 		if !ok || project == "" || workdir == "" {
 			continue
@@ -821,7 +821,7 @@ func allRigProcessScopes() ([]rigProcessScope, error) {
 			continue
 		}
 		var owned rigProcessScope
-		for _, field := range strings.Fields(string(body)) {
+		for field := range strings.FieldsSeq(string(body)) {
 			pid, err := strconv.Atoi(field)
 			if err != nil {
 				continue
@@ -862,7 +862,7 @@ func userManagerCgroupRoot() (string, error) {
 		return "", err
 	}
 	needle := fmt.Sprintf("/user@%d.service", os.Getuid())
-	for _, line := range strings.Split(strings.TrimSpace(string(body)), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(string(body)), "\n") {
 		_, path, ok := strings.Cut(line, "::")
 		if !ok {
 			continue
@@ -879,7 +879,7 @@ func processRigEnv(pid int) (id, basedir string) {
 	if err != nil {
 		return "", ""
 	}
-	for _, field := range strings.Split(string(body), "\x00") {
+	for field := range strings.SplitSeq(string(body), "\x00") {
 		if value, ok := strings.CutPrefix(field, "RIG_ID="); ok {
 			id = value
 		}

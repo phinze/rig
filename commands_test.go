@@ -87,14 +87,14 @@ func TestPrMarker(t *testing.T) {
 		want string
 	}{
 		{"no pr", nil, "-"},
-		{"open with checks", []rigPR{{Repo: "o/rig", prInfo: prInfo{Number: 7, State: "OPEN", Checks: "passing"}}}, "#7 OPEN/passing"},
-		{"merged, no checks", []rigPR{{Repo: "o/rig", prInfo: prInfo{Number: 7, State: "MERGED"}}}, "#7 MERGED"},
-		{"failing checks", []rigPR{{Repo: "o/rig", prInfo: prInfo{Number: 12, State: "OPEN", Checks: "failing"}}}, "#12 OPEN/failing"},
+		{"open with checks", []rigPR{{Repo: "o/rig", Number: 7, State: "OPEN", Checks: "passing"}}, "#7 OPEN/passing"},
+		{"merged, no checks", []rigPR{{Repo: "o/rig", Number: 7, State: "MERGED"}}, "#7 MERGED"},
+		{"failing checks", []rigPR{{Repo: "o/rig", Number: 12, State: "OPEN", Checks: "failing"}}, "#12 OPEN/failing"},
 		{
 			"multi-repo prefixes short repo names",
 			[]rigPR{
-				{Repo: "phinze/infra", prInfo: prInfo{Number: 80, State: "OPEN", Checks: "passing"}},
-				{Repo: "phinze/runtime", prInfo: prInfo{Number: 42, State: "OPEN", Checks: "failing"}},
+				{Repo: "phinze/infra", Number: 80, State: "OPEN", Checks: "passing"},
+				{Repo: "phinze/runtime", Number: 42, State: "OPEN", Checks: "failing"},
 			},
 			"infra #80 OPEN/passing  runtime #42 OPEN/failing",
 		},

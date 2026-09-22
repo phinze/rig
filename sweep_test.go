@@ -36,7 +36,7 @@ func TestSweepDecision(t *testing.T) {
 		{
 			name: "approved and green offers the merge",
 			in: sweepInput{Disp: "approved", PRs: []rigPR{
-				{prInfo: prInfo{Number: 7, State: "OPEN", Review: "APPROVED", Checks: "passing"}},
+				{Number: 7, State: "OPEN", Review: "APPROVED", Checks: "passing"},
 			}},
 			wantAction: actionMerge,
 			wantDetail: "CI clear",
@@ -46,14 +46,14 @@ func TestSweepDecision(t *testing.T) {
 			// normal merge-ready state rather than checks that haven't run.
 			name: "approved with no checks configured is still mergeable",
 			in: sweepInput{Disp: "approved", PRs: []rigPR{
-				{prInfo: prInfo{Number: 8, State: "OPEN", Review: "APPROVED", Checks: ""}},
+				{Number: 8, State: "OPEN", Review: "APPROVED", Checks: ""},
 			}},
 			wantAction: actionMerge,
 		},
 		{
 			name: "approved but CI pending holds",
 			in: sweepInput{Disp: "approved", PRs: []rigPR{
-				{prInfo: prInfo{Number: 9, State: "OPEN", Review: "APPROVED", Checks: "pending"}},
+				{Number: 9, State: "OPEN", Review: "APPROVED", Checks: "pending"},
 			}},
 			wantAction: actionNone,
 			wantDetail: "CI pending",
@@ -63,7 +63,7 @@ func TestSweepDecision(t *testing.T) {
 			// build isn't — so it goes to needs-you rather than sitting quiet.
 			name: "approved but CI failing summons you",
 			in: sweepInput{Disp: "approved", PRs: []rigPR{
-				{Repo: "o/runtime", prInfo: prInfo{Number: 10, State: "OPEN", Review: "APPROVED", Checks: "failing"}},
+				{Repo: "o/runtime", Number: 10, State: "OPEN", Review: "APPROVED", Checks: "failing"},
 			}},
 			wantAction: actionAttend,
 			wantDetail: "CI failing on runtime#10",
@@ -73,7 +73,7 @@ func TestSweepDecision(t *testing.T) {
 			// promise that a verdict brings it back.
 			name: "approved but CI failing wakes a parked rig",
 			in: sweepInput{Disp: "approved", Parked: true, PRs: []rigPR{
-				{Repo: "o/runtime", prInfo: prInfo{Number: 10, State: "OPEN", Review: "APPROVED", Checks: "failing"}},
+				{Repo: "o/runtime", Number: 10, State: "OPEN", Review: "APPROVED", Checks: "failing"},
 			}},
 			wantAction: actionWake,
 			wantDetail: "CI failing on runtime#10",
@@ -140,7 +140,7 @@ func TestSweepDecision(t *testing.T) {
 			// in the quiet pile.
 			name: "failing CI outranks awaiting review",
 			in: sweepInput{Disp: "waiting", PRs: []rigPR{
-				{Repo: "o/mirendev", prInfo: prInfo{Number: 111, State: "OPEN", Review: "REVIEW_REQUIRED", Checks: "failing"}},
+				{Repo: "o/mirendev", Number: 111, State: "OPEN", Review: "REVIEW_REQUIRED", Checks: "failing"},
 			}},
 			wantAction: actionAttend,
 			wantDetail: "CI failing on mirendev#111",
@@ -149,7 +149,7 @@ func TestSweepDecision(t *testing.T) {
 			// Changes-requested is the more specific answer, so it still wins.
 			name: "changes requested outranks failing CI",
 			in: sweepInput{Disp: "changes requested", PRs: []rigPR{
-				{Repo: "o/r", prInfo: prInfo{Number: 1, State: "OPEN", Review: "CHANGES_REQUESTED", Checks: "failing"}},
+				{Repo: "o/r", Number: 1, State: "OPEN", Review: "CHANGES_REQUESTED", Checks: "failing"},
 			}},
 			wantAction: actionAttend,
 			wantDetail: "review came back with changes",
@@ -160,7 +160,7 @@ func TestSweepDecision(t *testing.T) {
 			// waiting, which for a live rig means park.
 			name: "pending CI is not a summons",
 			in: sweepInput{Disp: "waiting", PRs: []rigPR{
-				{Repo: "o/r", prInfo: prInfo{Number: 2, State: "OPEN", Review: "REVIEW_REQUIRED", Checks: "pending"}},
+				{Repo: "o/r", Number: 2, State: "OPEN", Review: "REVIEW_REQUIRED", Checks: "pending"},
 			}},
 			wantAction: actionPark,
 			wantDetail: "awaiting review",
@@ -199,10 +199,10 @@ func TestSweepDecision(t *testing.T) {
 // to be precise about which PRs it hands over and honest about the ones it holds.
 func TestMergeablePRs(t *testing.T) {
 	prs := []rigPR{
-		{Repo: "o/a", prInfo: prInfo{Number: 1, State: "MERGED", Review: "APPROVED", Checks: "passing"}},
-		{Repo: "o/b", prInfo: prInfo{Number: 2, State: "OPEN", Review: "APPROVED", Checks: "passing"}},
-		{Repo: "o/c", prInfo: prInfo{Number: 3, State: "OPEN", Review: "APPROVED", Checks: "failing"}},
-		{Repo: "o/d", prInfo: prInfo{Number: 4, State: "OPEN", Review: "REVIEW_REQUIRED", Checks: "passing"}},
+		{Repo: "o/a", Number: 1, State: "MERGED", Review: "APPROVED", Checks: "passing"},
+		{Repo: "o/b", Number: 2, State: "OPEN", Review: "APPROVED", Checks: "passing"},
+		{Repo: "o/c", Number: 3, State: "OPEN", Review: "APPROVED", Checks: "failing"},
+		{Repo: "o/d", Number: 4, State: "OPEN", Review: "REVIEW_REQUIRED", Checks: "passing"},
 	}
 	ready, held := mergeablePRs(prs)
 	if len(ready) != 1 || ready[0].Number != 2 {
@@ -229,8 +229,8 @@ func TestSweepMultiRepoMergeRow(t *testing.T) {
 		action: actionMerge,
 		detail: "approved, CI clear",
 		merges: []rigPR{
-			{Repo: "o/runtime", prInfo: prInfo{Number: 971, Title: "Enable distributed runners"}},
-			{Repo: "o/cloud", prInfo: prInfo{Number: 42, Title: "Wire the runner UI"}},
+			{Repo: "o/runtime", Number: 971, Title: "Enable distributed runners"},
+			{Repo: "o/cloud", Number: 42, Title: "Wire the runner UI"},
 		},
 	}
 	if got, want := sweepRefs(p), "runtime#971 cloud#42"; got != want {
@@ -258,8 +258,8 @@ func TestSweepMultiRepoMergeRow(t *testing.T) {
 // treats it as still waiting rather than landing half a cross-repo change.
 func TestSweepMixedReviewStatesAreLeftAlone(t *testing.T) {
 	prs := []rigPR{
-		{Repo: "o/runtime", prInfo: prInfo{Number: 1, State: "OPEN", Review: "APPROVED", Checks: "passing"}},
-		{Repo: "o/cloud", prInfo: prInfo{Number: 2, State: "OPEN", Review: "REVIEW_REQUIRED", Checks: "passing"}},
+		{Repo: "o/runtime", Number: 1, State: "OPEN", Review: "APPROVED", Checks: "passing"},
+		{Repo: "o/cloud", Number: 2, State: "OPEN", Review: "REVIEW_REQUIRED", Checks: "passing"},
 	}
 	if got := parkedDisposition(prs); got != "waiting" {
 		t.Fatalf("disposition = %q, want waiting", got)
@@ -378,7 +378,7 @@ func TestRigDirtyReposSubtractsPushedPRHeads(t *testing.T) {
 	head := strings.TrimSpace(string(headRaw))
 
 	m := manifest{ID: "t", Repos: map[string]string{"repo": "o/r"}}
-	pushed := []rigPR{{Repo: "o/r", prInfo: prInfo{Number: 1, State: "OPEN", HeadOID: head}}}
+	pushed := []rigPR{{Repo: "o/r", Number: 1, State: "OPEN", HeadOID: head}}
 
 	if got := rigDirtyRepos(basedir, m, pushed); len(got) != 0 {
 		t.Errorf("dirty = %v, want none — the only off-trunk work is the pushed PR head", got)
@@ -401,7 +401,7 @@ func TestRigDirtyReposSubtractsPushedPRHeads(t *testing.T) {
 func TestExecuteSweepDryRunTouchesNothing(t *testing.T) {
 	picked := []sweepPlan{
 		{status: rigStatus{ID: "a", Path: "/tmp/a"}, action: actionMerge,
-			merges: []rigPR{{Repo: "o/r", prInfo: prInfo{Number: 1}}}},
+			merges: []rigPR{{Repo: "o/r", Number: 1}}},
 		{status: rigStatus{ID: "b", Path: "/tmp/b"}, action: actionDown},
 		{status: rigStatus{ID: "c", Path: "/tmp/c"}, action: actionPark},
 		{status: rigStatus{ID: "d", Path: "/tmp/d"}, action: actionWake},
@@ -440,10 +440,10 @@ func TestSweepTeardownLockContentionIsASkip(t *testing.T) {
 // too old (or too hand-edited) to carry a title.
 func TestSweepSubjectLadder(t *testing.T) {
 	withPR := sweepPlan{
-		status:     rigStatus{Title: "task title", PRs: []rigPR{{prInfo: prInfo{Number: 1, Title: "PR title"}}}},
+		status:     rigStatus{Title: "task title", PRs: []rigPR{{Number: 1, Title: "PR title"}}},
 		agentTitle: "agent title",
 		action:     actionMerge,
-		merges:     []rigPR{{Repo: "o/a", prInfo: prInfo{Number: 1, Title: "PR title"}}},
+		merges:     []rigPR{{Repo: "o/a", Number: 1, Title: "PR title"}},
 	}
 	if got := sweepSubject(withPR); got != "PR title" {
 		t.Errorf("subject = %q, want the PR title to win", got)
@@ -452,7 +452,7 @@ func TestSweepSubjectLadder(t *testing.T) {
 	// A PR gh knew about but couldn't name falls through rather than rendering
 	// an empty column.
 	noTitle := withPR
-	noTitle.merges = []rigPR{{Repo: "o/a", prInfo: prInfo{Number: 1}}}
+	noTitle.merges = []rigPR{{Repo: "o/a", Number: 1}}
 	noTitle.status.PRs = noTitle.merges
 	if got := sweepSubject(noTitle); got != "task title" {
 		t.Errorf("subject = %q, want the task title once the PR has none", got)
@@ -472,8 +472,8 @@ func TestSweepSubjectLadder(t *testing.T) {
 func TestSweepSubjectMultiPRFallsBackOutsideMerge(t *testing.T) {
 	p := sweepPlan{
 		status: rigStatus{Title: "estimate review costs", PRs: []rigPR{
-			{Repo: "o/reviewagent", prInfo: prInfo{Number: 19, Title: "Add a cost model"}},
-			{Repo: "o/rfd", prInfo: prInfo{Number: 156, Title: "RFD-95: promote Biscuit"}},
+			{Repo: "o/reviewagent", Number: 19, Title: "Add a cost model"},
+			{Repo: "o/rfd", Number: 156, Title: "RFD-95: promote Biscuit"},
 		}},
 		action: actionAttend,
 		detail: "CI failing on rfd#156",
@@ -648,8 +648,8 @@ func TestSweepRefsCoverInertRows(t *testing.T) {
 	p := sweepPlan{
 		action: actionNone,
 		status: rigStatus{ID: "r", PRs: []rigPR{
-			{Repo: "o/reviewagent", prInfo: prInfo{Number: 19, State: "OPEN"}},
-			{Repo: "o/rfd", prInfo: prInfo{Number: 156, State: "OPEN"}},
+			{Repo: "o/reviewagent", Number: 19, State: "OPEN"},
+			{Repo: "o/rfd", Number: 156, State: "OPEN"},
 		}},
 	}
 	if got, want := sweepRefs(p), "reviewagent#19 rfd#156"; got != want {
@@ -658,7 +658,7 @@ func TestSweepRefsCoverInertRows(t *testing.T) {
 
 	// A merge row narrows to what it would actually land.
 	p.action = actionMerge
-	p.merges = []rigPR{{Repo: "o/rfd", prInfo: prInfo{Number: 156}}}
+	p.merges = []rigPR{{Repo: "o/rfd", Number: 156}}
 	if got, want := sweepRefs(p), "rfd#156"; got != want {
 		t.Errorf("merge refs = %q, want %q", got, want)
 	}
@@ -805,7 +805,7 @@ func testPlans() []sweepPlan {
 		}
 	}
 	pr := func(repo string, n int) rigPR {
-		return rigPR{Repo: repo, prInfo: prInfo{Number: n, State: "OPEN", Review: "APPROVED", Checks: "passing"}}
+		return rigPR{Repo: repo, Number: n, State: "OPEN", Review: "APPROVED", Checks: "passing"}
 	}
 	return []sweepPlan{
 		plan("mir-982", actionMerge, "approved, CI clear", pr("o/rfd", 154), pr("o/runtime", 971)),
@@ -843,11 +843,11 @@ func TestPlanSweepKeepsProjectRigsAsPersistentContext(t *testing.T) {
 // runeIndex is strings.Index counted in runes, which is what a column position
 // means on a board that draws glyphs.
 func runeIndex(s, sub string) int {
-	i := strings.Index(s, sub)
-	if i < 0 {
+	before, _, ok := strings.Cut(s, sub)
+	if !ok {
 		return -1
 	}
-	return len([]rune(s[:i]))
+	return len([]rune(before))
 }
 
 // Kind rides the same hard-left edge on every board. It has to pad a loose rig
@@ -948,7 +948,7 @@ func TestPlanSweepFeedsParkedAndCurrentToTheLadder(t *testing.T) {
 		if err := writeManifest(dir, m); err != nil {
 			t.Fatal(err)
 		}
-		waiting := []rigPR{{Repo: "o/r", prInfo: prInfo{Number: 1, State: "OPEN", Review: "REVIEW_REQUIRED", Checks: "passing"}}}
+		waiting := []rigPR{{Repo: "o/r", Number: 1, State: "OPEN", Review: "REVIEW_REQUIRED", Checks: "passing"}}
 		return rigInfo{Path: dir}, rigStatus{ID: id, Path: dir, Parked: parked, PRs: waiting}
 	}
 	liveRig, liveStatus := mk("live", false)

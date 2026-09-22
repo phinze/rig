@@ -820,9 +820,11 @@ type (
 // than "is this safe" — a rig can be perfectly safe to tear down and still be
 // one you'd be annoyed to lose.
 func newSweepModel(plans []sweepPlan, dryRun bool) sweepModel {
-	m := sweepModel{dryRun: dryRun}
-	m.spin = spinner.New(spinner.WithSpinner(spinner.Dot),
-		spinner.WithStyle(radarGoodStyle))
+	m := sweepModel{
+		dryRun: dryRun,
+		spin: spinner.New(spinner.WithSpinner(spinner.Dot),
+			spinner.WithStyle(radarGoodStyle)),
+	}
 	m.load(plans)
 	return m
 }

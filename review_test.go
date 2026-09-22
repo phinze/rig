@@ -292,7 +292,7 @@ func TestReviewRigPRPrefersTheMainRepoDeterministically(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := rigInfo{ID: "pr-42", Kind: "review", Path: basedir}
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		pr := reviewRigPR(r)
 		if pr == nil {
 			t.Fatal("multi-repo review rig could not name its PR")

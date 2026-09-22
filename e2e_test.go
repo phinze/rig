@@ -1247,7 +1247,7 @@ func TestParkWake(t *testing.T) {
 		t.Fatal(err)
 	}
 	agentPane := ""
-	for _, line := range strings.Split(strings.TrimSpace(string(agentPaneOut)), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(string(agentPaneOut)), "\n") {
 		fields := strings.Split(line, "\t")
 		if len(fields) == 2 && fields[1] == rigPaneAgent {
 			agentPane = fields[0]

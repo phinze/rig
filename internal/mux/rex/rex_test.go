@@ -164,7 +164,7 @@ func TestPopupOpensASizedLayer(t *testing.T) {
 	}
 	raw, _ := os.ReadFile(log)
 	var layer string
-	for _, line := range strings.Split(string(raw), "\n") {
+	for line := range strings.SplitSeq(string(raw), "\n") {
 		if strings.Contains(line, "session.new_layer") {
 			layer = line
 		}

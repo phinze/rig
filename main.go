@@ -132,8 +132,7 @@ func main() {
 
 	if err != nil {
 		if cmd == "__gh" || cmd == "recto" {
-			var exitErr *exec.ExitError
-			if errors.As(err, &exitErr) {
+			if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 				os.Exit(exitErr.ExitCode())
 			}
 		}

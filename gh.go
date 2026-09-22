@@ -82,8 +82,7 @@ func rollupChecks(items []checkItem) string {
 func ghCurrentLogin() (string, error) {
 	out, err := exec.Command("gh", "api", "user", "--jq", ".login").Output()
 	if err != nil {
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
+		if ee, ok := errors.AsType[*exec.ExitError](err); ok {
 			return "", fmt.Errorf("gh api user: %s", strings.TrimSpace(string(ee.Stderr)))
 		}
 		return "", fmt.Errorf("gh api user: %w", err)
@@ -107,8 +106,7 @@ func reviewSubmittedByMe(nameWithOwner, branch, login string) (bool, error) {
 		"-R", nameWithOwner, "--json", "reviews")
 	out, err := cmd.Output()
 	if err != nil {
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
+		if ee, ok := errors.AsType[*exec.ExitError](err); ok {
 			if strings.Contains(strings.ToLower(string(ee.Stderr)), "no pull requests found") {
 				return false, nil
 			}
@@ -150,8 +148,7 @@ func prForBranch(nameWithOwner, branch string) (*prInfo, error) {
 		"-R", nameWithOwner, "--json", "number,state,url,title,headRefOid,statusCheckRollup,reviewDecision")
 	out, err := cmd.Output()
 	if err != nil {
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
+		if ee, ok := errors.AsType[*exec.ExitError](err); ok {
 			// gh exits non-zero with this on stderr when the branch has no PR.
 			// That's an answer ("none"), not a failure, so don't propagate it.
 			if strings.Contains(strings.ToLower(string(ee.Stderr)), "no pull requests found") {

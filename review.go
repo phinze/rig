@@ -539,7 +539,7 @@ func reviewRequestedCandidates() ([]reviewCandidate, error) {
 // either, and one bad line shouldn't cost you the whole picker.
 func parseReviewSearchRows(out string) []reviewCandidate {
 	var candidates []reviewCandidate
-	for _, row := range strings.Split(strings.TrimSpace(out), "\n") {
+	for row := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
 		cols := strings.SplitN(strings.TrimSpace(row), "\t", 3)
 		if len(cols) < 3 {
 			continue

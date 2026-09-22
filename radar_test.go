@@ -202,16 +202,16 @@ func TestRadarTouchedAt(t *testing.T) {
 func TestRadarParentSections(t *testing.T) {
 	m := radarModel{
 		prs: map[string][]rigPR{
-			"waiting":  {{prInfo: prInfo{State: "OPEN"}}},
-			"approved": {{prInfo: prInfo{State: "OPEN", Review: "APPROVED"}}},
-			"changes":  {{prInfo: prInfo{State: "OPEN", Review: "CHANGES_REQUESTED"}}},
+			"waiting":  {{State: "OPEN"}},
+			"approved": {{State: "OPEN", Review: "APPROVED"}},
+			"changes":  {{State: "OPEN", Review: "CHANGES_REQUESTED"}},
 		},
 		inflight: []rigStatus{{Slug: "live", Title: "live"}},
 		sessions: []rigStatus{{bare: true, session: sess("shell"), Title: "shell"}},
 		parked: []rigStatus{
-			{Slug: "waiting", Parked: true, Created: time.Unix(1, 0), LastTouched: time.Unix(30, 0), PRs: []rigPR{{prInfo: prInfo{State: "OPEN"}}}},
-			{Slug: "approved", Parked: true, Created: time.Unix(2, 0), LastTouched: time.Unix(20, 0), PRs: []rigPR{{prInfo: prInfo{State: "OPEN", Review: "APPROVED"}}}},
-			{Slug: "changes", Parked: true, Created: time.Unix(3, 0), LastTouched: time.Unix(10, 0), PRs: []rigPR{{prInfo: prInfo{State: "OPEN", Review: "CHANGES_REQUESTED"}}}},
+			{Slug: "waiting", Parked: true, Created: time.Unix(1, 0), LastTouched: time.Unix(30, 0), PRs: []rigPR{{State: "OPEN"}}},
+			{Slug: "approved", Parked: true, Created: time.Unix(2, 0), LastTouched: time.Unix(20, 0), PRs: []rigPR{{State: "OPEN", Review: "APPROVED"}}},
+			{Slug: "changes", Parked: true, Created: time.Unix(3, 0), LastTouched: time.Unix(10, 0), PRs: []rigPR{{State: "OPEN", Review: "CHANGES_REQUESTED"}}},
 		},
 	}
 	sections := m.parentSections()
@@ -236,7 +236,7 @@ func TestRadarStateCell(t *testing.T) {
 		{"inflight no session", rigStatus{}, false, "-"},
 		{"parked unfetched", rigStatus{Parked: true}, false, "…"},
 		{"parked no pr", rigStatus{Parked: true}, true, "no PR"},
-		{"parked merged", rigStatus{Parked: true, PRs: []rigPR{{prInfo: prInfo{State: "MERGED"}}}}, true, "merged"},
+		{"parked merged", rigStatus{Parked: true, PRs: []rigPR{{State: "MERGED"}}}, true, "merged"},
 	}
 	for _, c := range cases {
 		if got := radarStateCell(c.s, c.fetched); got != c.want {
@@ -262,8 +262,8 @@ func TestRadarCacheRoundTrip(t *testing.T) {
 	isolateRadarCache(t)
 	now := time.Now().Round(time.Second)
 	prs := map[string][]rigPR{
-		"fresh":   {{Repo: "o/r", Branch: "b", prInfo: prInfo{Number: 7, State: "OPEN", Checks: "passing"}}},
-		"ancient": {{Repo: "o/r", Branch: "c", prInfo: prInfo{Number: 8, State: "MERGED"}}},
+		"fresh":   {{Repo: "o/r", Branch: "b", Number: 7, State: "OPEN", Checks: "passing"}},
+		"ancient": {{Repo: "o/r", Branch: "c", Number: 8, State: "MERGED"}},
 	}
 	at := map[string]time.Time{
 		"fresh":   now,
@@ -329,14 +329,14 @@ func TestRadarTailSegs(t *testing.T) {
 		{"inflight no pr", rigStatus{}, true, nil},
 		{"parked no pr", rigStatus{Parked: true}, true, []string{"no PR"}},
 		{"single pr", rigStatus{PRs: []rigPR{
-			{Repo: "o/api", prInfo: prInfo{Number: 7, State: "OPEN", Checks: "passing"}},
+			{Repo: "o/api", Number: 7, State: "OPEN", Checks: "passing"},
 		}}, true, []string{"#7  "}},
 		{"multi repo", rigStatus{PRs: []rigPR{
-			{Repo: "o/api", prInfo: prInfo{Number: 7, State: "OPEN"}},
-			{Repo: "o/web", prInfo: prInfo{Number: 9, State: "OPEN", Checks: "failing"}},
+			{Repo: "o/api", Number: 7, State: "OPEN"},
+			{Repo: "o/web", Number: 9, State: "OPEN", Checks: "failing"},
 		}}, true, []string{"api #7 ", "web #9  "}},
 		{"parked changes", rigStatus{Parked: true, PRs: []rigPR{
-			{Repo: "o/api", prInfo: prInfo{Number: 7, State: "OPEN", Review: "CHANGES_REQUESTED"}},
+			{Repo: "o/api", Number: 7, State: "OPEN", Review: "CHANGES_REQUESTED"},
 		}}, true, []string{"changes requested", "#7 "}},
 	}
 	for _, c := range cases {
@@ -1527,7 +1527,7 @@ func TestRadarLongIDDoesNotStarveThePRTail(t *testing.T) {
 	// with it. This is that board.
 	kickoff := "brainstorming a way to embed a presentation plus quiz into circulate on member signup"
 	hog := rigStatus{ID: kickoffID(kickoff), Slug: "hog", Title: kickoff}
-	prs := []rigPR{{Repo: "mirendev/miren", Branch: "top", prInfo: prInfo{Number: 1153, State: "OPEN", Checks: "passing"}}}
+	prs := []rigPR{{Repo: "mirendev/miren", Branch: "top", Number: 1153, State: "OPEN", Checks: "passing"}}
 	review := rigStatus{
 		ID: "pr-1153", Slug: "pr-1153", Kind: "review",
 		Title: "Add miren top for cluster-wide resource usage",
@@ -1621,7 +1621,7 @@ func TestRadarActivityNeverCrowdsOutTheSubject(t *testing.T) {
 		if !strings.Contains(view, "Report runtime") {
 			t.Errorf("width %d dropped the subject:\n%s", width, view)
 		}
-		for _, line := range strings.Split(view, "\n") {
+		for line := range strings.SplitSeq(view, "\n") {
 			if !strings.Contains(line, "Report runtime") {
 				continue // the footer has always run its own width
 			}
@@ -1646,7 +1646,7 @@ func TestRadarKindColumnKeepsTheGridAligned(t *testing.T) {
 	}
 	ageAt := -1
 	for _, want := range []string{"Expose coordinator", "Add miren top", "lets try depot"} {
-		for _, line := range strings.Split(m.View(), "\n") {
+		for line := range strings.SplitSeq(m.View(), "\n") {
 			if !strings.Contains(line, want) {
 				continue
 			}

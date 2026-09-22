@@ -6,7 +6,7 @@ import "testing"
 // precedence that surfaces what needs action first.
 func TestParkedDisposition(t *testing.T) {
 	pr := func(state, review string) rigPR {
-		return rigPR{prInfo: prInfo{State: state, Review: review}}
+		return rigPR{State: state, Review: review}
 	}
 	cases := []struct {
 		name string

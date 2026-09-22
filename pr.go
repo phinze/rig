@@ -175,7 +175,7 @@ func rigPRCandidates(basedir string, m manifest) ([]rigPRCandidate, error) {
 // otherwise the caller has to cd into the one they mean.
 func repoSubdirForCwd(basedir, cwd string, m manifest) (string, error) {
 	if rel, err := filepath.Rel(basedir, cwd); err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
-		first := strings.SplitN(rel, string(filepath.Separator), 2)[0]
+		first, _, _ := strings.Cut(rel, string(filepath.Separator))
 		if _, ok := m.Repos[first]; ok {
 			return first, nil
 		}
@@ -221,7 +221,7 @@ func jjPRBranch(workspaceDir string) (string, error) {
 		}
 		return "", fmt.Errorf("jj log: %w", err)
 	}
-	for _, line := range strings.Split(string(out), "\n") {
+	for line := range strings.SplitSeq(string(out), "\n") {
 		if line = strings.TrimSpace(line); line != "" {
 			return line, nil
 		}

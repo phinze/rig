@@ -299,8 +299,8 @@ func resolveGitHubTask(ref githubIssueRef) (task, error) {
 		Title:      node.Title,
 		URL:        node.URL,
 		Repo:       ref.Owner + "/" + ref.Repo,
+		BranchName: synthesizedBranch(ref.rigID(), node.Title),
 	}
-	tk.BranchName = synthesizedBranch(ref.rigID(), node.Title)
 	return tk, nil
 }
 
@@ -317,8 +317,7 @@ func synthesizedBranch(rigID, title string) string {
 }
 
 func execError(what string, err error) error {
-	var ee *exec.ExitError
-	if errors.As(err, &ee) {
+	if ee, ok := errors.AsType[*exec.ExitError](err); ok {
 		return fmt.Errorf("%s: %s", what, strings.TrimSpace(string(ee.Stderr)))
 	}
 	return fmt.Errorf("%s: %w", what, err)

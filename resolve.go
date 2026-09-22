@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -58,10 +59,8 @@ func resolveCommand(input string) (string, error) {
 	if input == "" {
 		return "", fmt.Errorf("no command given")
 	}
-	for _, name := range helpCommands {
-		if name == input {
-			return "help", nil
-		}
+	if slices.Contains(helpCommands, input) {
+		return "help", nil
 	}
 	for _, name := range hiddenCommands {
 		if name == input {

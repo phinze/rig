@@ -58,7 +58,7 @@ func seedCodexTrust(home string, dirs ...string) error {
 		return err
 	}
 	existing := map[string]bool{}
-	for _, line := range strings.Split(string(body), "\n") {
+	for line := range strings.SplitSeq(string(body), "\n") {
 		if dir, ok := codexProjectHeader(line); ok {
 			existing[dir] = true
 		}

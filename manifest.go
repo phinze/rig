@@ -271,7 +271,7 @@ func parseTOMLStringArray(s string) []string {
 	s = strings.TrimPrefix(s, "[")
 	s = strings.TrimSuffix(s, "]")
 	var out []string
-	for _, part := range strings.Split(s, ",") {
+	for part := range strings.SplitSeq(s, ",") {
 		part = parseTOMLString(part)
 		if part != "" {
 			out = append(out, part)
