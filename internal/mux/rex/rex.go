@@ -9,12 +9,15 @@ package rex
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 
 	"github.com/phinze/rig/internal/mux"
 )
@@ -252,8 +255,8 @@ func (Backend) CurrentPane() string {
 
 // Attach from a bare terminal is Rex's text-mode attach. From inside Rex the
 // client can be moved within the session it's showing (a block target is
-// focus_block, the session itself is already there); another session is
-// ErrNoClientSwitch.
+// focus_block, the session itself is already there); another session goes
+// through hopToSession, and is ErrNoClientSwitch when that isn't available.
 func (b Backend) Attach(target string) error {
 	if os.Getenv("REX_SESSION") == "" {
 		cmd := command("attach", target)
@@ -269,8 +272,58 @@ func (b Backend) Attach(target string) error {
 			return b.SelectPane(target)
 		}
 	}
+	// Only ever aim the picker at a session that exists: typing a name it
+	// can't match makes a new session by that name, which would turn a
+	// mistyped hop into a phantom rig.
+	if b.HasSession(target) && hop(target) == nil {
+		return nil
+	}
 	return mux.ErrNoClientSwitch
 }
+
+// hop is hopToSession, swappable so a test can assert the decision without
+// driving the user's actual windows.
+var hop = hopToSession
+
+// hopToSession moves the GUI client to another session by driving the app's
+// own session picker through AppleScript. It is a stopgap: no API moves a
+// client between sessions, because focus is client-local state the server
+// doesn't hold. When one lands this function goes away and Attach calls it.
+//
+// The work happens in a detached process after a delay, for a caller that is
+// usually the radar running inside a floating layer: that layer closes when
+// the radar exits, and keystrokes aimed at it before then land in the layer
+// rather than the picker. The child gets its own process group so the closing
+// layer's SIGHUP doesn't take it with it.
+func hopToSession(label string) error {
+	if runtime.GOOS != "darwin" {
+		return errNoHop
+	}
+	script := []string{
+		"-e", "on run argv",
+		"-e", "delay 0.4",
+		"-e", "set target to item 1 of argv",
+		"-e", `tell application "Rex" to activate`,
+		"-e", "delay 0.25",
+		"-e", `tell application "System Events" to tell process "Rex"`,
+		"-e", `click menu item "Change Session…" of menu 1 of menu bar item "View" of menu bar 1`,
+		"-e", "delay 0.45",
+		"-e", "keystroke target",
+		"-e", "delay 0.45",
+		"-e", "key code 36",
+		"-e", "end tell",
+		"-e", "end run",
+	}
+	cmd := exec.Command("osascript", append(script, label)...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go func() { _ = cmd.Wait() }()
+	return nil
+}
+
+var errNoHop = errors.New("no way to move this client between sessions")
 
 // Popup opens a floating layer centred over the session's active window
 // running the command, closing when it exits. The layer is sized in cells
@@ -570,10 +623,26 @@ func view(session string) (sessionView, error) {
 }
 
 type processInfo struct {
-	Foreground *struct {
-		Name string `json:"name"`
-		Cwd  string `json:"cwd"`
-	} `json:"foreground"`
+	Foreground *foregroundProcess `json:"foreground"`
+}
+
+type foregroundProcess struct {
+	Name  string `json:"name"`
+	Argv0 string `json:"argv0"`
+	Cwd   string `json:"cwd"`
+}
+
+// commandName is what the pane is running, in the spelling a person would
+// use. Prefer argv0's base: a wrapped binary reports its real name (nix
+// builds `claude` as a wrapper around `.claude-unwrapped`), while argv0 keeps
+// the path it was invoked by.
+func commandName(fg *foregroundProcess) string {
+	if fg.Argv0 != "" {
+		if base := filepath.Base(fg.Argv0); base != "" && base != "." && base != string(filepath.Separator) {
+			return base
+		}
+	}
+	return fg.Name
 }
 
 func process(session, block string) (processInfo, error) {
@@ -670,7 +739,7 @@ func (b Backend) Panes(session string) ([]mux.Pane, error) {
 					p.Role, p.Repo = m.Role, m.Repo
 				}
 				if info, err := process(session, bl.BlockID); err == nil && info.Foreground != nil {
-					p.Command = info.Foreground.Name
+					p.Command = commandName(info.Foreground)
 					p.Path = info.Foreground.Cwd
 				}
 				p.Title = title(session, bl.BlockID)

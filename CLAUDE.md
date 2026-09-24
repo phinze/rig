@@ -512,7 +512,11 @@ for `config` and `help`, since `rig config backend --unset` is the repair.
 
 `Attach` returns `mux.ErrNoClientSwitch` from a backend that can't move the
 client between sessions; radar prints a "switch by hand" line and waits for a
-key before its popup closes. `rig radar --popup` opens the radar over the
+key before its popup closes. The Rex backend answers that itself where it can:
+a target in the session already on screen is a focus, and another live session
+is driven through the app's session picker (`hop`, stubbed in tests). It only
+ever aims the picker at a session that exists, because a name the picker can't
+match becomes a new session by that name. `rig radar --popup` opens the radar over the
 caller's current session on either backend. Rex is a private alpha: its API
 notes and the reasons behind that package's workarounds live in memex
 (`Projects/Ideas/rex-trial-tmux-profile.md`, `rex-feedback.md`), not here.

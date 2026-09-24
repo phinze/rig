@@ -23,7 +23,12 @@ printf '%s\n' "$*" >> "` + log + `"
 method=""
 for a in "$@"; do case "$a" in *.*) method="$a";; esac; done
 case "$method" in
-session.list) echo '{"sessions":[{"session_id":"session:1","label":"~-workspaces-alpha"}]}' ;;
+session.list)
+  if [ -n "$REX_FAKE_SECOND" ]; then
+    echo '{"sessions":[{"session_id":"session:1","label":"~-workspaces-alpha"},{"session_id":"session:2","label":"~-workspaces-beta"}]}'
+  else
+    echo '{"sessions":[{"session_id":"session:1","label":"~-workspaces-alpha"}]}'
+  fi ;;
 session.view) cat <<'EOF'
 {"session_id":"session:1","label":"~-workspaces-alpha","windows":[
  {"window_id":"window:m","label":"main/alpha","active":true,"focused_block_id":"block:a","layers":[
@@ -36,7 +41,7 @@ EOF
 session.list_blocks) echo '{"blocks":[{"block_id":"block:a"},{"block_id":"block:r"},{"block_id":"block:z"}]}' ;;
 com.superlogical.terminal.process)
   case "$*" in
-    *block:a*) echo '{"foreground":{"name":".claude-unwrapped","cwd":"/w/alpha"}}' ;;
+    *block:a*) echo '{"foreground":{"name":".claude-unwrapped","argv0":"/etc/profiles/per-user/phinze/bin/claude","cwd":"/w/alpha"}}' ;;
     *) echo '{"foreground":{"name":"recto","cwd":"/w/x"}}' ;;
   esac ;;
 com.superlogical.terminal.title) echo '{"title":"✳ Task A"}' ;;
@@ -87,7 +92,8 @@ func TestPanesReadsViewAndMarks(t *testing.T) {
 	if a.Role != "agent" || a.Repo != "alpha" || a.WindowRole != "main" || a.WindowRepo != "alpha" {
 		t.Errorf("marks = %+v", a)
 	}
-	if a.Command != ".claude-unwrapped" || a.Path != "/w/alpha" || a.Title != "✳ Task A" {
+	// argv0's base is the honest name; `name` is the wrapped binary's.
+	if a.Command != "claude" || a.Path != "/w/alpha" || a.Title != "✳ Task A" {
 		t.Errorf("process = %+v", a)
 	}
 	if r := panes[1]; r.Role != "" || r.WindowRole != "main" {
@@ -176,5 +182,44 @@ func TestPopupOpensASizedLayer(t *testing.T) {
 		if !strings.Contains(layer, want) {
 			t.Errorf("new_layer call lacks %s:\n%s", want, layer)
 		}
+	}
+}
+
+// Attach decides among four outcomes without ever driving the GUI: the
+// session it is already showing is a no-op, a block in that session is a
+// focus, another live session is a hop, and a session that isn't there is
+// ErrNoClientSwitch rather than a picker that would create it by name.
+func TestAttachInsideRexChoosesItsMove(t *testing.T) {
+	fakeRex(t)
+	t.Setenv("REX_SESSION", "session:1")
+	var hopped []string
+	saved := hop
+	hop = func(label string) error { hopped = append(hopped, label); return nil }
+	t.Cleanup(func() { hop = saved })
+
+	b := Backend{}
+	if err := b.Attach("~-workspaces-alpha"); err != nil {
+		t.Errorf("attaching to the shown session = %v, want nil", err)
+	}
+	if err := b.Attach("block:a"); err != nil {
+		t.Errorf("attaching to a block in the shown session = %v, want nil", err)
+	}
+	if len(hopped) != 0 {
+		t.Errorf("hopped %v; neither case needed the picker", hopped)
+	}
+	if err := b.Attach("~-workspaces-beta"); !errors.Is(err, mux.ErrNoClientSwitch) {
+		t.Errorf("attaching to an absent session = %v, want ErrNoClientSwitch", err)
+	}
+	if len(hopped) != 0 {
+		t.Errorf("hopped to a session that does not exist: %v", hopped)
+	}
+
+	// The same target once that session is live is the hop.
+	t.Setenv("REX_FAKE_SECOND", "1")
+	if err := b.Attach("~-workspaces-beta"); err != nil {
+		t.Errorf("attaching to a live second session = %v, want the hop to carry it", err)
+	}
+	if len(hopped) != 1 || hopped[0] != "~-workspaces-beta" {
+		t.Errorf("hopped %v, want one hop to the beta session", hopped)
 	}
 }
