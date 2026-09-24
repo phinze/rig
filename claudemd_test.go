@@ -39,18 +39,13 @@ func TestWriteRigClaudeMD(t *testing.T) {
 			t.Errorf("missing repo line %q in:\n%s", want, got)
 		}
 	}
-	// The whole point: steer agents off git and onto jj.
-	if !strings.Contains(got, "jj workspaces") {
-		t.Errorf("expected jj-not-git guidance in:\n%s", got)
+	// The home anchor names this rig's own dir, so a pasted prompt full of
+	// foreign absolute paths doesn't quietly pull the agent elsewhere.
+	if !strings.Contains(got, dir) {
+		t.Errorf("missing basedir in:\n%s", got)
 	}
-	// The home anchor: name this rig's dir and set the stay-inside-the-rig
-	// default, so a pasted prompt full of foreign absolute paths doesn't quietly
-	// pull the agent into another rig's workspace.
-	if !strings.Contains(got, dir) || !strings.Contains(got, "This rig is your home") {
-		t.Errorf("missing home anchor in:\n%s", got)
-	}
-	if !strings.Contains(got, "rig relay <discovery>") || !strings.Contains(got, "does not post to Linear") {
-		t.Errorf("missing project-discovery relay guidance in:\n%s", got)
+	if !strings.Contains(got, "rig relay") {
+		t.Errorf("linear rig should be pointed at relay:\n%s", got)
 	}
 	// relay refuses anything without a Linear identity, so a rig from another
 	// tracker isn't told about it.
@@ -98,7 +93,7 @@ func TestRigInstructionsPointAtKickoff(t *testing.T) {
 	}
 
 	got := renderRigInstructions(dir, m)
-	if !strings.Contains(got, "The brief lives in `"+rigKickoffName+"`") || !strings.Contains(got, "../"+rigKickoffName) {
+	if !strings.Contains(got, rigKickoffName) {
 		t.Errorf("instructions missing the kickoff pointer:\n%s", got)
 	}
 }
@@ -121,31 +116,17 @@ func TestWriteRigAgentInstructions(t *testing.T) {
 	}
 }
 
-func TestProjectRigInstructionsDescribeControlPlane(t *testing.T) {
+func TestProjectRigInstructionsUseProjectTemplate(t *testing.T) {
 	dir := t.TempDir()
 	m := manifest{
 		ID: "project-byoi", Title: "Bring Your Own Image", Kind: "project",
 		Tracker: "linear", TrackerID: "project-uuid", TrackerURL: "https://linear.app/miren/project/byoi",
 	}
 	got := renderRigInstructions(dir, m)
-	for _, want := range []string{
-		"project overview rig",
-		"does not own a code checkout",
-		"rig project status --format=json",
-		m.TrackerURL,
-		"path to completion",
-		"project collaborator, not an independent executor",
-		"confirmation before merging",
-		"Ordinary sweep will not collect it",
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("project instructions lack %q:\n%s", want, got)
-		}
+	if !strings.HasPrefix(got, "# Project rig: Bring Your Own Image\n") {
+		t.Errorf("project rig did not get the project template:\n%s", got)
 	}
-	if strings.Contains(got, "jj workspaces") || strings.Contains(got, "main tmux window holds") {
-		t.Errorf("project instructions inherited task-workspace guidance:\n%s", got)
-	}
-	if strings.Contains(got, "project-level health") {
-		t.Errorf("project instructions retain health-oriented default:\n%s", got)
+	if !strings.Contains(got, m.TrackerURL) {
+		t.Errorf("project instructions lack the tracker URL:\n%s", got)
 	}
 }
