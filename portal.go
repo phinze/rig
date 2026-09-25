@@ -47,6 +47,7 @@ func (p portalBackend) place() string {
 }
 
 func (p portalBackend) Attach(target string) error {
+	adoptLocalPortal()
 	// Only Rex can host a portal. From a bare terminal the tmux backend
 	// attaches (ssh -t for a remote server); from inside this machine's tmux
 	// the client to move is the one we're in, which switch-client already
@@ -84,6 +85,32 @@ func (p portalBackend) Attach(target string) error {
 type portalHost interface {
 	mux.Backend
 	NewCommandSession(name, windowName, cwd, cmdline string) (pane, window string, err error)
+	SessionID(name string) (string, error)
+}
+
+// adoptLocalPortal gives a process inside this machine's tmux the Rex
+// session it's really on screen in, when that's the local portal. tmux hands
+// its panes and popups TMUX but not REX_SESSION, so without this a radar
+// opened with tmux's own leader-r inside tmux-local sees tmux and nothing
+// else, and can't reach a portal to another host. It only adopts when this
+// process's own tmux client is the one the local portal stamped, so a tmux in
+// a plain terminal still looks like what it is.
+func adoptLocalPortal() {
+	if os.Getenv("REX_SESSION") != "" || os.Getenv("TMUX") == "" {
+		return
+	}
+	rx := localRex()
+	if rx == nil {
+		return
+	}
+	lt := localTmux()
+	tty, err := lt.PortalTTY()
+	if err != nil || lt.ClientTTY() != tty {
+		return
+	}
+	if id, err := rx.SessionID(lt.portalLabel()); err == nil {
+		_ = os.Setenv("REX_SESSION", id)
+	}
 }
 
 // portalSessions is the key each portal's Rex session would have: one per

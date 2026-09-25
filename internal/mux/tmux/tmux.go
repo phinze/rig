@@ -54,12 +54,18 @@ func (b Backend) remote() bool { return b.Host != "" }
 // surface on each refresh, so the connection is shared and kept warm rather
 // than handshaken per call, and a host that has dropped off costs a short
 // connect timeout. BatchMode because nobody is there to answer a prompt.
+//
+// ControlPersist is long because the radar is a fresh process per popup: a
+// master that expired between popups meant a new connection, and a new ssh
+// agent approval, nearly every time you opened it. Thirty idle minutes is
+// one approval per working stretch. It's a stopgap; PERS-20 is the non-ssh
+// link that makes listing not need ssh at all.
 var sshOptions = []string{
 	"-o", "BatchMode=yes",
 	"-o", "ConnectTimeout=3",
 	"-o", "ControlMaster=auto",
 	"-o", "ControlPath=~/.ssh/rig-%C",
-	"-o", "ControlPersist=60",
+	"-o", "ControlPersist=30m",
 }
 
 // breaker is shared by every remote instance, keyed by host.
@@ -519,6 +525,20 @@ func (b Backend) PortalTTY() (string, error) {
 		}
 	}
 	return "", fmt.Errorf("the portal client on %s (%s) is gone", b.Host, tty)
+}
+
+// ClientTTY is the tty of the client the current process is displayed
+// through, from inside this machine's tmux; "" outside it or for a remote
+// instance.
+func (b Backend) ClientTTY() string {
+	if b.remote() || os.Getenv("TMUX") == "" {
+		return ""
+	}
+	out, err := b.output("display-message", "-p", "#{client_tty}")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // SwitchClient moves the client on tty to target, from outside that client:

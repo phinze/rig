@@ -91,6 +91,21 @@ func noteReachability(server, stderr string) {
 	breaker.Note(server, strings.HasPrefix(strings.TrimPrefix(stderr, "Error: "), "connecting to"))
 }
 
+// SessionID is the id of the session labelled name, which is what REX_SESSION
+// holds for a process running inside it.
+func (b Backend) SessionID(name string) (string, error) {
+	sessions, err := b.listSessions()
+	if err != nil {
+		return "", err
+	}
+	for _, s := range sessions {
+		if s.Label == name {
+			return s.ID, nil
+		}
+	}
+	return "", fmt.Errorf("no rex session labelled %q", name)
+}
+
 // Unreachable reports whether this instance is a remote server that a recent
 // call couldn't reach, so a board can say the surface is down rather than
 // drawing it as a surface with no sessions.

@@ -582,7 +582,15 @@ attach` inside the popup's own block, which leaves you in tmux inside a
 floating layer that only closes when you think to detach. From inside tmux the
 local portal stands aside and `switch-client` moves the client you're in, as
 before; from Rex it upserts `tmux-local`. Portal sessions are left off the
-board as rows (they're the way into other rows) and appear only as CURRENT. Enter on
+board as rows (they're the way into other rows) and appear only as CURRENT.
+
+A process inside the laptop's tmux that you're viewing through `tmux-local` has
+`TMUX` and no `REX_SESSION`, because tmux hands its panes and popups its own
+environment. `adoptLocalPortal` repairs that on the way into any portal
+`Attach`: when this process's own tmux client is the tty the local portal
+stamped, it is on screen in Rex, so rig takes `tmux-local`'s session as
+`REX_SESSION` and a remote row goes through the Rex portal. The tty match is the
+whole test, so a tmux in a plain terminal still reads as tmux and refuses. Enter on
 a remote Rex row is `ErrNoClientSwitch` until a client can be moved by session
 id: the picker hop matches a label, and labels collide across hosts.
 

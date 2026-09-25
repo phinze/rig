@@ -23,6 +23,12 @@ func (f *fakePortalHost) NewCommandSession(name, windowName, cwd, cmdline string
 	f.created = append(f.created, name+" :: "+cmdline)
 	return "block:1", "window:1", nil
 }
+func (f *fakePortalHost) SessionID(name string) (string, error) {
+	if f.HasSession(name) {
+		return "session:fake-" + name, nil
+	}
+	return "", os.ErrNotExist
+}
 func (f *fakePortalHost) KillSession(name string) error {
 	f.killed = append(f.killed, name)
 	return nil
@@ -43,6 +49,7 @@ func fakeSSH(t *testing.T, stamped, clients string) (log string) {
 printf '%s\n' "$*" >> "` + log + `"
 case "$*" in
 *show-options*) echo '` + stamped + `' ;;
+*display-message*) echo '` + stamped + `' ;;
 *list-clients*) printf '%s\n' ` + clients + ` ;;
 esac
 `
@@ -173,4 +180,54 @@ func TestRadarHidesPortalSessions(t *testing.T) {
 	if m.currentRow == nil || m.currentRow.session.name != "tmux-local" {
 		t.Errorf("current row = %+v, want the portal you're in", m.currentRow)
 	}
+}
+
+// Inside the laptop's tmux, shown in Rex through tmux-local, a process has
+// TMUX and no REX_SESSION. When its own client is the one the local portal
+// stamped, it's on screen in Rex, so a remote row goes through the Rex
+// portal; a tmux in a plain terminal still refuses.
+func TestRemoteRowFromInsideTheLocalPortal(t *testing.T) {
+	p := portalBackend{tmux.Backend{Host: "fox", Place: "fox"}}
+	const target = "~/workspaces/foo"
+
+	t.Run("through tmux-local, the remote portal is used", func(t *testing.T) {
+		h := &fakePortalHost{fakeBackend: fakeBackend{sessions: sessionsNamed("tmux-local", "tmux-fox")}}
+		withPortalHost(t, h)
+		t.Setenv("REX_SESSION", "")
+		t.Setenv("TMUX", "/tmp/tmux-501/default,1,0")
+		log := fakeSSH(t, "/dev/ttys018", "/dev/ttys018")
+		if err := p.Attach(target); err != nil {
+			t.Fatal(err)
+		}
+		if got := os.Getenv("REX_SESSION"); got != "session:fake-tmux-local" {
+			t.Errorf("REX_SESSION = %q, want the local portal's session adopted", got)
+		}
+		raw, _ := os.ReadFile(log)
+		if !strings.Contains(string(raw), "'switch-client' '-c' '/dev/ttys018' '-t' '"+target+"'") || len(h.attached) != 1 || h.attached[0] != "tmux-fox" {
+			t.Errorf("hopped %v, calls:\n%s\nwant the fox portal switched and hopped to", h.attached, raw)
+		}
+	})
+
+	t.Run("a tmux client that isn't the portal still refuses", func(t *testing.T) {
+		h := &fakePortalHost{fakeBackend: fakeBackend{sessions: sessionsNamed("tmux-local")}}
+		withPortalHost(t, h)
+		t.Setenv("REX_SESSION", "")
+		t.Setenv("TMUX", "/tmp/tmux-501/default,1,0")
+		fakeSSH(t, "/dev/ttys018", "/dev/ttys018 /dev/ttys002")
+		// The fake answers display-message with the stamp, so pin the client
+		// to a different tty by stamping one the display won't match.
+		saved := os.Getenv("PATH")
+		bin := t.TempDir()
+		script := "#!/bin/sh\ncase \"$*\" in *display-message*) echo /dev/ttys002 ;; *show-options*) echo /dev/ttys018 ;; *list-clients*) printf '%s\\n' /dev/ttys018 /dev/ttys002 ;; esac\n"
+		if err := os.WriteFile(filepath.Join(bin, "tmux"), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", bin+":"+saved)
+		if err := p.Attach(target); err == nil {
+			t.Error("attach from a non-portal tmux client succeeded, want ErrNoClientSwitch")
+		}
+		if got := os.Getenv("REX_SESSION"); got != "" {
+			t.Errorf("REX_SESSION = %q, want nothing adopted", got)
+		}
+	})
 }
