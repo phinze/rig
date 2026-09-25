@@ -572,7 +572,17 @@ of the host's clients is the one on this screen, and `PortalTTY` checks
 `list-clients` because a portal whose ssh exited leaves its stamp behind.
 Remote arguments are quoted for the far side's login shell, which on
 foxtrotbase is fish; `shellQuote` spells backslashes and quotes outside the
-single quotes because that's the one place sh and fish disagree. Enter on
+single quotes because that's the one place sh and fish disagree.
+
+This machine's own tmux is a portal too: `localTmux()` wraps the plain tmux
+backend, and every place that means "the local tmux" (a manifest's empty or
+`tmux` backend, the `rig new` default, the unknown-name fallback) goes through
+it. Without that, Enter on a laptop tmux row from a Rex radar ran `tmux
+attach` inside the popup's own block, which leaves you in tmux inside a
+floating layer that only closes when you think to detach. From inside tmux the
+local portal stands aside and `switch-client` moves the client you're in, as
+before; from Rex it upserts `tmux-local`. Portal sessions are left off the
+board as rows (they're the way into other rows) and appear only as CURRENT. Enter on
 a remote Rex row is `ErrNoClientSwitch` until a client can be moved by session
 id: the picker hop matches a label, and labels collide across hosts.
 

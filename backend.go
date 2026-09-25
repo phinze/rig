@@ -12,7 +12,6 @@ import (
 
 	"github.com/phinze/rig/internal/mux"
 	"github.com/phinze/rig/internal/mux/rex"
-	"github.com/phinze/rig/internal/mux/tmux"
 	"golang.org/x/term"
 )
 
@@ -22,7 +21,7 @@ import (
 // commands that list across the whole machine (radar, switch, ls) ask every
 // known backend rather than this one, because a Mac in the middle of the Rex
 // trial has tmux rigs and Rex rigs side by side and the board has to show both.
-var preferredBackend mux.Backend = tmux.Backend{}
+var preferredBackend mux.Backend = localTmux()
 
 // knownBackends is every backend this binary can drive from this machine, in
 // the order a listing unions them: this machine's own, then the configured
@@ -41,7 +40,7 @@ func knownBackends() []mux.Backend {
 // rather than at init so the Rex marks dir follows XDG_STATE_HOME, which tests
 // pin after init.
 func localBackends() []mux.Backend {
-	list := []mux.Backend{tmux.Backend{}}
+	list := []mux.Backend{localTmux()}
 	if rex.Installed() {
 		list = append(list, rex.Backend{MarksDir: rexMarksDir()})
 	}
@@ -80,7 +79,7 @@ func backendNames() []string {
 // lives, never on a surface elsewhere.
 func backendByName(name string) (mux.Backend, error) {
 	if name == "" {
-		return tmux.Backend{}, nil
+		return localTmux(), nil
 	}
 	for _, b := range localBackends() {
 		if b.Name() == name {
@@ -99,7 +98,7 @@ func backendByName(name string) (mux.Backend, error) {
 func backendNamed(name string) mux.Backend {
 	b, err := backendByName(name)
 	if err != nil {
-		return tmux.Backend{}
+		return localTmux()
 	}
 	return b
 }

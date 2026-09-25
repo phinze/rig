@@ -327,6 +327,7 @@ type radarScanMsg struct {
 	sessions []mux.Session
 	attached map[sessionKey]int64
 	agents   map[sessionKey][]agentChild // session → its agent windows
+	portals  map[sessionKey]bool         // Rex sessions that are portals onto a tmux server
 	stones   []rigStatus                 // torn-down rigs still inside the regret window
 	err      error
 }
@@ -437,6 +438,7 @@ func radarScanNow(home string) radarScanMsg {
 		sessions: sessions,
 		attached: attachedTimes(sessions),
 		agents:   liveAgentChildren(local),
+		portals:  portalSessions(),
 		stones:   tombstoneRows(time.Now()),
 	}
 }
@@ -1015,7 +1017,10 @@ func (m *radarModel) apply(scan radarScanMsg) {
 	var sessions []rigStatus
 	for _, ts := range scan.sessions {
 		key := sessionKey{ts.Surface, ts.Name}
-		if rigSessions[key] {
+		// A portal is the way into other rows, not a destination of its own:
+		// its tmux sessions are already on the board. It stays visible only
+		// as the CURRENT context, which is where you are.
+		if rigSessions[key] || (scan.portals[key] && key != m.current) {
 			continue
 		}
 		s := bareSession(ts, m.home)

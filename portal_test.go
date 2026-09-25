@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/phinze/rig/internal/mux"
 	"github.com/phinze/rig/internal/mux/tmux"
 )
 
@@ -31,22 +32,24 @@ func (f *fakePortalHost) Attach(target string) error {
 	return nil
 }
 
-// fakeSSH answers the remote tmux calls a portal makes: the stamped tty, the
-// attached clients, and switch-client, logging each command line.
+// fakeSSH answers the tmux calls a portal makes, whether they arrive over ssh
+// (one quoted command line) or straight to a local tmux (separate args): the
+// stamped tty, the attached clients, and switch-client, logging each call.
 func fakeSSH(t *testing.T, stamped, clients string) (log string) {
 	t.Helper()
 	bin := t.TempDir()
-	log = filepath.Join(bin, "ssh.log")
+	log = filepath.Join(bin, "calls.log")
 	script := `#!/bin/sh
-for last in "$@"; do :; done
-printf '%s\n' "$last" >> "` + log + `"
-case "$last" in
+printf '%s\n' "$*" >> "` + log + `"
+case "$*" in
 *show-options*) echo '` + stamped + `' ;;
 *list-clients*) printf '%s\n' ` + clients + ` ;;
 esac
 `
-	if err := os.WriteFile(filepath.Join(bin, "ssh"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
+	for _, name := range []string{"ssh", "tmux"} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 	return log
@@ -111,4 +114,63 @@ func TestPortalUpsert(t *testing.T) {
 			t.Errorf("killed %v created %v, want the dead portal replaced once", h.killed, h.created)
 		}
 	})
+}
+
+// This machine's own tmux gets a portal too, entered the same way from Rex,
+// while Enter from inside that tmux keeps switching the client you're in.
+func TestLocalPortal(t *testing.T) {
+	p := localTmux()
+	const target = "~-workspaces-foo"
+
+	t.Run("from Rex, a missing local portal is created", func(t *testing.T) {
+		h := &fakePortalHost{}
+		withPortalHost(t, h)
+		t.Setenv("TMUX", "")
+		fakeSSH(t, "", "")
+		if err := p.Attach(target); err != nil {
+			t.Fatal(err)
+		}
+		if len(h.created) != 1 || !strings.HasPrefix(h.created[0], "tmux-local :: tmux '-u' 'attach-session' '-t' '"+target+"'") ||
+			strings.Contains(h.created[0], "ssh") {
+			t.Errorf("created %v, want tmux-local running a plain tmux attach", h.created)
+		}
+		if len(h.attached) != 1 || h.attached[0] != "tmux-local" {
+			t.Errorf("hopped to %v, want tmux-local", h.attached)
+		}
+	})
+
+	t.Run("from inside tmux, the client we're in is switched", func(t *testing.T) {
+		h := &fakePortalHost{}
+		withPortalHost(t, h)
+		t.Setenv("TMUX", "/tmp/tmux-501/default,1,0")
+		log := fakeSSH(t, "", "")
+		if err := p.Attach(target); err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := os.ReadFile(log)
+		if len(h.created) != 0 || len(h.attached) != 0 || !strings.Contains(string(raw), "switch-client -t "+target) {
+			t.Errorf("created %v hopped %v calls:\n%s\nwant a plain switch-client", h.created, h.attached, raw)
+		}
+	})
+}
+
+// A portal's own Rex session is the way into other rows, so the board leaves
+// it out, except as the CURRENT context when that's where you are.
+func TestRadarHidesPortalSessions(t *testing.T) {
+	portal := sessionKey{"rex", "tmux-local"}
+	scan := radarScanMsg{
+		sessions: []mux.Session{{Surface: "rex", Name: "tmux-local"}, {Surface: "rex", Name: "notes"}},
+		attached: map[sessionKey]int64{},
+		portals:  map[sessionKey]bool{portal: true},
+	}
+	m := radarModel{prs: map[string][]rigPR{}}
+	m.apply(scan)
+	if len(m.sessions) != 1 || m.sessions[0].session.name != "notes" {
+		t.Errorf("rows = %+v, want the portal left out", m.sessions)
+	}
+	m = radarModel{prs: map[string][]rigPR{}, current: portal}
+	m.apply(scan)
+	if m.currentRow == nil || m.currentRow.session.name != "tmux-local" {
+		t.Errorf("current row = %+v, want the portal you're in", m.currentRow)
+	}
 }

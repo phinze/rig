@@ -484,14 +484,17 @@ func (b Backend) KillSessionAt(name, socket string) error {
 const portalOption = "@rig-portal-tty"
 
 // PortalCommand is the command line, for this machine's shell, that a portal
-// runs: an interactive ssh into the host's tmux, attached to target, that
-// stamps its own client tty into portalOption as it arrives. The stamp rides
-// in the same command sequence as the attach, so the client it names is the
-// one that just attached.
+// runs: a tmux client attached to target that stamps its own tty into
+// portalOption as it arrives, over an interactive ssh when the server is on
+// another host. The stamp rides in the same command sequence as the attach,
+// so the client it names is the one that just attached.
 func (b Backend) PortalCommand(target string) string {
-	remote := remoteLine("tmux", "-u", "attach-session", "-t", target,
+	attach := remoteLine("tmux", "-u", "attach-session", "-t", target,
 		";", "set-option", "-gF", portalOption, "#{client_tty}")
-	return "ssh -t " + shellQuote(b.Host) + " " + shellQuote(remote)
+	if !b.remote() {
+		return attach
+	}
+	return "ssh -t " + shellQuote(b.Host) + " " + shellQuote(attach)
 }
 
 // PortalTTY is the tty the portal stamped, provided a client on that tty is

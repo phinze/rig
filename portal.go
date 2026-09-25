@@ -7,11 +7,14 @@ import (
 	"github.com/phinze/rig/internal/mux/tmux"
 )
 
-// A portal is how a tmux server on another host shows up in this machine's
-// Rex: one Rex session per host, running an ssh into that host's tmux. It's
-// the bridge for a host that keeps tmux while this one moves to Rex, at the
-// scale of one view per tmux server rather than one per rig (a wrapper
-// session per rig was sketched and dropped for exactly that).
+// A portal is how a tmux server shows up in this machine's Rex: one Rex
+// session per server, running a tmux client attached to it (over ssh when the
+// server is on another host). It's the bridge while tmux and Rex coexist, at
+// the scale of one view per tmux server rather than one per rig (a wrapper
+// session per rig was sketched and dropped for exactly that). This machine's
+// own tmux gets one too, so from Rex every tmux server is entered the same
+// way, and a radar opened over a portal is a Rex layer over a Rex session
+// rather than something that inherited TMUX and thinks it's inside tmux.
 //
 // Entering a row on such a surface is an upsert. If the portal is there and
 // its client is still attached, rig moves that client with switch-client -c,
@@ -23,14 +26,32 @@ type portalBackend struct {
 	tmux.Backend
 }
 
+// localTmux is this machine's tmux as rig drives it everywhere: the plain
+// tmux backend, with portal behaviour for when it's entered from Rex. Every
+// place that means "the local tmux" goes through here, rig manifests that say
+// tmux (or nothing) included, so none of them attaches a tmux client inside
+// whatever Rex block happened to ask.
+func localTmux() portalBackend { return portalBackend{tmux.Backend{}} }
+
 // portalLabel is the portal's Rex session label. Labels are what the picker
 // hop matches, and this one only needs to be unique on this machine.
-func (p portalBackend) portalLabel() string { return "tmux-" + p.Place }
+func (p portalBackend) portalLabel() string { return "tmux-" + p.place() }
+
+// place is where the portal's tmux server lives: the configured place for a
+// surface elsewhere, "local" for this machine's own.
+func (p portalBackend) place() string {
+	if p.Place == "" {
+		return "local"
+	}
+	return p.Place
+}
 
 func (p portalBackend) Attach(target string) error {
-	// Only Rex can host a portal. From a bare terminal the remote attach is
-	// just ssh -t, and from inside tmux the client to move is somewhere else.
-	if os.Getenv("REX_SESSION") == "" {
+	// Only Rex can host a portal. From a bare terminal the tmux backend
+	// attaches (ssh -t for a remote server); from inside this machine's tmux
+	// the client to move is the one we're in, which switch-client already
+	// handles, so a local server skips the portal there too.
+	if os.Getenv("REX_SESSION") == "" || (p.Host == "" && os.Getenv("TMUX") != "") {
 		return p.Backend.Attach(target)
 	}
 	rx := localRex()
@@ -52,7 +73,7 @@ func (p portalBackend) Attach(target string) error {
 		}
 	}
 	home, _ := os.UserHomeDir()
-	if _, _, err := rx.NewCommandSession(label, p.Place, home, p.PortalCommand(target)); err != nil {
+	if _, _, err := rx.NewCommandSession(label, p.place(), home, p.PortalCommand(target)); err != nil {
 		return err
 	}
 	return rx.Attach(label)
@@ -63,6 +84,22 @@ func (p portalBackend) Attach(target string) error {
 type portalHost interface {
 	mux.Backend
 	NewCommandSession(name, windowName, cwd, cmdline string) (pane, window string, err error)
+}
+
+// portalSessions is the key each portal's Rex session would have: one per
+// tmux server rig can reach, whether or not the portal exists yet.
+func portalSessions() map[sessionKey]bool {
+	rx := localRex()
+	if rx == nil {
+		return nil
+	}
+	out := map[sessionKey]bool{}
+	for _, b := range knownBackends() {
+		if p, ok := b.(portalBackend); ok {
+			out[sessionKey{rx.Surface(), p.portalLabel()}] = true
+		}
+	}
+	return out
 }
 
 // localRex is this machine's own Rex backend, or nil where there isn't one.
