@@ -295,6 +295,12 @@ func TestUnreachableServerIsLeftAlone(t *testing.T) {
 	if n := calls(t, log); n != 1 {
 		t.Errorf("down server was asked %d times, want once", n)
 	}
+	if !b.Unreachable() {
+		t.Error("a server that failed to connect doesn't report itself unreachable")
+	}
+	if (Backend{}).Unreachable() {
+		t.Error("the local server reported unreachable; only a remote one can be")
+	}
 
 	// Another server isn't tarred with the same brush.
 	t.Setenv("REX_FAKE_DOWN", "")

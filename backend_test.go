@@ -2,6 +2,7 @@ package main
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/phinze/rig/internal/mux"
@@ -196,5 +197,25 @@ func TestRadarFoldsRemoteRowsIntoLocalScans(t *testing.T) {
 		if s.session.b.Surface() == "rex@devbox" && (len(s.agents) != 1 || s.agents[0].Context != "remote work") {
 			t.Errorf("remote row agents = %+v, want its own", s.agents)
 		}
+	}
+}
+
+// A surface that couldn't be reached says so above the board and counts as
+// prompt furniture, so clicks still land on the rows they're drawn over.
+func TestRadarNamesUnreachableSurfaces(t *testing.T) {
+	m := radarModel{home: "/home/me", prs: map[string][]rigPR{}}
+	m.apply(radarScanMsg{attached: map[sessionKey]int64{}})
+	before, _ := m.viewportChrome()
+	next, _ := m.Update(radarRemoteMsg{down: []string{"devbox"}})
+	m = next.(radarModel)
+	if line := m.surfaceLine(); !strings.Contains(line, "unreachable: devbox") {
+		t.Errorf("surface line = %q, want devbox named", line)
+	}
+	if after, _ := m.viewportChrome(); after != before+2 {
+		t.Errorf("prompt rows %d -> %d, want the banner and its blank counted", before, after)
+	}
+	next, _ = m.Update(radarRemoteMsg{})
+	if line := next.(radarModel).surfaceLine(); line != "" {
+		t.Errorf("surface line after recovery = %q, want none", line)
 	}
 }

@@ -338,7 +338,13 @@ type radarScanMsg struct {
 type radarRemoteMsg struct {
 	sessions []mux.Session
 	agents   map[sessionKey][]agentChild
+	down     []string // places that couldn't be reached on this pass
 }
+
+// reachability is what a backend implements when it can tell "down" from
+// "empty". Only a remote one ever needs to; a local server that isn't running
+// really does have no sessions.
+type reachability interface{ Unreachable() bool }
 
 // radarRemoteCmd lists the configured surfaces off the render path. The board
 // draws from local state first and gains the remote rows when they answer,
@@ -348,7 +354,13 @@ type radarRemoteMsg struct {
 func radarRemoteCmd() tea.Cmd {
 	return func() tea.Msg {
 		surfaces := surfaceBackends()
-		return radarRemoteMsg{sessions: allSessions(surfaces), agents: liveAgentChildren(surfaces)}
+		msg := radarRemoteMsg{sessions: allSessions(surfaces), agents: liveAgentChildren(surfaces)}
+		for _, b := range surfaces {
+			if r, ok := b.(reachability); ok && r.Unreachable() {
+				msg.down = append(msg.down, surfacePlace(b.Surface()))
+			}
+		}
+		return msg
 	}
 }
 
@@ -2144,7 +2156,7 @@ func (m radarModel) view() string {
 	if typing {
 		prompt = radarFaintStyle.Render("/ ") + m.filter + radarFaintStyle.Render("▌") + "\n\n"
 	}
-	prompt = m.inboxLine() + m.leavingLine() + prompt
+	prompt = m.inboxLine() + m.surfaceLine() + m.leavingLine() + prompt
 
 	var footer string
 	toggle := "park/wake"
@@ -2451,6 +2463,16 @@ func (m radarModel) inboxLine() string {
 	return style.Render(" "+line) + "\n\n"
 }
 
+// surfaceLine says which surfaces elsewhere couldn't be reached. Without it a
+// devbox that has dropped off the tailnet draws exactly like a devbox with
+// nothing running, which is the tracker-outage mistake in another costume.
+func (m radarModel) surfaceLine() string {
+	if len(m.remote.down) == 0 {
+		return ""
+	}
+	return radarWarnStyle.Render(" ⚠ unreachable: "+strings.Join(m.remote.down, ", ")) + "\n\n"
+}
+
 // leavingLine is the banner for ctrl+x: first the menu of ways to leave the
 // hosting rig, then the armed verb, after which the board is choosing where to
 // go rather than what to do. It rides above the prompt as furniture, so
@@ -2491,6 +2513,7 @@ func (m radarModel) viewportChrome() (promptRows, budget int) {
 	// rendered beats re-deriving the condition here, which is how this drifted
 	// in the first place: a notification silently sent every click two rows low.
 	promptRows += strings.Count(m.inboxLine(), "\n")
+	promptRows += strings.Count(m.surfaceLine(), "\n")
 	promptRows += strings.Count(m.leavingLine(), "\n")
 	if m.height <= 0 {
 		return promptRows, -1

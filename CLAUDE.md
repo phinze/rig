@@ -541,7 +541,11 @@ process and a title call per block, so a devbox with ten sessions is dozens of
 tailnet round trips, and a surface that has dropped off would otherwise hold
 the popup's first frame for a whole timeout. A remote rex call is bounded at
 3s, and a failure to connect trips a 30s breaker in the rex package, which
-listing honours and teardown's `KillSessionAt` deliberately bypasses. Enter on
+listing honours and teardown's `KillSessionAt` deliberately bypasses. The
+breaker is also how the board tells "down" from "empty": a backend that can
+say so implements `Unreachable()`, and the radar names those places in a
+banner above the prompt, because a devbox off the tailnet otherwise draws
+exactly like one with nothing running. Enter on
 a remote Rex row is `ErrNoClientSwitch` until a client can be moved by session
 id: the picker hop matches a label, and labels collide across hosts.
 

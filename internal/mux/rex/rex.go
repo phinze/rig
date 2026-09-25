@@ -109,6 +109,11 @@ func noteReachability(server, stderr string) {
 	}
 }
 
+// Unreachable reports whether this instance is a remote server that a recent
+// call couldn't reach, so a board can say the surface is down rather than
+// drawing it as a surface with no sessions.
+func (b Backend) Unreachable() bool { return b.remote() && unreachable(b.Server) }
+
 // call invokes one session-scoped API method and decodes its JSON reply into
 // out (nil to discard). session is a label or id; "" means no session scope.
 // A remote server that was just found unreachable fails fast rather than
