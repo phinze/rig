@@ -7,17 +7,18 @@ import (
 	"strings"
 )
 
-// commandNames are the commands you can type, in usage order. Resolution walks
-// this list for both prefix shorthand and typo suggestions, which is exactly
-// why the __-prefixed internals aren't in it: they're exact-match only, and
-// listing them would let `rig _` resolve to one and let a typo suggest a
-// command that isn't meant to be typed.
-var commandNames = []string{
-	"up", "new", "project", "dispatch", "relay", "review", "pr", "track",
-	"adopt", "add", "recto", "ls", "notify", "switch", "radar", "park", "wake",
-	"resume", "waiting", "sweep", "down", "reap", "history", "resurrect",
-	"env", "info", "config",
-}
+// commandNames are the commands you can type, in help order, derived from the
+// commands table. Resolution walks this list for both prefix shorthand and typo
+// suggestions, which is exactly why the __-prefixed internals aren't in it:
+// they're exact-match only, and listing them would let `rig _` resolve to one
+// and let a typo suggest a command that isn't meant to be typed.
+var commandNames = func() []string {
+	names := make([]string, len(commands))
+	for i, c := range commands {
+		names[i] = c.name
+	}
+	return names
+}()
 
 // commandAliases are retained spellings that stand in for a canonical command.
 // They join the prefix namespace rather than sitting beside it, so `rig cd`

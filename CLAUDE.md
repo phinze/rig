@@ -320,6 +320,16 @@ Damerau-Levenshtein rather than plain Levenshtein because a transposition is
 the typo people actually make; plain Levenshtein puts `hlep` two edits from
 help and would never suggest it.
 
+Help comes from the `commands` table in `help.go`, which is also where
+`commandNames` comes from, so a command can't exist without help. `main`
+answers `rig help [cmd]` and any `-h`/`--help` before dispatch, so a command
+never sees those flags as input. Before that, `rig relay --help` relayed the
+string "--help". A bare `--` stops the check, and `recto` only checks its first
+argument because the rest go to Recto. Help text is written for an agent
+reading it cold: exact arguments and the facts needed to call a command
+correctly. The reasoning behind a command belongs in this file and DESIGN.md,
+not in its help text.
+
 Kind itself lives in `kind.go`, not in any one board, because all three draw it
 on the same hard-left edge: inside sweep's checkbox, inside radar's cursor
 gutter, first on an `ls` row. Only radar suppresses a loose rig's id, since

@@ -5,11 +5,12 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 )
 
 func main() {
 	if len(os.Args) < 2 {
-		usage()
+		printIndex(os.Stderr)
 		os.Exit(2)
 	}
 
@@ -26,13 +27,28 @@ func main() {
 		os.Exit(2)
 	}
 
+	// Help is answered here, before any command runs, so -h/--help can never be
+	// taken as a command's input: `rig relay --help` once meant relaying the
+	// string "--help". Hidden internals aren't in the table and are exempt.
+	if cmd == "help" {
+		if err := runHelp(args, os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "rig: %v\n", err)
+			os.Exit(2)
+		}
+		return
+	}
+	if c, ok := findCommand(cmd); ok && wantsHelp(c, args) {
+		printCommandHelp(os.Stdout, c)
+		return
+	}
+
 	// The multiplexer preference is resolved once here and every command
 	// drives it through the backend global. An unknown name is fatal rather
 	// than a fallback to tmux, because a typo that silently built a rig in the
 	// wrong multiplexer would look exactly like the setting never taking. The
 	// two commands that don't touch a multiplexer are exempt, and config has
 	// to be: it's the one that repairs a stored name this binary doesn't know.
-	if cmd != "config" && cmd != "help" {
+	if cmd != "config" {
 		if preferredBackend, err = defaultBackend(); err != nil {
 			fmt.Fprintf(os.Stderr, "rig: %v\n", err)
 			os.Exit(2)
@@ -121,8 +137,6 @@ func main() {
 		} else {
 			err = executeTeardownJobFile(args[0], false)
 		}
-	case "help":
-		usage()
 	default:
 		// resolveCommand only ever returns a name this switch handles, so
 		// reaching here means the two lists drifted apart.
@@ -137,132 +151,9 @@ func main() {
 			}
 		}
 		fmt.Fprintf(os.Stderr, "rig: %v\n", err)
+		if strings.HasPrefix(err.Error(), "usage: ") {
+			fmt.Fprintf(os.Stderr, "run `rig help %s` for details\n", cmd)
+		}
 		os.Exit(1)
 	}
-}
-
-func usage() {
-	fmt.Fprint(os.Stderr, `rig: workspace tool for task-shaped work
-
-usage:
-  rig up [issue|query|pr] [--source SRC] [--repo owner/repo] [--agent AGENT]
-         [--context TEXT]  go to your rig for a task, creating it if it's new
-                            (an id, search terms, no-arg fzf picker, or a PR of
-                            yours to resume; idempotent — re-up just switches).
-                            Sources are linear (MIR-75), github (owner/repo#9
-                            or an issue url, your own repos only), and tasks
-                            (PERS-3, via personal-tasks); ctrl-t cycles them
-                            in the picker, and --source names one outright.
-                            Repo is chosen by an fzf picker over ghq repos, cwd
-                            pre-selected on top, unless --repo names one or a
-                            GitHub issue already does.
-                            --context, and piped stdin, carry color beyond the
-                            ticket into the new rig's KICKOFF.md for its agent
-                            to read alongside the issue; an existing rig warns
-                            and points at dispatch instead)
-                            Agent is cld/claude, cdx/codex, or agy/antigravity,
-                            defaulting to $RIG_AGENT, then the "rig config
-                            agent" setting, then claude. Every
-                            prompt a creation command already shows carries an
-                            agent bar that ctrl-o cycles; an invocation that
-                            prompts for nothing gets the bar on its own.
-                            --agent picks without asking
-  rig new [kickoff] [--repo owner/repo] [--agent AGENT]
-                            start unticketed work in a normal authoring rig
-                            (prompts for the kickoff when omitted, then for a
-                            blob of context to paste (esc skips it, and piped
-                            stdin supplies it without a prompt), then picks the
-                            repo; the same TUI opens inside radar on ctrl-n;
-                            starts at trunk with no branch recorded yet)
-  rig project [query|url|uuid] [--agent AGENT]
-                            create or enter a repositoryless Linear project rig
-                            (pick when omitted or ambiguous; stores the project
-                            UUID and runs an agent from the rig root)
-  rig project status [--format=json|table]
-                            join the current Linear project's issues to live
-                            rig, agent, PR, review, and CI state
-  rig dispatch <rig-or-issue> <prompt>
-                            wake a stopped or parked task rig and resume its
-                            agent with a new assignment, without switching to it
-  rig relay <discovery>     send a private local discovery from a Linear issue
-                            rig to that project's overview inbox
-  rig review [pr-url] [--agent AGENT] [--refresh]
-                            pitch a review rig for someone else's PR
-                            (url, or fzf picker over the PRs awaiting your
-                            review plus the review rigs you already have, each
-                            marked live or parked; picking a marked one goes
-                            there. A URL that turns out to be yours routes to
-                            up; --refresh explicitly advances an existing
-                            review workspace to the PR's current head)
-  rig pr                    open one of the rig's PRs in the browser
-                            (across added repos and tracked/current branches;
-                            when several match, pick one with fzf)
-  rig track [branch]        record a secondary PR branch for the repo you're in
-                            (defaults to the current work's branch) so down and
-                            reap gate on it alongside the rig's primary PR
-  rig adopt <issue>         give the current rig the Linear identity it didn't
-                            have when it started: work that began as rig new and
-                            has since filed its own ticket. Id, basedir, tmux
-                            session and jj workspace all stay put (agent history
-                            is keyed on those paths); the rig gains relay,
-                            project status, dispatch by identifier, and the
-                            ticket marker on every board
-  rig add <owner/repo>      add another repo to the rig you're in
-  rig recto <repo> [args]   pull that repo's persistent Recto beside the main
-                            agent; optional args are forwarded to Recto there
-                            (for example: rig recto cloud focus src/app.go:42)
-  rig ls [--full]           list rigs in flight
-                            (--full adds PR/CI, one gh call per repo)
-  rig notify post --source S --key K --title T [--body B] [--level info|warn|error] [--rig ID]
-  rig notify list [--format=json|table]
-  rig notify dismiss <source/key>... | --all
-                            the ambient inbox: anything that isn't a rig (crons,
-                            watchers, nix-config-sync) posts here and it shows up
-                            in ls, sweep and radar. Re-posting a key updates one
-                            entry and counts the repeats instead of piling up
-  rig switch [query]        jump to a rig's tmux session, most-recently-used
-                            first (fzf if ambiguous; aliased as rig cd)
-  rig radar                 live TUI board over every rig, meant for a tmux
-                            popup: in-flight rigs to switch to, parked rigs
-                            ranked by review status; enter switches or wakes,
-                            ctrl-p toggles the selected rig's parked state
-  rig park                  park the current rig: mark it awaiting-review,
-                            pick the next hop in radar when run inside it, kill
-                            this session, and drop it from switch (dir kept)
-  rig wake [query|PR-URL]   resume a rig, waking it first when parked
-  rig resume [query]        repair and enter an active rig's agent + Recto
-                            session (cwd rig by default; does not unpark)
-  rig waiting               review status of parked rigs, most-actionable first
-                            (which came back with changes, which are mergeable)
-  rig sweep [-n] [--merge-method merge|squash|rebase]
-                            the Monday pass: a board of every rig's proposed
-                            next step, checkable, then it streams the work.
-                            Merged rigs are pre-checked to tear down; approved
-                            and green PRs are offered to merge but start
-                            unchecked (merge commits by default). Stops at the
-                            first failure. -n plans without touching anything;
-                            outside a terminal it prints the plan and stops
-  rig down [--force]        break the current rig down
-                            (refuses if it has WIP or an unmerged PR; --force
-                            overrides)
-  rig reap [-n]             retry stranded teardown jobs and kill escaped
-                            orphan scopes. Deciding which rigs should stop
-                            existing is rig sweep's job, never reap's
-  rig history               rigs torn down recently and still recoverable
-  rig resurrect <id>        rebuild a torn-down rig and resume its agent
-                            session (workspaces come back at their recorded
-                            branches; uncommitted work does not)
-  rig env                   print shell setup describing the current dir
-                            (eval'd by the direnv stdlib; silent outside a rig)
-  rig info --format=json    print stable machine-readable context for the
-                            current rig and repository
-  rig config [SETTING [VALUE]] | rig config SETTING --unset
-                            read or write standing preferences, stored in
-                            ~/.config/rig/config.toml. No argument lists every
-                            setting with its value and where that value came
-                            from. Currently: agent, the one new rigs start on
-
-any unambiguous prefix works: rig swe is sweep, rig swi is switch, rig sw is
-neither and says so. A misspelling suggests the nearest names instead.
-`)
 }
