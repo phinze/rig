@@ -522,6 +522,29 @@ basedir, manifest, and agent live where its multiplexer runs), so `rigKey`
 derives its surface from the manifest's kind; remote surfaces contribute plain
 session rows, never rigs.
 
+Surfaces elsewhere come from a hand-edited `[surfaces]` table in the config,
+keyed by place and valued `kind+endpoint` (`devbox =
+"rex+https://devbox.tail1234.ts.net"`). `rig config` prints each one with the
+surface it became or why it was skipped, and that's the only place a bad entry
+speaks up: `knownBackends()` runs inside the radar's scan, where a line of
+stderr would draw over the board. `writeRigConfig` carries the table through
+every `rig config` write, including entries it can't use. A kind (`rig config
+backend`, a manifest's `backend`) always resolves through `localBackends()`,
+never to a surface, because a rig is built and torn down where it lives.
+
+The radar keeps its instant first frame by never asking a surface elsewhere
+for it. `radarScanNow` lists local backends only; `radarRemoteCmd` lists the
+configured surfaces off the render path and its `radarRemoteMsg` is folded into
+every local scan until the next pass replaces it, with one pass in flight at a
+time. That split is load-bearing rather than tidy: Rex's `Panes` costs a
+process and a title call per block, so a devbox with ten sessions is dozens of
+tailnet round trips, and a surface that has dropped off would otherwise hold
+the popup's first frame for a whole timeout. A remote rex call is bounded at
+3s, and a failure to connect trips a 30s breaker in the rex package, which
+listing honours and teardown's `KillSessionAt` deliberately bypasses. Enter on
+a remote Rex row is `ErrNoClientSwitch` until a client can be moved by session
+id: the picker hop matches a label, and labels collide across hosts.
+
 `Attach` returns `mux.ErrNoClientSwitch` from a backend that can't move the
 client between sessions; radar prints a "switch by hand" line and waits for a
 key before its popup closes. The Rex backend answers that itself where it can:

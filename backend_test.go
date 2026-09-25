@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/phinze/rig/internal/mux"
@@ -81,7 +82,7 @@ func TestBackendRoutesPerRig(t *testing.T) {
 	}
 
 	var tagged int
-	for _, s := range allSessions() {
+	for _, s := range allSessions(knownBackends()) {
 		if s.Surface == "fake" && s.Name == "~-workspaces-on-fake" {
 			tagged++
 		}
@@ -89,7 +90,7 @@ func TestBackendRoutesPerRig(t *testing.T) {
 	if tagged != 1 {
 		t.Errorf("fake session appeared %d times in the union, want once", tagged)
 	}
-	kids := liveAgentChildren()[sessionKey{"fake", "~-workspaces-on-fake"}]
+	kids := liveAgentChildren(knownBackends())[sessionKey{"fake", "~-workspaces-on-fake"}]
 	if len(kids) != 1 || kids[0].Surface != "fake" || kids[0].Target != "block:1" {
 		t.Errorf("agent children from the fake = %+v, want one tagged fake at block:1", kids)
 	}
@@ -136,6 +137,9 @@ func TestRadarKeepsCollidingSurfacesApart(t *testing.T) {
 		t.Fatalf("bare rows = %+v, want the remote session alone", m.sessions)
 	}
 	bare := m.sessions[0]
+	if bare.Title != "elsewhere:/work/foo" {
+		t.Errorf("remote row title = %q, want its place in front", bare.Title)
+	}
 	if bare.session.b.Surface() != "tmux@elsewhere" {
 		t.Errorf("remote row routes to %s, want tmux@elsewhere", bare.session.b.Surface())
 	}
@@ -144,5 +148,53 @@ func TestRadarKeepsCollidingSurfacesApart(t *testing.T) {
 	}
 	if got := surfaceNamed("tmux@gone").Surface(); got != "tmux" {
 		t.Errorf("unknown remote surface fell back to %s, want the local tmux", got)
+	}
+}
+
+// Remote rows arrive on their own message, after the board has already drawn
+// from local state, and they stay folded into every local rescan until the
+// next remote pass replaces them.
+func TestRadarFoldsRemoteRowsIntoLocalScans(t *testing.T) {
+	remote := &fakeBackend{name: "rex", surface: "rex@devbox"}
+	registerFakeBackend(t, remote)
+
+	local := radarScanMsg{
+		sessions: []mux.Session{{Surface: "tmux", Name: "here", Path: "/home/me/here"}},
+		attached: map[sessionKey]int64{tk("here"): 100},
+	}
+	m := radarModel{home: "/home/me", prs: map[string][]rigPR{}, remoteBusy: true}
+	m.apply(local)
+	if len(m.sessions) != 1 {
+		t.Fatalf("local rows = %+v, want one", m.sessions)
+	}
+
+	far := sessionKey{"rex@devbox", "~-workspaces-foo"}
+	next, _ := m.Update(radarRemoteMsg{
+		sessions: []mux.Session{{Surface: far.surface, Name: far.name, Path: "/home/me/workspaces/foo", LastAttached: 200}},
+		agents:   map[sessionKey][]agentChild{far: {{Surface: far.surface, Target: "block:1", Context: "remote work"}}},
+	})
+	m = next.(radarModel)
+	if m.remoteBusy {
+		t.Error("remote pass still marked in flight after it answered")
+	}
+	titles := func() []string {
+		var out []string
+		for _, s := range m.sessions {
+			out = append(out, s.Title)
+		}
+		return out
+	}
+	if got := titles(); len(got) != 2 || !slices.Contains(got, "devbox:~/workspaces/foo") {
+		t.Fatalf("rows after the remote pass = %v, want the devbox row beside the local one", got)
+	}
+
+	m.apply(local)
+	if got := titles(); len(got) != 2 {
+		t.Fatalf("rows after a local rescan = %v, want the remote row kept", got)
+	}
+	for _, s := range m.sessions {
+		if s.session.b.Surface() == "rex@devbox" && (len(s.agents) != 1 || s.agents[0].Context != "remote work") {
+			t.Errorf("remote row agents = %+v, want its own", s.agents)
+		}
 	}
 }

@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/phinze/rig/internal/mux"
@@ -22,15 +24,23 @@ import (
 // trial has tmux rigs and Rex rigs side by side and the board has to show both.
 var preferredBackend mux.Backend = tmux.Backend{}
 
-// knownBackends is every backend this binary can drive on this machine, in
-// the order `rig config` and a typo's suggestion print them. tmux is first
-// because it's the default an empty name resolves to. Rex is included only
-// where its CLI exists: a backend whose server is down lists nothing, which
-// is the cheap and correct answer for a board, but a backend that isn't
-// installed shouldn't cost a failed exec per listing on every Linux host.
-// It's computed per call rather than at init so the Rex marks dir follows
-// XDG_STATE_HOME, which tests pin after init.
+// knownBackends is every backend this binary can drive from this machine, in
+// the order a listing unions them: this machine's own, then the configured
+// surfaces elsewhere (surface.go). Anything that joins what they list keys on
+// Surface, since two of them can share a kind.
 func knownBackends() []mux.Backend {
+	return append(localBackends(), surfaceBackends()...)
+}
+
+// localBackends is one backend per kind on this machine, in the order `rig
+// config` and a typo's suggestion print them. tmux is first because it's the
+// default an empty name resolves to. Rex is included only where its CLI
+// exists: a backend whose server is down lists nothing, which is the cheap and
+// correct answer for a board, but a backend that isn't installed shouldn't
+// cost a failed exec per listing on every Linux host. It's computed per call
+// rather than at init so the Rex marks dir follows XDG_STATE_HOME, which tests
+// pin after init.
+func localBackends() []mux.Backend {
 	list := []mux.Backend{tmux.Backend{}}
 	if rex.Installed() {
 		list = append(list, rex.Backend{MarksDir: rexMarksDir()})
@@ -54,7 +64,7 @@ func rexMarksDir() string {
 }
 
 func backendNames() []string {
-	backends := knownBackends()
+	backends := localBackends()
 	names := make([]string, 0, len(backends))
 	for _, b := range backends {
 		names = append(names, b.Name())
@@ -65,12 +75,14 @@ func backendNames() []string {
 // backendByName resolves a preference to a backend. Unknown names are an
 // error rather than a fallback, because a stale or misspelled preference that
 // silently landed you in tmux would be indistinguishable from the setting
-// never having taken.
+// never having taken. A name is a kind, and a kind always means this
+// machine's own instance: a rig is built, recorded, and torn down where it
+// lives, never on a surface elsewhere.
 func backendByName(name string) (mux.Backend, error) {
 	if name == "" {
 		return tmux.Backend{}, nil
 	}
-	for _, b := range knownBackends() {
+	for _, b := range localBackends() {
 		if b.Name() == name {
 			return b, nil
 		}
@@ -204,21 +216,34 @@ func insideSession(rs rigSession) bool {
 	return b != nil && b.Surface() == rs.b.Surface() && name == rs.name
 }
 
-// allSessions lists every live session across every known backend, each
+// allSessions lists every live session across the given backends, each
 // tagged with the backend that listed it.
-func allSessions() []mux.Session {
-	var out []mux.Session
-	for _, b := range knownBackends() {
-		out = append(out, b.Sessions()...)
+func allSessions(backends []mux.Backend) []mux.Session {
+	return slices.Concat(eachBackend(backends, func(b mux.Backend) []mux.Session { return b.Sessions() })...)
+}
+
+// eachBackend runs one listing against every given backend at once and
+// returns the answers in backend order. Concurrently because a surface on
+// another host costs a network round trip per call and one that has dropped
+// off costs its whole timeout; in sequence those add up, and the local rows a
+// board refreshes every two seconds would wait on all of them.
+func eachBackend[T any](backends []mux.Backend, list func(mux.Backend) T) []T {
+	out := make([]T, len(backends))
+	var wg sync.WaitGroup
+	for i, b := range backends {
+		wg.Go(func() { out[i] = list(b) })
 	}
+	wg.Wait()
 	return out
 }
 
-// lastAttached maps each live session to the unix time it was last attached
-// (0 if never). It's how `rig switch` sorts most-recently-touched first, the
-// same signal session-wizard's `t` sorts on.
+// lastAttached maps each live local session to the unix time it was last
+// attached (0 if never). It's how `rig switch` sorts most-recently-touched
+// first, the same signal session-wizard's `t` sorts on. Local only, because
+// switch lists rigs and a rig is always local: asking the surfaces elsewhere
+// would only add their latency.
 func lastAttached() map[sessionKey]int64 {
-	return attachedTimes(allSessions())
+	return attachedTimes(allSessions(localBackends()))
 }
 
 func attachedTimes(sessions []mux.Session) map[sessionKey]int64 {
@@ -262,16 +287,14 @@ type agentChild struct {
 	Working bool // window produced output within agentActiveWindow
 }
 
-// liveAgentChildren is the radar's one sweep of every pane on every known
-// backend, filtered down to the agents. A backend that can't be listed
+// liveAgentChildren is the radar's one sweep of every pane on the given
+// backends, filtered down to the agents. A backend that can't be listed
 // contributes nothing rather than failing the sweep.
-func liveAgentChildren() map[sessionKey][]agentChild {
-	var panes []mux.Pane
-	for _, b := range knownBackends() {
-		if ps, err := b.AllPanes(); err == nil {
-			panes = append(panes, ps...)
-		}
-	}
+func liveAgentChildren(backends []mux.Backend) map[sessionKey][]agentChild {
+	panes := slices.Concat(eachBackend(backends, func(b mux.Backend) []mux.Pane {
+		ps, _ := b.AllPanes()
+		return ps
+	})...)
 	return agentChildren(panes, time.Now().Unix())
 }
 

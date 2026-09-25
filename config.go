@@ -3,8 +3,11 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 )
@@ -29,6 +32,11 @@ const configName = "config.toml"
 type rigConfig struct {
 	Agent   string
 	Backend string
+	// Surfaces are the multiplexers elsewhere that this machine's boards
+	// list alongside its own, keyed by the place name they show under. See
+	// surface.go. They're hand-edited, not set through `rig config`, but they
+	// live in this struct so a `rig config agent` write carries them through.
+	Surfaces map[string]string
 }
 
 func rigConfigDir() (string, error) {
@@ -67,21 +75,38 @@ func readRigConfig() rigConfig {
 	defer f.Close()
 
 	var c rigConfig
+	section := ""
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
+		// Every table header resets the section, known or not, so a key
+		// under a table this reader doesn't know can't leak into the one
+		// before it: the mistake the manifest reader once made.
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			section = strings.TrimSpace(line[1 : len(line)-1])
+			continue
+		}
 		key, val, ok := strings.Cut(line, "=")
 		if !ok {
 			continue
 		}
-		switch strings.TrimSpace(key) {
-		case "agent":
-			c.Agent = parseTOMLString(val)
-		case "backend":
-			c.Backend = parseTOMLString(val)
+		key = strings.TrimSpace(key)
+		switch section {
+		case "":
+			switch key {
+			case "agent":
+				c.Agent = parseTOMLString(val)
+			case "backend":
+				c.Backend = parseTOMLString(val)
+			}
+		case "surfaces":
+			if c.Surfaces == nil {
+				c.Surfaces = map[string]string{}
+			}
+			c.Surfaces[parseTOMLString(key)] = parseTOMLString(val)
 		}
 	}
 	return c
@@ -99,6 +124,16 @@ func writeRigConfig(c rigConfig) error {
 	}
 	if c.Backend != "" {
 		fmt.Fprintf(&b, "backend = %q\n", c.Backend)
+	}
+	if len(c.Surfaces) > 0 {
+		b.WriteString("\n[surfaces]\n")
+		for _, place := range slices.Sorted(maps.Keys(c.Surfaces)) {
+			key := place
+			if !validPlace(place) {
+				key = strconv.Quote(place) // kept, if unusable: see surfaceBackends
+			}
+			fmt.Fprintf(&b, "%s = %q\n", key, c.Surfaces[place])
+		}
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
@@ -385,5 +420,7 @@ func listConfig(out *os.File) error {
 	for _, s := range configSettings {
 		printNote(s)
 	}
-	return nil
+	sw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	listSurfaces(sw)
+	return sw.Flush()
 }

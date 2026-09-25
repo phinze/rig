@@ -7,9 +7,11 @@ import (
 	"github.com/phinze/rig/internal/mux"
 	"golang.org/x/term"
 	"io"
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -160,6 +162,7 @@ func radarPick(home string) (*radarChoice, error) {
 		return nil, scan.err
 	}
 	m.apply(scan)
+	m.remoteBusy = len(readRigConfig().Surfaces) > 0
 
 	final, err := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
 	if err != nil {
@@ -286,6 +289,14 @@ type radarModel struct {
 	history     []rigStatus          // tombstones inside the regret window, newest death first
 	showHistory bool                 // ctrl+t: show history even with no filter active
 	attached    map[sessionKey]int64 // session → last-attached, for in-flight order
+
+	// The surfaces elsewhere scan on their own clock (radarRemoteCmd).
+	// lastScan is kept so a remote answer can redraw without a local rescan,
+	// and remoteBusy keeps a slow surface from stacking scans every tick.
+	lastScan   radarScanMsg
+	remote     radarRemoteMsg
+	remoteBusy bool
+
 	prs         map[string][]rigPR
 	fetchedAt   map[string]time.Time // slug → when its PRs were fetched
 	pending     map[string]bool      // slug → PR fetch in flight
@@ -318,6 +329,48 @@ type radarScanMsg struct {
 	agents   map[sessionKey][]agentChild // session → its agent windows
 	stones   []rigStatus                 // torn-down rigs still inside the regret window
 	err      error
+}
+
+// radarRemoteMsg is one pass over the surfaces elsewhere: what radarScanMsg
+// carries for this machine's own backends, minus everything only a local rig
+// has. It arrives on its own schedule and is folded into every local scan
+// until the next one replaces it.
+type radarRemoteMsg struct {
+	sessions []mux.Session
+	agents   map[sessionKey][]agentChild
+}
+
+// radarRemoteCmd lists the configured surfaces off the render path. The board
+// draws from local state first and gains the remote rows when they answer,
+// because a popup opened a hundred times a day can't wait on a tailnet, and
+// one surface that has dropped off would otherwise hold the first frame for a
+// whole timeout.
+func radarRemoteCmd() tea.Cmd {
+	return func() tea.Msg {
+		surfaces := surfaceBackends()
+		return radarRemoteMsg{sessions: allSessions(surfaces), agents: liveAgentChildren(surfaces)}
+	}
+}
+
+// merged is the local scan with the latest remote pass folded in.
+func (scan radarScanMsg) merged(remote radarRemoteMsg) radarScanMsg {
+	if len(remote.sessions) == 0 && len(remote.agents) == 0 {
+		return scan
+	}
+	scan.sessions = slices.Concat(scan.sessions, remote.sessions)
+	attached := maps.Clone(scan.attached)
+	if attached == nil {
+		attached = map[sessionKey]int64{}
+	}
+	maps.Copy(attached, attachedTimes(remote.sessions))
+	scan.attached = attached
+	agents := maps.Clone(scan.agents)
+	if agents == nil {
+		agents = map[sessionKey][]agentChild{}
+	}
+	maps.Copy(agents, remote.agents)
+	scan.agents = agents
+	return scan
 }
 
 type radarPRsMsg struct {
@@ -362,13 +415,16 @@ func radarScanNow(home string) radarScanMsg {
 	}
 	// One list-sessions feeds both the in-flight attach-order map and the bare
 	// session rows, so the universal picker costs the same tmux round-trip the
-	// board already paid.
-	sessions := allSessions()
+	// board already paid. Only this machine's own backends are asked here:
+	// this scan runs before the first frame, and a surface elsewhere costs a
+	// network round trip per call, so those arrive separately (radarRemoteCmd).
+	local := localBackends()
+	sessions := allSessions(local)
 	return radarScanMsg{
 		statuses: rigStatuses(rigs, home, time.Now()),
 		sessions: sessions,
 		attached: attachedTimes(sessions),
-		agents:   liveAgentChildren(),
+		agents:   liveAgentChildren(local),
 		stones:   tombstoneRows(time.Now()),
 	}
 }
@@ -437,7 +493,23 @@ func radarTickCmd() tea.Cmd {
 }
 
 func (m radarModel) Init() tea.Cmd {
-	return tea.Batch(append(m.fetchMissing(), radarTickCmd())...)
+	cmds := append(m.fetchMissing(), radarTickCmd())
+	// radarPick marks the first remote pass busy before the program starts,
+	// since Init's receiver is a copy and can't record that it fired one.
+	if m.remoteBusy {
+		cmds = append(cmds, radarRemoteCmd())
+	}
+	return tea.Batch(cmds...)
+}
+
+// remoteScan starts a pass over the surfaces elsewhere unless one is still
+// out or there are none to ask.
+func (m *radarModel) remoteScan() tea.Cmd {
+	if m.remoteBusy || len(readRigConfig().Surfaces) == 0 {
+		return nil
+	}
+	m.remoteBusy = true
+	return radarRemoteCmd()
 }
 
 // radarPRTTL is how long a cached PR answer is trusted before the radar
@@ -616,7 +688,14 @@ func (m radarModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 
 	case radarTickMsg:
-		return m, tea.Batch(radarScanCmd(m.home), radarTickCmd())
+		return m, tea.Batch(radarScanCmd(m.home), m.remoteScan(), radarTickCmd())
+
+	case radarRemoteMsg:
+		m.remote, m.remoteBusy = msg, false
+		if m.lastScan.statuses != nil || m.lastScan.sessions != nil {
+			m.apply(m.lastScan)
+		}
+		return m, nil
 
 	case radarScanMsg:
 		m.apply(msg)
@@ -890,6 +969,8 @@ func (m *radarModel) apply(scan radarScanMsg) {
 		m.scanErr = scan.err
 		return
 	}
+	m.lastScan = scan
+	scan = scan.merged(m.remote)
 	m.scanErr = nil
 	m.attached = scan.attached
 	m.inbox = looseNotifications(activeNotifications())
@@ -990,8 +1071,9 @@ func (m *radarModel) applyParked(path string, parked bool) {
 	m.resortKeeping("slug:" + found.Slug)
 }
 
-// bareSession turns a plain tmux session into a radar row: its working
-// directory (home-relativized) reads as the title, and its last-attached time
+// bareSession turns a plain session into a radar row: its working directory
+// (home-relativized, and prefixed with its place when it's on another host)
+// reads as the title, and its last-attached time
 // stands in for Created so the age column shows how long since you were there
 // and MRU sorting falls out of the same field the rigs use.
 func bareSession(ts mux.Session, home string) rigStatus {
@@ -1000,7 +1082,12 @@ func bareSession(ts mux.Session, home string) rigStatus {
 		created = time.Unix(ts.LastAttached, 0)
 	}
 	title := ts.Name
-	if ts.Path != "" {
+	switch place := surfacePlace(ts.Surface); {
+	case place != "":
+		// Another host's session names a path on that host, and the place is
+		// what tells it apart from a local rig at the same path.
+		title = remoteTitle(place, ts.Path)
+	case ts.Path != "":
 		title = tildePath(ts.Path, home)
 	}
 	return rigStatus{

@@ -17,7 +17,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
+	"time"
 
 	"github.com/phinze/rig/internal/mux"
 )
@@ -75,9 +77,47 @@ func (b Backend) command(args ...string) *exec.Cmd {
 	return exec.Command(binary(), args...)
 }
 
+// remoteBackoff is how long a server that couldn't be reached is left alone.
+// The radar lists every surface every two seconds, twice per scan (sessions,
+// then panes), so without it a devbox that has dropped off the tailnet would
+// cost every scan two full timeouts; with it, one timeout every half minute.
+const remoteBackoff = 30 * time.Second
+
+var (
+	downMu    sync.Mutex
+	downUntil = map[string]time.Time{}
+)
+
+// unreachable reports whether a recent call found this server unreachable.
+func unreachable(server string) bool {
+	downMu.Lock()
+	defer downMu.Unlock()
+	return time.Now().Before(downUntil[server])
+}
+
+// noteReachability records a remote call's outcome. Only a failure to connect
+// trips the breaker, which Rex reports with a "connecting to" message whether
+// the cause was a timeout or a name that didn't resolve; a server that
+// answered with an error is up, and the next call should still reach it.
+func noteReachability(server, stderr string) {
+	downMu.Lock()
+	defer downMu.Unlock()
+	if strings.HasPrefix(strings.TrimPrefix(stderr, "Error: "), "connecting to") {
+		downUntil[server] = time.Now().Add(remoteBackoff)
+	} else {
+		delete(downUntil, server)
+	}
+}
+
 // call invokes one session-scoped API method and decodes its JSON reply into
 // out (nil to discard). session is a label or id; "" means no session scope.
+// A remote server that was just found unreachable fails fast rather than
+// costing another timeout; teardown doesn't come through here, so it never
+// skips a kill on that account.
 func (b Backend) call(session, method string, params any, out any) error {
+	if b.remote() && unreachable(b.Server) {
+		return fmt.Errorf("rex %s: %s is unreachable (retrying within %s)", method, b.Server, remoteBackoff)
+	}
 	args := []string{"api", "call"}
 	if session != "" {
 		args = append(args, "-s", session)
@@ -94,6 +134,9 @@ func (b Backend) call(session, method string, params any, out any) error {
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	raw, err := cmd.Output()
+	if b.remote() {
+		noteReachability(b.Server, strings.TrimSpace(stderr.String()))
+	}
 	if err != nil {
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {

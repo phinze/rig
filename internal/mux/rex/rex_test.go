@@ -20,6 +20,7 @@ func fakeRex(t *testing.T) (log string) {
 	log = filepath.Join(bin, "calls.log")
 	script := `#!/bin/sh
 printf '%s\n' "$*" >> "` + log + `"
+if [ -n "$REX_FAKE_DOWN" ]; then echo 'Error: connecting to the server timed out after 3s: context deadline exceeded' >&2; exit 1; fi
 method=""
 for a in "$@"; do case "$a" in *.*) method="$a";; esac; done
 case "$method" in
@@ -274,4 +275,45 @@ func TestRemoteInstanceTargetsItsServer(t *testing.T) {
 			t.Errorf("call went to the default server: %q", line)
 		}
 	}
+}
+
+// A server that couldn't be reached is left alone for a while, so a devbox
+// off the network costs the board one timeout, not two per scan forever. A
+// server that answers, even with an error, is up.
+func TestUnreachableServerIsLeftAlone(t *testing.T) {
+	log := fakeRex(t)
+	b := Backend{Server: "https://gone.example.ts.net", Place: "gone"}
+	t.Cleanup(func() { noteReachability(b.Server, "") })
+
+	t.Setenv("REX_FAKE_DOWN", "1")
+	if s := b.Sessions(); len(s) != 0 {
+		t.Fatalf("sessions from a down server = %+v", s)
+	}
+	if panes, _ := b.AllPanes(); len(panes) != 0 {
+		t.Errorf("panes from a down server = %+v", panes)
+	}
+	if n := calls(t, log); n != 1 {
+		t.Errorf("down server was asked %d times, want once", n)
+	}
+
+	// Another server isn't tarred with the same brush.
+	t.Setenv("REX_FAKE_DOWN", "")
+	other := Backend{Server: "https://up.example.ts.net", Place: "up"}
+	if s := other.Sessions(); len(s) != 1 {
+		t.Errorf("sessions from a live server = %+v, want one", s)
+	}
+	// And once it answers again, the breaker lets it through.
+	noteReachability(b.Server, "Error: session not found")
+	if s := b.Sessions(); len(s) != 1 {
+		t.Errorf("sessions once back = %+v, want one", s)
+	}
+}
+
+func calls(t *testing.T, log string) int {
+	t.Helper()
+	raw, err := os.ReadFile(log)
+	if err != nil {
+		return 0
+	}
+	return len(strings.Split(strings.TrimSpace(string(raw)), "\n"))
 }
