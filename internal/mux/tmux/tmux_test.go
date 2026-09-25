@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -14,7 +15,7 @@ func TestParsePanes(t *testing.T) {
 		strings.Join([]string{"s", "%4", "0", "@5", "2", "cloud", "", "", "repo", "cloud", "recto", "/work/cloud", "0", "recto — cloud"}, "\t"),
 		"s\tbroken line",
 	}, "\n")
-	panes := parsePanes(out)
+	panes := parsePanes(out, "tmux")
 	if len(panes) != 2 {
 		t.Fatalf("panes = %d (%+v), want 2 with the broken line dropped", len(panes), panes)
 	}
@@ -33,5 +34,26 @@ func TestParsePanes(t *testing.T) {
 	}
 	if q := panes[1]; q.Role != "" || q.WindowRole != "repo" || q.Activity != 0 || q.Title != "recto — cloud" {
 		t.Errorf("unmarked pane = %+v", q)
+	}
+}
+
+// A remote argument has to arrive intact through sh and fish alike, which
+// disagree only about backslashes inside single quotes.
+func TestShellQuoteSurvivesShAndFish(t *testing.T) {
+	for _, in := range []string{`plain`, `it's`, `back\slash`, `#{client_tty}`, `a\'b`, "tab\there"} {
+		q := shellQuote(in)
+		for _, sh := range []string{"sh", "fish"} {
+			if _, err := exec.LookPath(sh); err != nil {
+				continue
+			}
+			out, err := exec.Command(sh, "-c", "printf %s "+q).Output()
+			if err != nil {
+				t.Errorf("%s -c printf %s: %v", sh, q, err)
+				continue
+			}
+			if string(out) != in {
+				t.Errorf("%s read %q back as %q", sh, in, out)
+			}
+		}
 	}
 }

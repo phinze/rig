@@ -73,7 +73,9 @@ func TestParseSurface(t *testing.T) {
 		{"scratch", "rex+unix:///tmp/s.sock", "rex@scratch", ""},
 		{"devbox", "rex+tailnet://devbox", "", "listen-only"},
 		{"devbox", "https://devbox", "", "kind+endpoint"},
-		{"devbox", "tmux+ssh://devbox", "", "no remote form"},
+		{"devbox", "tmux+ssh://devbox", "tmux@devbox", ""},
+		{"devbox", "tmux+devbox", "", "ssh://host"},
+		{"devbox", "screen+ssh://devbox", "", "no remote form"},
 		{"Dev Box", "rex+https://x", "", "surface name"},
 	} {
 		b, err := parseSurface(tc.place, tc.spec)

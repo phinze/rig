@@ -219,3 +219,11 @@ func TestRadarNamesUnreachableSurfaces(t *testing.T) {
 		t.Errorf("surface line after recovery = %q, want none", line)
 	}
 }
+
+func sessionsNamed(names ...string) []mux.Session {
+	out := make([]mux.Session, 0, len(names))
+	for _, n := range names {
+		out = append(out, mux.Session{Name: n})
+	}
+	return out
+}

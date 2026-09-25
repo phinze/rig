@@ -545,7 +545,24 @@ listing honours and teardown's `KillSessionAt` deliberately bypasses. The
 breaker is also how the board tells "down" from "empty": a backend that can
 say so implements `Unreachable()`, and the radar names those places in a
 banner above the prompt, because a devbox off the tailnet otherwise draws
-exactly like one with nothing running. Enter on
+exactly like one with nothing running.
+
+A tmux server on another host is a surface too (`tmux+ssh://host`), and it's
+the bridge for a host that keeps tmux while this machine lives in Rex. Listing
+is cheap by comparison: one `list-panes -a` over a shared ssh ControlMaster
+connection, where ssh's exit status 255 is what trips the breaker. Entering a
+row goes through a portal (`portal.go`): one Rex session per host, labelled
+`tmux-<place>`, running `ssh -t host tmux attach`. Enter is an upsert. rig
+creates the portal already attached to the target when it's missing, replaces
+it when its client is gone, and otherwise moves the existing client with
+`switch-client -c <tty>`, which tmux accepts from outside the client. The tty
+comes from the portal itself: its attach runs `set-option -gF @rig-portal-tty
+'#{client_tty}'` in the same command sequence, so rig never has to guess which
+of the host's clients is the one on this screen, and `PortalTTY` checks
+`list-clients` because a portal whose ssh exited leaves its stamp behind.
+Remote arguments are quoted for the far side's login shell, which on
+foxtrotbase is fish; `shellQuote` spells backslashes and quotes outside the
+single quotes because that's the one place sh and fish disagree. Enter on
 a remote Rex row is `ErrNoClientSwitch` until a client can be moved by session
 id: the picker hop matches a label, and labels collide across hosts.
 

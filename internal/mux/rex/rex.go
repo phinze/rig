@@ -17,7 +17,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -83,36 +82,19 @@ func (b Backend) command(args ...string) *exec.Cmd {
 // cost every scan two full timeouts; with it, one timeout every half minute.
 const remoteBackoff = 30 * time.Second
 
-var (
-	downMu    sync.Mutex
-	downUntil = map[string]time.Time{}
-)
+var breaker = &mux.Breaker{For: remoteBackoff}
 
-// unreachable reports whether a recent call found this server unreachable.
-func unreachable(server string) bool {
-	downMu.Lock()
-	defer downMu.Unlock()
-	return time.Now().Before(downUntil[server])
-}
-
-// noteReachability records a remote call's outcome. Only a failure to connect
-// trips the breaker, which Rex reports with a "connecting to" message whether
-// the cause was a timeout or a name that didn't resolve; a server that
-// answered with an error is up, and the next call should still reach it.
+// noteReachability records a remote call's outcome. Rex reports a failure to
+// connect with a "connecting to" message whether the cause was a timeout or a
+// name that didn't resolve; anything else means the server answered.
 func noteReachability(server, stderr string) {
-	downMu.Lock()
-	defer downMu.Unlock()
-	if strings.HasPrefix(strings.TrimPrefix(stderr, "Error: "), "connecting to") {
-		downUntil[server] = time.Now().Add(remoteBackoff)
-	} else {
-		delete(downUntil, server)
-	}
+	breaker.Note(server, strings.HasPrefix(strings.TrimPrefix(stderr, "Error: "), "connecting to"))
 }
 
 // Unreachable reports whether this instance is a remote server that a recent
 // call couldn't reach, so a board can say the surface is down rather than
 // drawing it as a surface with no sessions.
-func (b Backend) Unreachable() bool { return b.remote() && unreachable(b.Server) }
+func (b Backend) Unreachable() bool { return b.remote() && breaker.Down(b.Server) }
 
 // call invokes one session-scoped API method and decodes its JSON reply into
 // out (nil to discard). session is a label or id; "" means no session scope.
@@ -120,7 +102,7 @@ func (b Backend) Unreachable() bool { return b.remote() && unreachable(b.Server)
 // costing another timeout; teardown doesn't come through here, so it never
 // skips a kill on that account.
 func (b Backend) call(session, method string, params any, out any) error {
-	if b.remote() && unreachable(b.Server) {
+	if b.remote() && breaker.Down(b.Server) {
 		return fmt.Errorf("rex %s: %s is unreachable (retrying within %s)", method, b.Server, remoteBackoff)
 	}
 	args := []string{"api", "call"}
@@ -473,6 +455,17 @@ const (
 // shell, which is what tmux's new-session gives rig too; the agent command is
 // typed into it afterwards by SendKeys.
 func (b Backend) NewSession(name, windowName, cwd string) (string, string, error) {
+	return b.createSession(name, windowName, shellBlock("shell", cwd, nil))
+}
+
+// NewCommandSession is NewSession with its one block running cmdline instead
+// of a bare shell, for a session whose whole job is one long-lived command:
+// rig's portal onto another host's tmux.
+func (b Backend) NewCommandSession(name, windowName, cwd, cmdline string) (string, string, error) {
+	return b.createSession(name, windowName, shellBlock(labelFor(cmdline), cwd, commandLine(cmdline)))
+}
+
+func (b Backend) createSession(name, windowName string, layout obj) (string, string, error) {
 	var out struct {
 		Windows []struct {
 			WindowID string   `json:"window_id"`
@@ -483,7 +476,7 @@ func (b Backend) NewSession(name, windowName, cwd string) (string, string, error
 		"label": name,
 		"initial_windows": []obj{{
 			"window_label": windowName,
-			"layout":       shellBlock("shell", cwd, nil),
+			"layout":       layout,
 		}},
 	}
 	if err := b.call("", "session.create", params, &out); err != nil {

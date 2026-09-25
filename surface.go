@@ -10,6 +10,7 @@ import (
 
 	"github.com/phinze/rig/internal/mux"
 	"github.com/phinze/rig/internal/mux/rex"
+	"github.com/phinze/rig/internal/mux/tmux"
 )
 
 // A surface is a multiplexer somewhere else that this machine's boards list
@@ -26,9 +27,9 @@ import (
 // sessions to everyone else. Listing them as rigs would mean reading another
 // host's manifests, which is the `ssh rig ls` design PERS-17 set aside.
 //
-// Only rex has a remote form so far. tmux is spelled the same way when it gets
-// one (tmux+ssh://host, attached through a portal session), which is why the
-// kind rides in the value rather than being assumed.
+// Both kinds have a remote form. rex dials the far server's API directly;
+// tmux goes over ssh (tmux+ssh://host), listed with one list-panes per scan
+// and entered through a portal session in this machine's Rex (portal.go).
 
 // placePattern keeps a place name to something that reads cleanly after an @
 // in a surface and as a label on a board row.
@@ -48,13 +49,19 @@ func parseSurface(place, spec string) (mux.Backend, error) {
 		return nil, fmt.Errorf("surface %s = %q: want kind+endpoint, like rex+https://host", place, spec)
 	}
 	switch kind {
+	case "tmux":
+		host, ok := strings.CutPrefix(endpoint, "ssh://")
+		if !ok || host == "" || strings.ContainsAny(host, "/ ") {
+			return nil, fmt.Errorf("surface %s: tmux endpoint %q should be ssh://host", place, endpoint)
+		}
+		return portalBackend{tmux.Backend{Host: host, Place: place}}, nil
 	case "rex":
 		if !strings.HasPrefix(endpoint, "https://") && !strings.HasPrefix(endpoint, "http://") && !strings.HasPrefix(endpoint, "unix://") {
 			return nil, fmt.Errorf("surface %s: rex endpoint %q should be http(s):// or unix:// (tailnet:// is listen-only)", place, endpoint)
 		}
 		return rex.Backend{Server: endpoint, Place: place}, nil
 	default:
-		return nil, fmt.Errorf("surface %s: no remote form for %q yet (rex is the only one)", place, kind)
+		return nil, fmt.Errorf("surface %s: no remote form for %q (want rex or tmux)", place, kind)
 	}
 }
 
