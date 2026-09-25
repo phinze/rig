@@ -475,7 +475,7 @@ func planSweep(rigs []rigInfo, statuses []rigStatus, home string, fetched map[st
 	}
 
 	now := time.Now()
-	_, current := currentSession()
+	current := currentKey()
 	plans := make([]sweepPlan, 0, len(statuses))
 	for _, s := range statuses {
 		r, ok := byPath[s.Path]
@@ -519,7 +519,7 @@ func planSweep(rigs []rigInfo, statuses []rigStatus, home string, fetched map[st
 			Shipped:   len(m.PRs) > 0 || len(s.PRs) > 0,
 			HalfBuilt: rigCreationInterrupted(m),
 			Parked:    s.Parked,
-			Current:   current != "" && rigSessionName(s.Path) == current,
+			Current:   current != (sessionKey{}) && rigKey(s.Path, m.Backend) == current,
 		}
 		// The teardown gate is the expensive half — a jj fetch plus a gh call per
 		// branch — so it's consulted only where the answer can change the verdict,

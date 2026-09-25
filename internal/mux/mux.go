@@ -32,8 +32,15 @@ var ErrNoClientSwitch = errors.New("this multiplexer cannot switch the client to
 // nil, not an error, when the server simply isn't running, because a board
 // with no sessions is a normal thing to draw.
 type Backend interface {
-	// Name is the backend's short name, the one `rig config backend` stores.
+	// Name is the backend's kind, the short name `rig config backend` and a
+	// manifest store.
 	Name() string
+	// Surface names this instance: the kind for the multiplexer on this
+	// machine, kind@place for one somewhere else. Two instances of one kind
+	// list sessions whose names can collide, since every host slugs
+	// ~/workspaces/foo the same way, so anything that joins listings keys on
+	// the surface and never on the name alone.
+	Surface() string
 
 	// Sessions.
 	HasSession(name string) bool
@@ -92,9 +99,10 @@ type Backend interface {
 // and when it was last attached (0 if never), so non-rig sessions can sort MRU
 // alongside the rigs.
 type Session struct {
-	// Backend is the Name of the backend that listed this session, so a list
-	// merged across backends stays attributable and Attach knows where to go.
-	Backend      string
+	// Surface is the Surface of the backend that listed this session, so a
+	// list merged across backends stays attributable and Attach knows where
+	// to go.
+	Surface      string
 	Name         string
 	Path         string
 	LastAttached int64
@@ -102,8 +110,8 @@ type Session struct {
 
 // Pane is one pane with rig's marks read back alongside what the backend knows.
 type Pane struct {
-	// Backend is the Name of the backend that listed this pane; see Session.
-	Backend    string
+	// Surface is the Surface of the backend that listed this pane; see Session.
+	Surface    string
 	Session    string
 	PaneID     string
 	PaneIdx    string

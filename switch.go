@@ -33,10 +33,10 @@ func runSwitch(args []string) error {
 
 	// Drop the rig we're currently sitting in — you never switch to where you
 	// already are.
-	if _, cur := currentSession(); cur != "" {
+	if cur := currentKey(); cur != (sessionKey{}) {
 		kept := statuses[:0]
 		for _, s := range statuses {
-			if rigSessionName(s.Path) != cur {
+			if rigKey(s.Path, s.Backend) != cur {
 				kept = append(kept, s)
 			}
 		}
@@ -63,8 +63,8 @@ func runSwitch(args []string) error {
 	// one.
 	attached := lastAttached()
 	sort.SliceStable(statuses, func(i, j int) bool {
-		ai := attached[rigSessionName(statuses[i].Path)]
-		aj := attached[rigSessionName(statuses[j].Path)]
+		ai := attached[rigKey(statuses[i].Path, statuses[i].Backend)]
+		aj := attached[rigKey(statuses[j].Path, statuses[j].Backend)]
 		if ai != aj {
 			return ai > aj
 		}

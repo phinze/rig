@@ -506,9 +506,21 @@ config backend`, then tmux) decides only for a new rig; the manifest records
 teardown job carry it, and `sessionFor(basedir, m)` reads it back as a
 `rigSession`, the name and its backend as one value. Listings that span the
 machine (radar, switch, ls) union `knownBackends()`, with each `mux.Session`
-and `mux.Pane` tagged by its lister. An unknown backend name is fatal except
-for `config` and `help`, since `rig config backend --unset` is the repair.
-`backend_test.go` registers a fake backend to prove the routing.
+and `mux.Pane` tagged with the `Surface()` that listed it. An unknown backend
+name is fatal except for `config` and `help`, since `rig config backend
+--unset` is the repair. `backend_test.go` registers a fake backend to prove the
+routing.
+
+A backend is an instance, not a kind. `Name()` is the kind a manifest records;
+`Surface()` names the instance, spelled as the bare kind for this machine's own
+multiplexer and `kind@place` for one elsewhere. That split exists because every
+host slugs `~/workspaces/foo` to the same session name, so a join on the name
+alone lets a remote session hide a local rig's row or lend it its agents. The
+radar, switch, and sweep therefore key sessions by `sessionKey{surface, name}`
+and route a listed row with `surfaceNamed`. A rig itself is always local (its
+basedir, manifest, and agent live where its multiplexer runs), so `rigKey`
+derives its surface from the manifest's kind; remote surfaces contribute plain
+session rows, never rigs.
 
 `Attach` returns `mux.ErrNoClientSwitch` from a backend that can't move the
 client between sessions; radar prints a "switch by hand" line and waits for a

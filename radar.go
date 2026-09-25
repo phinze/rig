@@ -139,10 +139,9 @@ func radarPick(home string) (*radarChoice, error) {
 	if !stdinIsTTY() {
 		return nil, fmt.Errorf("radar is a TUI — run it from a terminal (or tmux popup)")
 	}
-	_, current := currentSession()
 	m := radarModel{
 		home:      home,
-		current:   current,
+		current:   currentKey(),
 		prs:       map[string][]rigPR{},
 		fetchedAt: map[string]time.Time{},
 		pending:   map[string]bool{},
@@ -278,15 +277,15 @@ func waitForKey() {
 // lives in the helpers switch/waiting/ls already share.
 type radarModel struct {
 	home       string
-	current    string     // tmux session under the popup
+	current    sessionKey // session under the popup
 	currentRow *rigStatus // same session rendered as non-selectable context
 
 	inflight    []rigStatus
 	parked      []rigStatus
-	sessions    []rigStatus      // bare (non-rig) tmux sessions, MRU order
-	history     []rigStatus      // tombstones inside the regret window, newest death first
-	showHistory bool             // ctrl+t: show history even with no filter active
-	attached    map[string]int64 // session → last-attached, for in-flight order
+	sessions    []rigStatus          // bare (non-rig) tmux sessions, MRU order
+	history     []rigStatus          // tombstones inside the regret window, newest death first
+	showHistory bool                 // ctrl+t: show history even with no filter active
+	attached    map[sessionKey]int64 // session → last-attached, for in-flight order
 	prs         map[string][]rigPR
 	fetchedAt   map[string]time.Time // slug → when its PRs were fetched
 	pending     map[string]bool      // slug → PR fetch in flight
@@ -315,9 +314,9 @@ type radarModel struct {
 type radarScanMsg struct {
 	statuses []rigStatus
 	sessions []mux.Session
-	attached map[string]int64
-	agents   map[string][]agentChild // session name → its claude windows
-	stones   []rigStatus             // torn-down rigs still inside the regret window
+	attached map[sessionKey]int64
+	agents   map[sessionKey][]agentChild // session → its agent windows
+	stones   []rigStatus                 // torn-down rigs still inside the regret window
 	err      error
 }
 
@@ -365,14 +364,10 @@ func radarScanNow(home string) radarScanMsg {
 	// session rows, so the universal picker costs the same tmux round-trip the
 	// board already paid.
 	sessions := allSessions()
-	attached := make(map[string]int64, len(sessions))
-	for _, s := range sessions {
-		attached[s.Name] = s.LastAttached
-	}
 	return radarScanMsg{
 		statuses: rigStatuses(rigs, home, time.Now()),
 		sessions: sessions,
-		attached: attached,
+		attached: attachedTimes(sessions),
 		agents:   liveAgentChildren(),
 		stones:   tombstoneRows(time.Now()),
 	}
@@ -904,17 +899,17 @@ func (m *radarModel) apply(scan radarScanMsg) {
 
 	// The rig session names are the ones the bare-session pass must exclude, so
 	// a rig never shows up twice (once as itself, once as a plain session).
-	rigSessions := make(map[string]bool, len(scan.statuses))
+	rigSessions := make(map[sessionKey]bool, len(scan.statuses))
 	var currentRow *rigStatus
 	var inflight, parked []rigStatus
 	for _, s := range scan.statuses {
-		session := rigSessionName(s.Path)
+		session := rigKey(s.Path, s.Backend)
 		rigSessions[session] = true
 		if prs, ok := m.prs[s.Slug]; ok {
 			s.PRs = prs
 		}
 		switch {
-		case m.current != "" && session == m.current:
+		case m.current != sessionKey{} && session == m.current:
 			current := s
 			currentRow = &current
 		case s.Parked:
@@ -926,11 +921,12 @@ func (m *radarModel) apply(scan radarScanMsg) {
 
 	var sessions []rigStatus
 	for _, ts := range scan.sessions {
-		if rigSessions[ts.Name] {
+		key := sessionKey{ts.Surface, ts.Name}
+		if rigSessions[key] {
 			continue
 		}
 		s := bareSession(ts, m.home)
-		if ts.Name == m.current {
+		if key == m.current {
 			currentRow = &s
 			continue
 		}
@@ -940,15 +936,15 @@ func (m *radarModel) apply(scan radarScanMsg) {
 	// Dangle each parent's live claude windows under it: rigs key off their
 	// computed session name, bare sessions off their own. A row with no agent
 	// running just gets no children.
-	attachAgents := func(rows []rigStatus, sessionOf func(rigStatus) string) {
+	attachAgents := func(rows []rigStatus, sessionOf func(rigStatus) sessionKey) {
 		for i := range rows {
 			rows[i].agents = scan.agents[sessionOf(rows[i])]
 		}
 	}
-	rigSession := func(s rigStatus) string { return rigSessionName(s.Path) }
+	rigSession := func(s rigStatus) sessionKey { return rigKey(s.Path, s.Backend) }
 	attachAgents(inflight, rigSession)
 	attachAgents(parked, rigSession)
-	attachAgents(sessions, func(s rigStatus) string { return s.session.name })
+	attachAgents(sessions, func(s rigStatus) sessionKey { return s.session.key() })
 	if currentRow != nil {
 		currentRow.agents = scan.agents[m.current]
 	}
@@ -985,7 +981,7 @@ func (m *radarModel) applyParked(path string, parked bool) {
 	found.SessionLive = !parked
 	found.Agent = ""
 	found.agents = nil
-	delete(m.attached, rigSessionName(path))
+	delete(m.attached, rigKey(path, found.Backend))
 	if parked {
 		m.parked = append(m.parked, found)
 	} else {
@@ -1012,7 +1008,7 @@ func bareSession(ts mux.Session, home string) rigStatus {
 		Path:    ts.Path,
 		Created: created,
 		bare:    true,
-		session: rigSession{name: ts.Name, b: backendNamed(ts.Backend)},
+		session: rigSession{name: ts.Name, b: surfaceNamed(ts.Surface)},
 	}
 }
 
@@ -1136,7 +1132,7 @@ func (m radarModel) displayItems() []radarLine {
 			display.activity = strings.TrimSpace(c.Context)
 			action := display
 			action.child = true
-			action.session = rigSession{name: c.Target, b: backendNamed(c.Backend)}
+			action.session = rigSession{name: c.Target, b: surfaceNamed(c.Surface)}
 			items = append(items, radarLine{row: display, action: &action})
 			return
 		}
@@ -1163,7 +1159,7 @@ func (m radarModel) displayItems() []radarLine {
 			if c.Working {
 				agent = "working"
 			}
-			target := rigSession{name: c.Target, b: backendNamed(c.Backend)}
+			target := rigSession{name: c.Target, b: surfaceNamed(c.Surface)}
 			display := rigStatus{child: true, session: target, Title: title, childKey: key, Agent: agent}
 			action := p
 			action.child = true
@@ -1261,9 +1257,9 @@ func (m radarModel) parentSections() []radarSection {
 func (m radarModel) recency(s rigStatus) int64 {
 	var r int64
 	if s.bare {
-		r = m.attached[s.session.name]
+		r = m.attached[s.session.key()]
 	} else {
-		r = m.attached[rigSessionName(s.Path)]
+		r = m.attached[rigKey(s.Path, s.Backend)]
 	}
 	if t := s.LastTouched.Unix(); t > r {
 		r = t

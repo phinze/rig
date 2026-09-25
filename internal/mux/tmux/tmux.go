@@ -32,6 +32,9 @@ var _ mux.Backend = Backend{}
 
 func (Backend) Name() string { return "tmux" }
 
+// Surface is the kind alone: this backend only ever drives the local server.
+func (b Backend) Surface() string { return b.Name() }
+
 // command builds a tmux invocation with -u forced on.
 //
 // tmux decides whether a client can handle UTF-8 from LANG/LC_ALL/LC_CTYPE at
@@ -86,7 +89,7 @@ func (Backend) Sessions() []mux.Session {
 			continue
 		}
 		sessions = append(sessions, mux.Session{
-			Backend:      "tmux",
+			Surface:      "tmux",
 			Name:         fields[2],
 			Path:         fields[1],
 			LastAttached: secs,
@@ -278,7 +281,7 @@ func parsePanes(out string) []mux.Pane {
 		}
 		activity, _ := strconv.ParseInt(f[12], 10, 64)
 		panes = append(panes, mux.Pane{
-			Backend: "tmux",
+			Surface: "tmux",
 			Session: f[0], PaneID: f[1], PaneIdx: f[2],
 			WindowID: f[3], WindowIdx: f[4], WindowName: f[5],
 			Target:     f[0] + ":" + f[4] + "." + f[2],

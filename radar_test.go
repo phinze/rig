@@ -67,9 +67,9 @@ func TestDispRank(t *testing.T) {
 func TestBoardRowsMRU(t *testing.T) {
 	at := func(u int64) *time.Time { tm := time.Unix(u, 0); return &tm }
 	m := radarModel{
-		attached: map[string]int64{
-			rigSessionName("/w/live"): 500, // live rig, attached recently
-			"sess-old":                100, // bare session, old attach
+		attached: map[sessionKey]int64{
+			tk(rigSessionName("/w/live")): 500, // live rig, attached recently
+			tk("sess-old"):                100, // bare session, old attach
 		},
 		inflight: []rigStatus{
 			{Slug: "live", Path: "/w/live", Created: time.Unix(1, 0)},                        // recency 500 (attach)
@@ -100,13 +100,13 @@ func TestBoardRowsMRU(t *testing.T) {
 }
 
 func TestRadarCurrentBareSessionIsContextNotDestination(t *testing.T) {
-	m := radarModel{home: "/home/me", current: "here", prs: map[string][]rigPR{}}
+	m := radarModel{home: "/home/me", current: tk("here"), prs: map[string][]rigPR{}}
 	m.apply(radarScanMsg{
-		attached: map[string]int64{"here": 300, "newer": 200, "older": 100},
+		attached: map[sessionKey]int64{tk("here"): 300, tk("newer"): 200, tk("older"): 100},
 		sessions: []mux.Session{
-			{Name: "here", Path: "/home/me/current", LastAttached: 300},
-			{Name: "older", Path: "/home/me/older", LastAttached: 100},
-			{Name: "newer", Path: "/home/me/newer", LastAttached: 200},
+			{Surface: "tmux", Name: "here", Path: "/home/me/current", LastAttached: 300},
+			{Surface: "tmux", Name: "older", Path: "/home/me/older", LastAttached: 100},
+			{Surface: "tmux", Name: "newer", Path: "/home/me/newer", LastAttached: 200},
 		},
 	})
 	if m.currentRow == nil || !m.currentRow.bare || m.currentRow.session.name != "here" {
@@ -145,17 +145,17 @@ func TestRadarCurrentBareSessionIsContextNotDestination(t *testing.T) {
 func TestRadarCurrentRigKeepsRigIdentity(t *testing.T) {
 	path := "/work/current"
 	session := rigSessionName(path)
-	m := radarModel{current: session, prs: map[string][]rigPR{}}
+	m := radarModel{current: tk(session), prs: map[string][]rigPR{}}
 	m.apply(radarScanMsg{
 		statuses: []rigStatus{
 			{Slug: "current", ID: "MIR-1", Title: "durable title", Path: path},
 			{Slug: "other", ID: "MIR-2", Title: "other", Path: "/work/other"},
 		},
-		sessions: []mux.Session{{Name: session, Path: path}},
-		agents: map[string][]agentChild{
-			session: {{Target: session + ":0", Context: "live task context"}},
+		sessions: []mux.Session{{Surface: "tmux", Name: session, Path: path}},
+		agents: map[sessionKey][]agentChild{
+			tk(session): {{Target: session + ":0", Context: "live task context"}},
 		},
-		attached: map[string]int64{},
+		attached: map[sessionKey]int64{},
 	})
 	if m.currentRow == nil || m.currentRow.bare || m.currentRow.Slug != "current" {
 		t.Fatalf("current row = %+v, want MIR-1 rig", m.currentRow)
@@ -189,11 +189,11 @@ func TestRadarTouchedAt(t *testing.T) {
 		Created:     time.Unix(100, 0),
 		LastTouched: time.Unix(200, 0),
 	}
-	m := radarModel{attached: map[string]int64{rigSessionName(s.Path): 300}}
+	m := radarModel{attached: map[sessionKey]int64{tk(rigSessionName(s.Path)): 300}}
 	if got := m.touchedAt(s); !got.Equal(time.Unix(300, 0)) {
 		t.Fatalf("touchedAt = %v, want live attach time", got)
 	}
-	delete(m.attached, rigSessionName(s.Path))
+	delete(m.attached, tk(rigSessionName(s.Path)))
 	if got := m.touchedAt(s); !got.Equal(s.LastTouched) {
 		t.Fatalf("touchedAt without session = %v, want durable touch %v", got, s.LastTouched)
 	}
@@ -776,7 +776,7 @@ func TestRadarNewRigSuccessBecomesDestination(t *testing.T) {
 
 func TestRadarParkWakeToggle(t *testing.T) {
 	m := radarModel{
-		attached: map[string]int64{},
+		attached: map[sessionKey]int64{},
 		inflight: []rigStatus{{Slug: "a", ID: "MIR-1", Title: "build it", Path: "/work/a"}},
 	}
 	m, cmd := m.handleKey("ctrl+p")
@@ -1137,7 +1137,7 @@ func TestAgentChildren(t *testing.T) {
 	recent, stale := int64(999990), int64(900000) // 10s ago (working) vs ~28h ago (idle)
 	pane := func(win, idx, wname, cmd string, activity int64, cwd, title string) mux.Pane {
 		return mux.Pane{
-			Session: "s", WindowIdx: win, PaneIdx: idx, WindowName: wname,
+			Surface: "tmux", Session: "s", WindowIdx: win, PaneIdx: idx, WindowName: wname,
 			Target: "s:" + win + "." + idx, Command: cmd, Activity: activity, Path: cwd, Title: title,
 		}
 	}
@@ -1152,7 +1152,7 @@ func TestAgentChildren(t *testing.T) {
 		pane("5", "0", "main/rig", "codex", recent, "/work/rig", "Fix sparse radar titles"),
 	}
 
-	kids := agentChildren(panes, now)["s"]
+	kids := agentChildren(panes, now)[tk("s")]
 	if len(kids) != 6 {
 		t.Fatalf("children = %d (%+v), want 6", len(kids), kids)
 	}
@@ -1851,6 +1851,11 @@ func TestRadarLeaveBannerCountsAsChrome(t *testing.T) {
 // second backend has a test of its own.
 func sess(name string) rigSession {
 	return rigSession{name: name, b: tmux.Backend{}}
+}
+
+// tk is sess's key: a session on the local tmux surface.
+func tk(name string) sessionKey {
+	return sessionKey{"tmux", name}
 }
 
 // paintBackground makes every cell of the frame carry an explicit background:

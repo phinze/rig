@@ -83,7 +83,7 @@ func TestPanesReadsViewAndMarks(t *testing.T) {
 		t.Fatalf("panes = %d (%+v), want 3 with the floating layer skipped", len(panes), panes)
 	}
 	a := panes[0]
-	if a.Backend != "rex" || a.PaneID != "block:a" || a.Target != "block:a" || a.WindowID != "window:m" || a.WindowName != "main/alpha" {
+	if a.Surface != "rex" || a.PaneID != "block:a" || a.Target != "block:a" || a.WindowID != "window:m" || a.WindowName != "main/alpha" {
 		t.Errorf("identity = %+v", a)
 	}
 	if a.WindowIdx != "0" || a.PaneIdx != "0" || panes[1].PaneIdx != "1" || panes[2].WindowIdx != "1" {

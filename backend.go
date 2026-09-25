@@ -92,6 +92,21 @@ func backendNamed(name string) mux.Backend {
 	return b
 }
 
+// surfaceNamed is the backend a listed row came from, by the Surface it was
+// tagged with. A surface no longer known falls back to the kind's local
+// backend, the same downgrade backendNamed makes; for a local surface that is
+// the right answer, and a remote one can only vanish between a scan and a
+// keypress, where the attach that follows fails on its own.
+func surfaceNamed(surface string) mux.Backend {
+	for _, b := range knownBackends() {
+		if b.Surface() == surface {
+			return b
+		}
+	}
+	kind, _, _ := strings.Cut(surface, "@")
+	return backendNamed(kind)
+}
+
 // defaultBackend applies the same ladder defaultAgent does, narrowest scope
 // first: RIG_BACKEND for this shell, `rig config backend` for this user, then
 // tmux. The env var sits above the file for the reason the agent one does —
@@ -132,6 +147,23 @@ func sessionFor(basedir string, m manifest) rigSession {
 	return rigSession{name: rigSessionName(basedir), b: backendNamed(m.Backend)}
 }
 
+// sessionKey is a session's identity on a board that lists more than one
+// surface. The name alone isn't one: a rig at ~/workspaces/foo slugs the same
+// on every host, so a remote session could otherwise hide a local rig's row
+// or lend it its agents.
+type sessionKey struct {
+	surface string
+	name    string
+}
+
+func (rs rigSession) key() sessionKey { return sessionKey{rs.b.Surface(), rs.name} }
+
+// rigKey is the key a rig's own session has. A rig is always on this machine,
+// so its surface is the local instance of the kind its manifest records.
+func rigKey(path, backend string) sessionKey {
+	return sessionKey{backendNamed(backend).Surface(), rigSessionName(path)}
+}
+
 func (rs rigSession) live() bool { return rs.b.HasSession(rs.name) }
 
 func (rs rigSession) attach() error { return attachOrReport(rs.b, rs.name) }
@@ -156,11 +188,20 @@ func currentSession() (mux.Backend, string) {
 	return nil, ""
 }
 
+// currentKey is currentSession as a sessionKey, zero from a bare terminal.
+func currentKey() sessionKey {
+	b, name := currentSession()
+	if b == nil {
+		return sessionKey{}
+	}
+	return sessionKey{b.Surface(), name}
+}
+
 // insideSession reports whether the current process is running inside the
 // given rig session. False when not inside any multiplexer.
 func insideSession(rs rigSession) bool {
 	b, name := currentSession()
-	return b != nil && b.Name() == rs.b.Name() && name == rs.name
+	return b != nil && b.Surface() == rs.b.Surface() && name == rs.name
 }
 
 // allSessions lists every live session across every known backend, each
@@ -173,14 +214,17 @@ func allSessions() []mux.Session {
 	return out
 }
 
-// lastAttached maps each live session name to the unix time it was last
-// attached (0 if never). It's how `rig switch` sorts most-recently-touched
-// first, the same signal session-wizard's `t` sorts on.
-func lastAttached() map[string]int64 {
-	sessions := allSessions()
-	m := make(map[string]int64, len(sessions))
+// lastAttached maps each live session to the unix time it was last attached
+// (0 if never). It's how `rig switch` sorts most-recently-touched first, the
+// same signal session-wizard's `t` sorts on.
+func lastAttached() map[sessionKey]int64 {
+	return attachedTimes(allSessions())
+}
+
+func attachedTimes(sessions []mux.Session) map[sessionKey]int64 {
+	m := make(map[sessionKey]int64, len(sessions))
 	for _, s := range sessions {
-		m[s.Name] = s.LastAttached
+		m[sessionKey{s.Surface, s.Name}] = s.LastAttached
 	}
 	return m
 }
@@ -210,7 +254,7 @@ func attachOrReport(b mux.Backend, target string) error {
 // Attach, and Context is the task the agent named for itself (empty when it's
 // still on the "Claude Code" placeholder).
 type agentChild struct {
-	Backend string
+	Surface string
 	Session string
 	Window  string
 	Target  string
@@ -221,7 +265,7 @@ type agentChild struct {
 // liveAgentChildren is the radar's one sweep of every pane on every known
 // backend, filtered down to the agents. A backend that can't be listed
 // contributes nothing rather than failing the sweep.
-func liveAgentChildren() map[string][]agentChild {
+func liveAgentChildren() map[sessionKey][]agentChild {
 	var panes []mux.Pane
 	for _, b := range knownBackends() {
 		if ps, err := b.AllPanes(); err == nil {
@@ -243,10 +287,10 @@ func liveAgentChildren() map[string][]agentChild {
 // signal that idles off after a few quiet minutes, unlike the animating title
 // glyph, which is why the glyph carries only the task text and never the
 // state. now is the current unix time.
-func agentChildren(panes []mux.Pane, now int64) map[string][]agentChild {
+func agentChildren(panes []mux.Pane, now int64) map[sessionKey][]agentChild {
 	activeWithin := int64(agentActiveWindow / time.Second)
-	children := map[string][]agentChild{}
-	seen := map[string]bool{} // session\twindow\tcontext — collapse exact dups
+	children := map[sessionKey][]agentChild{}
+	seen := map[string]bool{} // surface\tsession\twindow\tcontext — collapse exact dups
 	for _, p := range panes {
 		if !isAgentCommand(p.Command) && stripAgentGlyph(p.Title) == p.Title {
 			continue // not an agent pane: no known command or state glyph
@@ -255,13 +299,14 @@ func agentChildren(panes []mux.Pane, now int64) map[string][]agentChild {
 		if isAgentPlaceholder(ctx) || (p.Path != "" && ctx == filepath.Base(p.Path)) {
 			ctx = ""
 		}
-		key := p.Session + "\t" + p.WindowIdx + "\t" + ctx
+		key := p.Surface + "\t" + p.Session + "\t" + p.WindowIdx + "\t" + ctx
 		if seen[key] {
 			continue
 		}
 		seen[key] = true
-		children[p.Session] = append(children[p.Session], agentChild{
-			Backend: p.Backend,
+		sk := sessionKey{p.Surface, p.Session}
+		children[sk] = append(children[sk], agentChild{
+			Surface: p.Surface,
 			Session: p.Session,
 			Window:  p.WindowName,
 			Target:  p.Target,

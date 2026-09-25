@@ -33,6 +33,10 @@ var _ mux.Backend = Backend{}
 
 func (Backend) Name() string { return "rex" }
 
+// Surface is the kind alone for now; a Backend aimed at another server will
+// carry that server's name here.
+func (b Backend) Surface() string { return b.Name() }
+
 // binary is where Rex.app ships its CLI. PATH is consulted first so a
 // standalone install or a test shim wins.
 func binary() string {
@@ -143,7 +147,7 @@ func (b Backend) Sessions() []mux.Session {
 	}
 	var out []mux.Session
 	for _, s := range sessions {
-		out = append(out, mux.Session{Backend: "rex", Name: s.Label, Path: b.sessionPath(s.Label)})
+		out = append(out, mux.Session{Surface: b.Surface(), Name: s.Label, Path: b.sessionPath(s.Label)})
 	}
 	return out
 }
@@ -724,7 +728,7 @@ func (b Backend) Panes(session string) ([]mux.Pane, error) {
 			}
 			for pi, bl := range layer.Blocks {
 				p := mux.Pane{
-					Backend:    "rex",
+					Surface:    b.Surface(),
 					Session:    session,
 					PaneID:     bl.BlockID,
 					PaneIdx:    fmt.Sprint(pi),
