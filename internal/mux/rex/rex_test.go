@@ -223,3 +223,55 @@ func TestAttachInsideRexChoosesItsMove(t *testing.T) {
 		t.Errorf("hopped %v, want one hop to the beta session", hopped)
 	}
 }
+
+// A Backend aimed at another server sends every call there, tags what it
+// lists with its own surface, is never the session this process is inside,
+// and never drives the picker: a label hop could land on this host's session
+// of the same name.
+func TestRemoteInstanceTargetsItsServer(t *testing.T) {
+	log := fakeRex(t)
+	t.Setenv("REX_SESSION", "session:1")
+	t.Setenv("REX_FAKE_SECOND", "1")
+	var hopped []string
+	saved := hop
+	hop = func(label string) error { hopped = append(hopped, label); return nil }
+	t.Cleanup(func() { hop = saved })
+
+	b := Backend{Server: "https://devbox.example.ts.net", Place: "devbox"}
+	if got := b.Surface(); got != "rex@devbox" {
+		t.Errorf("surface = %q, want rex@devbox", got)
+	}
+	if got := (Backend{}).Surface(); got != "rex" {
+		t.Errorf("local surface = %q, want rex", got)
+	}
+	sessions := b.Sessions()
+	if len(sessions) != 2 || sessions[0].Surface != "rex@devbox" {
+		t.Errorf("sessions = %+v, want both tagged rex@devbox", sessions)
+	}
+	panes, err := b.Panes("~-workspaces-alpha")
+	if err != nil || len(panes) == 0 || panes[0].Surface != "rex@devbox" {
+		t.Errorf("panes = %+v (%v), want tagged rex@devbox", panes, err)
+	}
+	if cur := b.CurrentSession(); cur != "" {
+		t.Errorf("remote CurrentSession = %q, want empty", cur)
+	}
+	if ep := b.Endpoint(); ep != "https://devbox.example.ts.net" {
+		t.Errorf("endpoint = %q, want the instance's server", ep)
+	}
+	if err := b.Attach("~-workspaces-beta"); !errors.Is(err, mux.ErrNoClientSwitch) {
+		t.Errorf("remote attach = %v, want ErrNoClientSwitch", err)
+	}
+	if len(hopped) != 0 {
+		t.Errorf("hopped %v for a remote row", hopped)
+	}
+
+	raw, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		if !strings.HasPrefix(line, "-S https://devbox.example.ts.net --autostart=false --timeout 3s ") {
+			t.Errorf("call went to the default server: %q", line)
+		}
+	}
+}

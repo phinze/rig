@@ -22,20 +22,34 @@ import (
 	"github.com/phinze/rig/internal/mux"
 )
 
-// Backend drives the Rex server the environment points at (REX_SERVER when
-// inside Rex, autodiscovery otherwise). MarksDir is where per-session mark
-// sidecars live; empty disables marks, which only a test wants.
+// Backend drives one Rex server. With Server empty that's the one the
+// environment points at (REX_SERVER when inside Rex, autodiscovery otherwise);
+// with it set, every call goes to that endpoint, which is how a board on one
+// host lists the sessions on another. Place names that other server on the
+// board and in its Surface. MarksDir is where per-session mark sidecars live;
+// empty disables marks, which a remote instance and a test both want, since a
+// remote session's marks belong to the rig on that host.
 type Backend struct {
+	Server   string
+	Place    string
 	MarksDir string
 }
 
 var _ mux.Backend = Backend{}
 
-func (Backend) Name() string { return "rex" }
+func (b Backend) Name() string { return "rex" }
 
-// Surface is the kind alone for now; a Backend aimed at another server will
-// carry that server's name here.
-func (b Backend) Surface() string { return b.Name() }
+// Surface is the kind alone for the local server and rex@place for another.
+func (b Backend) Surface() string {
+	if b.Place == "" {
+		return b.Name()
+	}
+	return b.Name() + "@" + b.Place
+}
+
+// remote reports whether this instance drives a server other than the one the
+// environment points at.
+func (b Backend) remote() bool { return b.Server != "" }
 
 // binary is where Rex.app ships its CLI. PATH is consulted first so a
 // standalone install or a test shim wins.
@@ -46,13 +60,24 @@ func binary() string {
 	return "/Applications/Rex.app/Contents/Helpers/rex"
 }
 
-func command(args ...string) *exec.Cmd {
+// remoteTimeout bounds each call to another server. The board lists every
+// surface on each refresh, and a host that has dropped off the network should
+// cost that surface its rows, not stall the whole radar for the CLI's default
+// ten seconds.
+const remoteTimeout = "3s"
+
+func (b Backend) command(args ...string) *exec.Cmd {
+	if b.remote() {
+		// Autostart only ever means a local server, which is never what a
+		// remote instance is asking for.
+		args = append([]string{"-S", b.Server, "--autostart=false", "--timeout", remoteTimeout}, args...)
+	}
 	return exec.Command(binary(), args...)
 }
 
 // call invokes one session-scoped API method and decodes its JSON reply into
 // out (nil to discard). session is a label or id; "" means no session scope.
-func call(session, method string, params any, out any) error {
+func (b Backend) call(session, method string, params any, out any) error {
 	args := []string{"api", "call"}
 	if session != "" {
 		args = append(args, "-s", session)
@@ -65,7 +90,7 @@ func call(session, method string, params any, out any) error {
 		}
 		args = append(args, string(raw))
 	}
-	cmd := command(args...)
+	cmd := b.command(args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	raw, err := cmd.Output()
@@ -113,18 +138,18 @@ type sessionEntry struct {
 	Label string `json:"label"`
 }
 
-func listSessions() ([]sessionEntry, error) {
+func (b Backend) listSessions() ([]sessionEntry, error) {
 	var out struct {
 		Sessions []sessionEntry `json:"sessions"`
 	}
-	if err := call("", "session.list", nil, &out); err != nil {
+	if err := b.call("", "session.list", nil, &out); err != nil {
 		return nil, err
 	}
 	return out.Sessions, nil
 }
 
-func (Backend) HasSession(name string) bool {
-	sessions, err := listSessions()
+func (b Backend) HasSession(name string) bool {
+	sessions, err := b.listSessions()
 	if err != nil {
 		return false
 	}
@@ -141,7 +166,7 @@ func (Backend) HasSession(name string) bool {
 // window's focused block (one process call per session) and LastAttached is
 // 0, which lets rig's own touched timestamp decide the order.
 func (b Backend) Sessions() []mux.Session {
-	sessions, err := listSessions()
+	sessions, err := b.listSessions()
 	if err != nil {
 		return nil
 	}
@@ -152,14 +177,14 @@ func (b Backend) Sessions() []mux.Session {
 	return out
 }
 
-func (Backend) sessionPath(session string) string {
-	v, err := view(session)
+func (b Backend) sessionPath(session string) string {
+	v, err := b.view(session)
 	if err != nil {
 		return ""
 	}
 	for _, w := range v.Windows {
 		if w.Active && w.FocusedBlock != "" {
-			if p, err := process(session, w.FocusedBlock); err == nil && p.Foreground != nil {
+			if p, err := b.process(session, w.FocusedBlock); err == nil && p.Foreground != nil {
 				return p.Foreground.Cwd
 			}
 		}
@@ -174,7 +199,7 @@ func (b Backend) KillSession(name string) error {
 	if !b.HasSession(name) {
 		return nil
 	}
-	cmd := command("kill", name)
+	cmd := b.command("kill", name)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
 		return err
@@ -189,9 +214,13 @@ func (b Backend) forgetMarks(session string) {
 	}
 }
 
-// Endpoint is the server the current process talks to, in the unix:// form
-// REX_SERVER uses, or "" for autodiscovery.
-func (Backend) Endpoint() string {
+// Endpoint is the server this instance talks to: its own Server when it has
+// one, else the one the environment names, in the unix:// form REX_SERVER
+// uses, or "" for autodiscovery.
+func (b Backend) Endpoint() string {
+	if b.remote() {
+		return b.Server
+	}
 	return os.Getenv("REX_SERVER")
 }
 
@@ -210,7 +239,8 @@ func (b Backend) KillSessionAt(name, endpoint string) error {
 			return fmt.Errorf("checking rex socket %s: %w", u.Path, err)
 		}
 	}
-	raw, err := command("-S", endpoint, "api", "call", "session.list").Output()
+	at := Backend{Server: endpoint, MarksDir: b.MarksDir}
+	raw, err := at.command("api", "call", "session.list").Output()
 	if err != nil {
 		return fmt.Errorf("listing sessions on %s: %w", endpoint, err)
 	}
@@ -222,7 +252,7 @@ func (b Backend) KillSessionAt(name, endpoint string) error {
 	}
 	for _, s := range out.Sessions {
 		if s.Label == name {
-			cmd := command("-S", endpoint, "kill", name)
+			cmd := at.command("kill", name)
 			cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 			if err := cmd.Run(); err != nil {
 				return err
@@ -235,13 +265,14 @@ func (b Backend) KillSessionAt(name, endpoint string) error {
 }
 
 // CurrentSession maps REX_SESSION, which is an id, back to the label rig
-// addresses sessions by.
-func (Backend) CurrentSession() string {
+// addresses sessions by. The process runs on the host whose server set that
+// variable, so a remote instance is never the one it's inside.
+func (b Backend) CurrentSession() string {
 	id := os.Getenv("REX_SESSION")
-	if id == "" {
+	if id == "" || b.remote() {
 		return ""
 	}
-	sessions, err := listSessions()
+	sessions, err := b.listSessions()
 	if err != nil {
 		return ""
 	}
@@ -253,7 +284,10 @@ func (Backend) CurrentSession() string {
 	return ""
 }
 
-func (Backend) CurrentPane() string {
+func (b Backend) CurrentPane() string {
+	if b.remote() {
+		return ""
+	}
 	return os.Getenv("REX_BLOCK")
 }
 
@@ -263,16 +297,23 @@ func (Backend) CurrentPane() string {
 // through hopToSession, and is ErrNoClientSwitch when that isn't available.
 func (b Backend) Attach(target string) error {
 	if os.Getenv("REX_SESSION") == "" {
-		cmd := command("attach", target)
+		cmd := b.command("attach", target)
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 		return cmd.Run()
+	}
+	// The picker hop matches a label, and labels collide across hosts (every
+	// host slugs ~/workspaces/foo the same), so aiming it at another server's
+	// session could land in this one's. Until a client can be moved by
+	// session id, a remote row is a switch by hand.
+	if b.remote() {
+		return mux.ErrNoClientSwitch
 	}
 	current := b.CurrentSession()
 	if target == current {
 		return nil
 	}
 	if strings.HasPrefix(target, "block:") {
-		if owner, err := sessionOfBlock(target); err == nil && owner == current {
+		if owner, err := b.sessionOfBlock(target); err == nil && owner == current {
 			return b.SelectPane(target)
 		}
 	}
@@ -336,8 +377,8 @@ var errNoHop = errors.New("no way to move this client between sessions")
 // client draws them today, and the command is told the box's visible size
 // (COLUMNS, LINES) and colour (RIG_RADAR_BG) so it lays out inside the box
 // and paints every cell of it.
-func (Backend) Popup(session, cmdline string) error {
-	v, err := view(session)
+func (b Backend) Popup(session, cmdline string) error {
+	v, err := b.view(session)
 	if err != nil {
 		return err
 	}
@@ -350,7 +391,7 @@ func (Backend) Popup(session, cmdline string) error {
 			Columns float64 `json:"columns"`
 			Rows    float64 `json:"rows"`
 		}
-		if err := call(session, "com.superlogical.terminal.size", obj{"block_id": win.FocusedBlock, "args": obj{}}, &size); err == nil && size.Columns > 0 && size.Rows > 0 {
+		if err := b.call(session, "com.superlogical.terminal.size", obj{"block_id": win.FocusedBlock, "args": obj{}}, &size); err == nil && size.Columns > 0 && size.Rows > 0 {
 			cols, rows = size.Columns, size.Rows
 		}
 	}
@@ -363,7 +404,7 @@ func (Backend) Popup(session, cmdline string) error {
 	delete(options, "cwd")
 	options["exit"] = obj{"on_completion": true, "quick_exit_threshold_ms": 0}
 	options["theme"] = obj{"background": popupBackground, "foreground": popupForeground}
-	return call(session, "session.new_layer", obj{
+	return b.call(session, "session.new_layer", obj{
 		"bounds": obj{"x": x, "y": y, "w": x + w, "h": y + h},
 		"focus":  true,
 		"layout": block,
@@ -383,7 +424,7 @@ const (
 // block, and returns that block and window. The block runs the user's login
 // shell, which is what tmux's new-session gives rig too; the agent command is
 // typed into it afterwards by SendKeys.
-func (Backend) NewSession(name, windowName, cwd string) (string, string, error) {
+func (b Backend) NewSession(name, windowName, cwd string) (string, string, error) {
 	var out struct {
 		Windows []struct {
 			WindowID string   `json:"window_id"`
@@ -397,7 +438,7 @@ func (Backend) NewSession(name, windowName, cwd string) (string, string, error) 
 			"layout":       shellBlock("shell", cwd, nil),
 		}},
 	}
-	if err := call("", "session.create", params, &out); err != nil {
+	if err := b.call("", "session.create", params, &out); err != nil {
 		return "", "", err
 	}
 	if len(out.Windows) != 1 || len(out.Windows[0].BlockIDs) != 1 {
@@ -407,7 +448,7 @@ func (Backend) NewSession(name, windowName, cwd string) (string, string, error) 
 }
 
 func (b Backend) split(target, cwd string, cmdline []string, label string) (string, error) {
-	session, err := sessionOfBlock(target)
+	session, err := b.sessionOfBlock(target)
 	if err != nil {
 		return "", err
 	}
@@ -422,7 +463,7 @@ func (b Backend) split(target, cwd string, cmdline []string, label string) (stri
 		"focus":           false,
 		"layout":          shellBlock(label, cwd, cmdline),
 	}
-	if err := call(session, "session.new_split", params, &out); err != nil {
+	if err := b.call(session, "session.new_split", params, &out); err != nil {
 		return "", err
 	}
 	if len(out.BlockIDs) != 1 {
@@ -439,7 +480,7 @@ func (b Backend) SplitShell(target, cwd string) (string, error) {
 	return b.split(target, cwd, nil, "shell")
 }
 
-func (Backend) NewCommandWindow(session, name, cwd, cmdline string) (string, string, error) {
+func (b Backend) NewCommandWindow(session, name, cwd, cmdline string) (string, string, error) {
 	var out struct {
 		WindowID string   `json:"window_id"`
 		BlockIDs []string `json:"block_ids"`
@@ -449,7 +490,7 @@ func (Backend) NewCommandWindow(session, name, cwd, cmdline string) (string, str
 		"focus":        false,
 		"layout":       shellBlock(labelFor(cmdline), cwd, commandLine(cmdline)),
 	}
-	if err := call(session, "session.new_window", params, &out); err != nil {
+	if err := b.call(session, "session.new_window", params, &out); err != nil {
 		return "", "", err
 	}
 	if len(out.BlockIDs) != 1 {
@@ -470,12 +511,12 @@ func labelFor(cmdline string) string {
 // JoinPane moves src into a split beside dst. Rex's move_block takes a placed
 // block as readily as a detached one, and a window emptied by the move closes
 // itself, both as tmux's join-pane behaves.
-func (Backend) JoinPane(src, dst string) error {
-	session, err := sessionOfBlock(dst)
+func (b Backend) JoinPane(src, dst string) error {
+	session, err := b.sessionOfBlock(dst)
 	if err != nil {
 		return err
 	}
-	return call(session, "session.move_block", obj{
+	return b.call(session, "session.move_block", obj{
 		"block_id":        src,
 		"anchor_block_id": dst,
 		"direction":       "horizontal",
@@ -488,7 +529,7 @@ func (Backend) JoinPane(src, dst string) error {
 // placeholder block, move src beside it, close the placeholder. Three calls,
 // each cheap.
 func (b Backend) BreakPane(src, name string) (string, error) {
-	session, err := sessionOfBlock(src)
+	session, err := b.sessionOfBlock(src)
 	if err != nil {
 		return "", err
 	}
@@ -499,38 +540,38 @@ func (b Backend) BreakPane(src, name string) (string, error) {
 	if err := b.JoinPane(src, placeholder); err != nil {
 		return "", err
 	}
-	if err := call(session, "block.close", obj{"block_id": placeholder}, nil); err != nil {
+	if err := b.call(session, "block.close", obj{"block_id": placeholder}, nil); err != nil {
 		return "", err
 	}
 	return window, nil
 }
 
-func (Backend) SelectPane(target string) error {
-	session, err := sessionOfBlock(target)
+func (b Backend) SelectPane(target string) error {
+	session, err := b.sessionOfBlock(target)
 	if err != nil {
 		return err
 	}
-	return call(session, "session.focus_block", obj{"block_id": target}, nil)
+	return b.call(session, "session.focus_block", obj{"block_id": target}, nil)
 }
 
 // SendKeys types text into the block and presses Enter. `rex send` writes the
 // bytes verbatim, so the newline is the Enter.
-func (Backend) SendKeys(target, text string) error {
-	session, err := sessionOfBlock(target)
+func (b Backend) SendKeys(target, text string) error {
+	session, err := b.sessionOfBlock(target)
 	if err != nil {
 		return err
 	}
-	cmd := command("send", "-s", session, "-b", target, text+"\n")
+	cmd := b.command("send", "-s", session, "-b", target, text+"\n")
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	return cmd.Run()
 }
 
-func (Backend) RenameWindow(window, name string) error {
-	session, err := sessionOfWindow(window)
+func (b Backend) RenameWindow(window, name string) error {
+	session, err := b.sessionOfWindow(window)
 	if err != nil {
 		return err
 	}
-	return call(session, "session.set_window_label", obj{"window_id": window, "label": name}, nil)
+	return b.call(session, "session.set_window_label", obj{"window_id": window, "label": name}, nil)
 }
 
 // Marks live in a JSON sidecar per session, keyed by block or window id. Ids
@@ -581,7 +622,7 @@ func (b Backend) writeMark(session, id string, m mark) error {
 }
 
 func (b Backend) MarkPane(pane, role, repo string) error {
-	session, err := sessionOfBlock(pane)
+	session, err := b.sessionOfBlock(pane)
 	if err != nil {
 		return err
 	}
@@ -589,7 +630,7 @@ func (b Backend) MarkPane(pane, role, repo string) error {
 }
 
 func (b Backend) MarkWindow(window, role, repo string) error {
-	session, err := sessionOfWindow(window)
+	session, err := b.sessionOfWindow(window)
 	if err != nil {
 		return err
 	}
@@ -620,9 +661,9 @@ type sessionView struct {
 	Windows   []viewWindow `json:"windows"`
 }
 
-func view(session string) (sessionView, error) {
+func (b Backend) view(session string) (sessionView, error) {
 	var v sessionView
-	err := call(session, "session.view", nil, &v)
+	err := b.call(session, "session.view", nil, &v)
 	return v, err
 }
 
@@ -649,17 +690,17 @@ func commandName(fg *foregroundProcess) string {
 	return fg.Name
 }
 
-func process(session, block string) (processInfo, error) {
+func (b Backend) process(session, block string) (processInfo, error) {
 	var p processInfo
-	err := call(session, "com.superlogical.terminal.process", obj{"block_id": block, "args": obj{}}, &p)
+	err := b.call(session, "com.superlogical.terminal.process", obj{"block_id": block, "args": obj{}}, &p)
 	return p, err
 }
 
-func title(session, block string) string {
+func (b Backend) title(session, block string) string {
 	var t struct {
 		Title string `json:"title"`
 	}
-	if err := call(session, "com.superlogical.terminal.title", obj{"block_id": block, "args": obj{}}, &t); err != nil {
+	if err := b.call(session, "com.superlogical.terminal.title", obj{"block_id": block, "args": obj{}}, &t); err != nil {
 		return ""
 	}
 	return t.Title
@@ -668,8 +709,8 @@ func title(session, block string) string {
 // sessionOfBlock finds which session owns a block id. Rig's callers address
 // blocks by id alone, as they did tmux panes, so the lookup is a list_blocks
 // per session; cheap, and only on layout changes.
-func sessionOfBlock(block string) (string, error) {
-	sessions, err := listSessions()
+func (b Backend) sessionOfBlock(block string) (string, error) {
+	sessions, err := b.listSessions()
 	if err != nil {
 		return "", err
 	}
@@ -679,7 +720,7 @@ func sessionOfBlock(block string) (string, error) {
 				BlockID string `json:"block_id"`
 			} `json:"blocks"`
 		}
-		if err := call(s.Label, "session.list_blocks", nil, &out); err != nil {
+		if err := b.call(s.Label, "session.list_blocks", nil, &out); err != nil {
 			continue
 		}
 		for _, bl := range out.Blocks {
@@ -691,13 +732,13 @@ func sessionOfBlock(block string) (string, error) {
 	return "", fmt.Errorf("rex block %s not found in any session", block)
 }
 
-func sessionOfWindow(window string) (string, error) {
-	sessions, err := listSessions()
+func (b Backend) sessionOfWindow(window string) (string, error) {
+	sessions, err := b.listSessions()
 	if err != nil {
 		return "", err
 	}
 	for _, s := range sessions {
-		v, err := view(s.Label)
+		v, err := b.view(s.Label)
 		if err != nil {
 			continue
 		}
@@ -714,7 +755,7 @@ func sessionOfWindow(window string) (string, error) {
 // sidecar marks and a process/title probe per block. Floating layers (the
 // radar popup) are skipped: they're not part of the carousel.
 func (b Backend) Panes(session string) ([]mux.Pane, error) {
-	v, err := view(session)
+	v, err := b.view(session)
 	if err != nil {
 		return nil, err
 	}
@@ -742,11 +783,11 @@ func (b Backend) Panes(session string) ([]mux.Pane, error) {
 				if m, ok := marks[bl.BlockID]; ok {
 					p.Role, p.Repo = m.Role, m.Repo
 				}
-				if info, err := process(session, bl.BlockID); err == nil && info.Foreground != nil {
+				if info, err := b.process(session, bl.BlockID); err == nil && info.Foreground != nil {
 					p.Command = commandName(info.Foreground)
 					p.Path = info.Foreground.Cwd
 				}
-				p.Title = title(session, bl.BlockID)
+				p.Title = b.title(session, bl.BlockID)
 				panes = append(panes, p)
 			}
 		}
@@ -757,7 +798,7 @@ func (b Backend) Panes(session string) ([]mux.Pane, error) {
 // AllPanes is Panes over every session. Nil when the server isn't reachable,
 // since the radar draws an empty board rather than an error then.
 func (b Backend) AllPanes() ([]mux.Pane, error) {
-	sessions, err := listSessions()
+	sessions, err := b.listSessions()
 	if err != nil {
 		return nil, nil
 	}
