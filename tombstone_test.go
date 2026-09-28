@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -151,6 +152,53 @@ func TestCodexNewestSessionMatchesRigCwd(t *testing.T) {
 	}
 }
 
+// Pi files sessions in a directory named for the cwd with slashes turned to
+// dashes, which can't tell "my-rig" from "my/rig" or keep "my-rig2" out of a
+// prefix match. The header's cwd has to be the deciding vote, or a sibling
+// rig's conversation gets recorded as this one's.
+func TestPiNewestSessionMatchesRigCwd(t *testing.T) {
+	home := t.TempDir()
+	basedir := filepath.Join(home, "workspaces", "my-rig")
+	root := filepath.Join(home, ".pi", "agent", "sessions")
+
+	write := func(cwd, name, header string, mod time.Time) {
+		dir := filepath.Join(root, "--"+strings.ReplaceAll(strings.TrimPrefix(cwd, "/"), "/", "-")+"--")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(dir, name)
+		body := header + "\n" + `{"type":"message","id":"m1"}` + "\n"
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(path, mod, mod); err != nil {
+			t.Fatal(err)
+		}
+	}
+	header := func(id, cwd string) string {
+		return `{"type":"session","version":3,"id":"` + id + `","cwd":"` + cwd + `"}`
+	}
+
+	base := time.Now().Add(-24 * time.Hour)
+	repo := filepath.Join(basedir, "runtime")
+	sibling := basedir + "2"
+	write(sibling, "c.jsonl", header("sibling", sibling), base.Add(3*time.Hour))
+	write(repo, "a.jsonl", header("older", repo), base)
+	write(repo, "b.jsonl", header("newest", repo), base.Add(time.Hour))
+	write(repo, "junk.jsonl", `{"type":"message"}`, base.Add(2*time.Hour))
+
+	if s := piNewestSession(home, basedir); s.id != "newest" {
+		t.Errorf("want the newest in-rig session, got %+v", s)
+	}
+	ref := agentSessionRef(home, basedir, agentPi)
+	if ref == nil || ref.ID != "newest" || ref.Agent != string(agentPi) {
+		t.Errorf("agentSessionRef disagreed: %+v", ref)
+	}
+	if agentSessionRef(home, filepath.Join(home, "workspaces", "nobody"), agentPi) != nil {
+		t.Error("a rig with no session should resolve to nil, not an empty ref")
+	}
+}
+
 // TestResumeCommands pins the invocations against what the installed CLIs
 // actually accept. These were verified by hand once; the test is here so a
 // future edit can't quietly turn a resume into a fresh session, which would
@@ -164,6 +212,7 @@ func TestResumeCommands(t *testing.T) {
 		{agentClaude, "claude --dangerously-skip-permissions --resume 'abc123'"},
 		{agentCodex, "codex --dangerously-bypass-approvals-and-sandbox resume 'abc123'"},
 		{agentAntigravity, "agy --dangerously-skip-permissions --conversation 'abc123'"},
+		{agentPi, "pi --session 'abc123'"},
 	} {
 		if got := tc.agent.resumeCommand("abc123"); got != tc.want {
 			t.Errorf("%s resume: got %q want %q", tc.agent, got, tc.want)

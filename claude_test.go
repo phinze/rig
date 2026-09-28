@@ -77,6 +77,32 @@ func TestAntigravitySessionActivity(t *testing.T) {
 	}
 }
 
+func TestPiSessionActivity(t *testing.T) {
+	home := t.TempDir()
+	basedir := filepath.Join(home, "workspaces", "fake-1")
+	repo := filepath.Join(basedir, "repo")
+	dir := filepath.Join(home, ".pi", "agent", "sessions", "--"+strings.ReplaceAll(strings.TrimPrefix(repo, "/"), "/", "-")+"--")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "s.jsonl")
+	if err := os.WriteFile(path, []byte(fmt.Sprintf("{\"type\":\"session\",\"id\":\"s1\",\"cwd\":%q}\n", repo)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	active := time.Now().Add(-time.Hour).Truncate(time.Second)
+	if err := os.Chtimes(path, active, active); err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(home, "workspaces", "fake-2")
+	got := agentSessionActivities(home, []string{basedir, other})
+	if got[basedir] != active.Unix() {
+		t.Errorf("activity = %d, want %d", got[basedir], active.Unix())
+	}
+	if got[other] != 0 {
+		t.Errorf("unrelated rig picked up activity %d", got[other])
+	}
+}
+
 func TestClaudeSessionActivity(t *testing.T) {
 	home := t.TempDir()
 	basedir := filepath.Join(home, "workspaces", "fake-1")

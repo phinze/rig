@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -244,6 +245,10 @@ func agentSessionRef(home, basedir string, agent agentKind) *sessionRef {
 		if id := antigravityNewestConversation(home, basedir); id != "" {
 			return &sessionRef{Agent: string(agentAntigravity), ID: id}
 		}
+	case agentPi:
+		if s := piNewestSession(home, basedir); s.id != "" {
+			return &sessionRef{Agent: string(agentPi), ID: s.id, Path: s.path}
+		}
 	default:
 		if path, _ := claudeNewestSession(home, basedir); path != "" {
 			id := strings.TrimSuffix(filepath.Base(path), ".jsonl")
@@ -339,7 +344,100 @@ func agentSessionActivities(home string, basedirs []string) map[string]int64 {
 	}
 	updateCodexActivity(home, basedirs, out)
 	updateAntigravityActivity(home, basedirs, out)
+	updatePiActivity(home, basedirs, out)
 	return out
+}
+
+// piSession is one Pi session file resolved against its header.
+type piSession struct {
+	path, id, cwd string
+	mtime         int64
+}
+
+// piSessions lists Pi's session files whose recorded cwd might sit inside one
+// of basedirs. Pi files each session under
+// ~/.pi/agent/sessions/--<cwd, slashes turned to dashes>--/, which is lossy
+// (a dash in a path is indistinguishable from a separator), so the directory
+// name only narrows the walk. The cwd in each file's header line is the
+// authority.
+func piSessions(home string, basedirs []string) []piSession {
+	root := filepath.Join(home, ".pi", "agent", "sessions")
+	dirs, err := os.ReadDir(root)
+	if err != nil {
+		return nil
+	}
+	prefixes := make([]string, len(basedirs))
+	for i, b := range basedirs {
+		prefixes[i] = "--" + strings.ReplaceAll(strings.TrimPrefix(b, "/"), "/", "-")
+	}
+	var out []piSession
+	for _, d := range dirs {
+		if !d.IsDir() || !slices.ContainsFunc(prefixes, func(p string) bool { return strings.HasPrefix(d.Name(), p) }) {
+			continue
+		}
+		files, _ := os.ReadDir(filepath.Join(root, d.Name()))
+		for _, f := range files {
+			if f.IsDir() || !strings.HasSuffix(f.Name(), ".jsonl") {
+				continue
+			}
+			path := filepath.Join(root, d.Name(), f.Name())
+			info, err := f.Info()
+			if err != nil {
+				continue
+			}
+			if s, ok := readPiHeader(path); ok {
+				s.mtime = info.ModTime().Unix()
+				out = append(out, s)
+			}
+		}
+	}
+	return out
+}
+
+func readPiHeader(path string) (piSession, bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return piSession{}, false
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 64*1024), 1024*1024)
+	if !sc.Scan() {
+		return piSession{}, false
+	}
+	var row struct {
+		Type string `json:"type"`
+		ID   string `json:"id"`
+		Cwd  string `json:"cwd"`
+	}
+	if json.Unmarshal(sc.Bytes(), &row) != nil || row.Type != "session" || row.ID == "" {
+		return piSession{}, false
+	}
+	return piSession{path: path, id: row.ID, cwd: row.Cwd}, true
+}
+
+// piNewestSession is the most recently written Pi session inside the rig;
+// its id is what `pi --session` reopens.
+func piNewestSession(home, basedir string) piSession {
+	var newest piSession
+	for _, s := range piSessions(home, []string{basedir}) {
+		if pathInside(basedir, s.cwd) && s.mtime > newest.mtime {
+			newest = s
+		}
+	}
+	return newest
+}
+
+// updatePiActivity folds Pi's newest session write per rig into out. Pi
+// appends every turn to the session file, so its mtime is the last turn.
+func updatePiActivity(home string, basedirs []string, out map[string]int64) {
+	for _, s := range piSessions(home, basedirs) {
+		for _, basedir := range basedirs {
+			if pathInside(basedir, s.cwd) && s.mtime > out[basedir] {
+				out[basedir] = s.mtime
+			}
+		}
+	}
 }
 
 func pathInside(parent, child string) bool {

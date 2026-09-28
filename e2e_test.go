@@ -58,7 +58,7 @@ func TestSpawnSessionAgents(t *testing.T) {
 	tmuxWrap := fmt.Sprintf("#!/bin/sh\nexec %s -L rig-agent-e2e -f /dev/null \"$@\"\n", realTmux)
 	mustWriteExec(t, filepath.Join(bin, "tmux"), tmuxWrap)
 	mustWriteExec(t, filepath.Join(bin, "recto"), "#!/bin/sh\nwhile :; do sleep 60; done\n")
-	for _, name := range []string{"claude", "codex", "agy"} {
+	for _, name := range []string{"claude", "codex", "agy", "pi"} {
 		marker := filepath.Join(home, name+".args")
 		script := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$*\" > %s\nwhile :; do sleep 60; done\n", shellQuote(marker))
 		mustWriteExec(t, filepath.Join(bin, name), script)
@@ -78,6 +78,7 @@ func TestSpawnSessionAgents(t *testing.T) {
 		{agentClaude, "claude", "--dangerously-skip-permissions", ""},
 		{agentCodex, "codex", "--dangerously-bypass-approvals-and-sandbox", "../AGENTS.md"},
 		{agentAntigravity, "agy", "--prompt-interactive", "../AGENTS.md"},
+		{agentPi, "pi", "--", ""},
 	}
 	for _, c := range cases {
 		cwd := filepath.Join(home, string(c.agent), "repo")

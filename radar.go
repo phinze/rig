@@ -1476,7 +1476,15 @@ func (m radarModel) rankRows(sections ...[]rigStatus) []rigStatus {
 // tell that an agent is open but idle-blank rather than mid-task.
 const agentPlaceholder = "Claude Code"
 
+// piIdleTitle is how Pi titles its pane before a session is named: "π - " and
+// the cwd's basename. A named session adds its name in between, so a title
+// with exactly one separator is the unnamed, placeholder shape.
+const piIdleTitle = "π - "
+
 func isAgentPlaceholder(title string) bool {
+	if rest, ok := strings.CutPrefix(title, piIdleTitle); ok {
+		return !strings.Contains(rest, " - ")
+	}
 	return title == agentPlaceholder || title == "Codex" || title == "Antigravity"
 }
 

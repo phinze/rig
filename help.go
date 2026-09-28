@@ -52,7 +52,7 @@ Idempotent: an existing rig is switched to, not rebuilt.
 stdin supplies the context without prompting. The rig starts at trunk with no
 branch.
 
-  --agent  claude|cld, codex|cdx, antigravity|agy. Default: $RIG_AGENT, then
+  --agent  claude|cld, codex|cdx, antigravity|agy, pi. Default: $RIG_AGENT, then
            "rig config agent", then claude.`,
 	},
 	{
@@ -246,7 +246,7 @@ a week with resurrect.`,
 		summary: "read or write settings in ~/.config/rig/config.toml",
 		details: `No argument lists every setting, its value, and where it came from.
 
-  agent    default agent for new rigs: claude, codex, antigravity.
+  agent    default agent for new rigs: claude, codex, antigravity, pi.
   backend  multiplexer for new rigs: tmux, rex.`,
 	},
 	{

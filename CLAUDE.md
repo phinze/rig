@@ -411,10 +411,10 @@ not the helper) plus `tracker_url`; `relay` and `project` still gate on
 `linear` and are unaffected.
 
 The agent is selectable with `--agent`, which takes either the long name or the
-short one it goes by in the picker: `cld`, `cdx`, `agy`. Beneath that the
+short one it goes by in the picker: `cld`, `cdx`, `agy`, `pi`. Beneath that the
 ordinary precedence applies, narrowest scope first: `RIG_AGENT` for this shell,
 then `rig config agent` for this user, then Claude. Rig writes equivalent
-generated instructions and tracks session activity for all three.
+generated instructions and tracks session activity for all four.
 
 The standing preference moved out of the environment because setting it there
 meant a home-manager rebuild and a fresh shell to change it, which is fine
@@ -475,8 +475,9 @@ is unconditional rather than codex-only, because trust belongs to the directory
 and not to whatever process opens it. See `codextrust.go` for why the append
 must check first (a duplicate TOML table breaks codex's config load outright)
 and why a missing `~/.codex` means skip rather than create. Claude and
-antigravity need none of this; both were verified to start clean in a directory
-they've never seen.
+antigravity need none of this, and neither does pi, which only asks about
+directories holding `.pi/` or `.agents/skills/`; all three were verified to start
+clean in a directory they've never seen.
 
 Codex's *hook* trust is a separate, global thing keyed on the hooks file's path
 and content hash, so it isn't rig's to fix. If it starts asking on every launch,

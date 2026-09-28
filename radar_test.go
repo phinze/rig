@@ -1150,11 +1150,13 @@ func TestAgentChildren(t *testing.T) {
 		pane("3", "0", "main/rig", "codex-raw", recent, "/work/rig", "⠴ rig"),
 		pane("4", "0", "agy", "agy", recent, "/work/agy", "Antigravity"),
 		pane("5", "0", "main/rig", "codex", recent, "/work/rig", "Fix sparse radar titles"),
+		pane("6", "0", "main/rig", "pi", recent, "/work/rig", "π - rig"),
+		pane("7", "0", "main/rig", "pi", recent, "/work/rig", "π - Tidy the stack - rig"),
 	}
 
 	kids := agentChildren(panes, now)[tk("s")]
-	if len(kids) != 6 {
-		t.Fatalf("children = %d (%+v), want 6", len(kids), kids)
+	if len(kids) != 8 {
+		t.Fatalf("children = %d (%+v), want 8", len(kids), kids)
 	}
 	if kids[0].Context != "Task A" || kids[0].Target != "s:0.0" || !kids[0].Working {
 		t.Errorf("child 0 = %+v, want working Task A at s:0.0", kids[0])
@@ -1173,6 +1175,12 @@ func TestAgentChildren(t *testing.T) {
 	}
 	if kids[5].Context != "Fix sparse radar titles" || kids[5].Target != "s:5.0" {
 		t.Errorf("child 5 = %+v, want self-titled codex at s:5.0", kids[5])
+	}
+	if kids[6].Context != "" || kids[6].Target != "s:6.0" {
+		t.Errorf("child 6 = %+v, want unnamed pi as blank context at s:6.0", kids[6])
+	}
+	if kids[7].Context == "" || kids[7].Target != "s:7.0" {
+		t.Errorf("child 7 = %+v, want named pi session kept as context at s:7.0", kids[7])
 	}
 }
 

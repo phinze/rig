@@ -346,7 +346,7 @@ func agentChildren(panes []mux.Pane, now int64) map[sessionKey][]agentChild {
 func isAgentCommand(cmd string) bool {
 	cmd = strings.TrimPrefix(cmd, ".")
 	cmd = strings.TrimSuffix(strings.TrimSuffix(cmd, "-unwrapped"), "-wrapped")
-	return cmd == "claude" || strings.HasPrefix(cmd, "codex") || cmd == "agy" || strings.HasPrefix(cmd, "antigravity")
+	return cmd == "claude" || strings.HasPrefix(cmd, "codex") || cmd == "agy" || strings.HasPrefix(cmd, "antigravity") || cmd == "pi"
 }
 
 // shellQuote wraps s for safe inclusion as a single shell argument when

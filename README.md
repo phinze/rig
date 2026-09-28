@@ -51,15 +51,15 @@ tmux session, without needing to remember which agent owned it.
 
 Claude Code is the fallback agent, but it is not baked into the rig. `rig up`,
 `rig new`, and `rig review` all let you pick: whatever prompt they're already
-showing carries an agent bar that ctrl-o cycles through `cld`, `cdx`, and `agy`,
-and an invocation that prompts for nothing gets the bar on its own. `--agent`
-names one without being asked. `rig config agent cdx` moves the starting
+showing carries an agent bar that ctrl-o cycles through `cld`, `cdx`, `agy`,
+and `pi`, and an invocation that prompts for nothing gets the bar on its own.
+`--agent` names one without being asked. `rig config agent cdx` moves the starting
 position for every new rig from then on, and prints where the current default
 came from when you ask it without a value; `RIG_AGENT` overrides it for one
 shell. The
 choice is saved in `.rig/manifest.toml`; generated `CLAUDE.md`, `AGENTS.md`, and
 Antigravity workspace rules carry the same live task context, and `ls`, `radar`,
-and `sweep` read all three agents' session activity.
+and `sweep` read every agent's session activity.
 
 It exists to fold a pair of fish functions (`jpickup` / `jreview`) into one tool
 that composes things I already lean on (jj, gh, tmux, recto) instead of

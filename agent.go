@@ -11,16 +11,18 @@ const (
 	agentClaude      agentKind = "claude"
 	agentCodex       agentKind = "codex"
 	agentAntigravity agentKind = "antigravity"
+	agentPi          agentKind = "pi"
 )
 
 // agentKinds is the cycle order the picker walks, and the order every list of
 // agents renders in. Fixed, and independent of which agent starts selected:
 // agentBar moves brackets rather than a cursor, so the columns hold still while
 // the choice travels. Claude leads because it was the original default.
-var agentKinds = []agentKind{agentClaude, agentCodex, agentAntigravity}
+var agentKinds = []agentKind{agentClaude, agentCodex, agentAntigravity, agentPi}
 
-// short is the three-letter name an agent goes by in the picker bar and on the
-// command line. Three of them line up in the width of one word, which is what
+// short is the name an agent goes by in the picker bar and on the command
+// line: three letters, except Pi, whose own name is already shorter than any
+// abbreviation of it. They line up in the width of a word or two, which is what
 // makes the bar cheap enough to hang off a prompt you're already looking at.
 func (a agentKind) short() string {
 	switch a {
@@ -28,6 +30,8 @@ func (a agentKind) short() string {
 		return "cdx"
 	case agentAntigravity:
 		return "agy"
+	case agentPi:
+		return "pi"
 	default:
 		return "cld"
 	}
@@ -62,8 +66,10 @@ func parseAgent(name string) (agentKind, error) {
 		return agentCodex, nil
 	case agentAntigravity, "agy":
 		return agentAntigravity, nil
+	case agentPi:
+		return agentPi, nil
 	default:
-		return "", fmt.Errorf("unknown agent %q (want claude/cld, codex/cdx, or antigravity/agy)", name)
+		return "", fmt.Errorf("unknown agent %q (want claude/cld, codex/cdx, antigravity/agy, or pi)", name)
 	}
 }
 
@@ -109,7 +115,9 @@ func extractAgentFlag(args []string) (*agentPick, []string, error) {
 // still working inside a rig and shouldn't suddenly start prompting. Each agent
 // spells this differently and the spellings were verified against the installed
 // CLIs: codex takes a subcommand (its bypass flag is global, so it precedes
-// it), claude and antigravity take flags.
+// it), claude, antigravity, and pi take flags. Pi has no permission prompts
+// to bypass, and its prompt follows `--` so a message that happens to start
+// with a dash can't be read as an option.
 func (a agentKind) resumeCommand(sessionID string) string {
 	return a.resumeCommandWithPrompt(sessionID, "")
 }
@@ -133,13 +141,27 @@ func (a agentKind) resumeCommandWithPrompt(sessionID, prompt string) string {
 			line += " --prompt-interactive" + promptArg
 		}
 		return line
+	case agentPi:
+		line := "pi --session " + quoted
+		if prompt != "" {
+			line += " --" + promptArg
+		}
+		return line
 	default:
 		return "claude --dangerously-skip-permissions --resume " + quoted + promptArg
 	}
 }
 
+// findsRigInstructions reports whether the agent discovers the rig's
+// generated instructions on its own. Claude and Pi both walk parent
+// directories for CLAUDE.md/AGENTS.md, so starting one level below the rig
+// root is enough; the others get an explicit breadcrumb in their first prompt.
+func (a agentKind) findsRigInstructions() bool {
+	return a == agentClaude || a == agentPi
+}
+
 func (a agentKind) launchCommand(prompt string) string {
-	if a != agentClaude {
+	if !a.findsRigInstructions() {
 		prompt = "Read the rig instructions in ../AGENTS.md first. " + prompt
 	}
 	return a.launchPromptCommand(prompt)
@@ -149,7 +171,7 @@ func (a agentKind) launchCommand(prompt string) string {
 // agents start one directory below their rig instructions; project agents
 // start at the rig root, so their explicit breadcrumb is ./AGENTS.md.
 func (a agentKind) launchProjectCommand(prompt string) string {
-	if a != agentClaude {
+	if !a.findsRigInstructions() {
 		prompt = "Read the project rig instructions in ./AGENTS.md first. " + prompt
 	}
 	return a.launchPromptCommand(prompt)
@@ -162,6 +184,8 @@ func (a agentKind) launchPromptCommand(prompt string) string {
 		return "codex --dangerously-bypass-approvals-and-sandbox " + quoted
 	case agentAntigravity:
 		return "agy --dangerously-skip-permissions --prompt-interactive " + quoted
+	case agentPi:
+		return "pi -- " + quoted
 	default:
 		return "claude --dangerously-skip-permissions " + quoted
 	}

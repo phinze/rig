@@ -42,6 +42,7 @@ func TestParseAgentShortNames(t *testing.T) {
 		"cld": agentClaude, "claude": agentClaude,
 		"cdx": agentCodex, "codex": agentCodex,
 		"agy": agentAntigravity, "antigravity": agentAntigravity,
+		"pi": agentPi, "PI": agentPi,
 		"CDX": agentCodex,
 	}
 	for name, want := range cases {
@@ -68,8 +69,8 @@ func TestAgentCycleWraps(t *testing.T) {
 	if len(seen) != len(agentKinds) {
 		t.Errorf("cycle visited %d agents, want %d", len(seen), len(agentKinds))
 	}
-	if agentClaude.prev() != agentAntigravity {
-		t.Errorf("prev from claude = %q, want antigravity", agentClaude.prev())
+	if agentClaude.prev() != agentPi {
+		t.Errorf("prev from claude = %q, want pi", agentClaude.prev())
 	}
 }
 
@@ -78,7 +79,7 @@ func TestAgentBarMarksSelection(t *testing.T) {
 	if !strings.Contains(bar, "[cdx]") {
 		t.Errorf("bar = %q, want cdx selected", bar)
 	}
-	for _, other := range []string{"[cld]", "[agy]"} {
+	for _, other := range []string{"[cld]", "[agy]", "[pi]"} {
 		if strings.Contains(bar, other) {
 			t.Errorf("bar = %q, want only one selection", bar)
 		}
@@ -179,6 +180,10 @@ func TestAgentLaunchCommand(t *testing.T) {
 		{agentClaude, "claude --dangerously-skip-permissions 'do it'"},
 		{agentCodex, "codex --dangerously-bypass-approvals-and-sandbox 'Read the rig instructions in ../AGENTS.md first. do it'"},
 		{agentAntigravity, "agy --dangerously-skip-permissions --prompt-interactive 'Read the rig instructions in ../AGENTS.md first. do it'"},
+		// Pi walks parent directories for AGENTS.md, so like Claude it needs
+		// no breadcrumb; `--` keeps a leading dash in the prompt from parsing
+		// as a flag.
+		{agentPi, "pi -- 'do it'"},
 	}
 	for _, c := range cases {
 		if got := c.agent.launchCommand("do it"); got != c.want {
@@ -204,6 +209,7 @@ func TestAgentResumeCommandsCarryDispatchPrompt(t *testing.T) {
 		{agentClaude, "claude --dangerously-skip-permissions --resume 'session-1' 'Run address-pr-review and handle the latest feedback.'"},
 		{agentCodex, "codex --dangerously-bypass-approvals-and-sandbox resume 'session-1' 'Run address-pr-review and handle the latest feedback.'"},
 		{agentAntigravity, "agy --dangerously-skip-permissions --conversation 'session-1' --prompt-interactive 'Run address-pr-review and handle the latest feedback.'"},
+		{agentPi, "pi --session 'session-1' -- 'Run address-pr-review and handle the latest feedback.'"},
 	}
 	for _, tc := range cases {
 		if got := tc.agent.resumeCommandWithPrompt("session-1", prompt); got != tc.want {

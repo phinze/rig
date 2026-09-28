@@ -119,8 +119,8 @@ job (climbing rig, fishing rig, sound rig):
 ## Agent choice
 
 `rig up`, `rig new`, and `rig review` accept `--agent`, by long name
-(`claude|codex|antigravity`) or by the three-letter one the picker uses
-(`cld|cdx|agy`). When the flag is absent the default comes from `RIG_AGENT`,
+(`claude|codex|antigravity|pi`) or by the short one the picker uses
+(`cld|cdx|agy|pi`). When the flag is absent the default comes from `RIG_AGENT`,
 then `rig config agent`, then Claude as the compatibility fallback beneath both.
 Rig launches the selected terminal agent in the left pane and saves the choice
 in the manifest.
@@ -191,12 +191,14 @@ generated
 context as `CLAUDE.md`, `AGENTS.md`, and `.agents/rules/rig.md`, leaving those
 files at the basedir so they do not become jj changes inside a repo workspace.
 Codex and Antigravity are explicitly pointed to `../AGENTS.md` in their opening
-prompt in case their instruction discovery stops at the repo cwd.
+prompt in case their instruction discovery stops at the repo cwd. Claude and Pi
+walk parent directories for it on their own, so they get no breadcrumb.
 
 Agent choice also reaches the lifecycle machinery. `rig ls`, radar, and sweep
 take the newest matching turn from Claude's project JSONL files, Codex's rollout
-JSONL files, or Antigravity's timestamped prompt history. Radar recognizes all
-three commands in tmux, including wrapped Codex command names.
+JSONL files, Antigravity's timestamped prompt history, or Pi's session JSONL
+files. Radar recognizes all four commands in tmux, including wrapped Codex
+command names.
 
 The session itself is a Recto carousel. The stable `main/<repo>` window holds
 the task-level agent and whichever repository is currently relevant. Every
@@ -459,7 +461,8 @@ exists, and nothing can destroy a rig by a path that skips it.
 The load-bearing field is the agent session id. Every agent store keys on cwd
 or workspace, never on rig: Claude mangles the cwd into a project dir, Codex
 files rollouts by date and records cwd inside the transcript, Antigravity keys
-history by workspace. So the id is resolvable exactly once, while the basedir
+history by workspace, Pi dashes the cwd into a directory name and records it
+again in each session's header. So the id is resolvable exactly once, while the basedir
 still exists, and after that no query finds it. Cheap to write, impossible to
 reconstruct — which is the entire justification for writing it eagerly on a
 path that mostly won't need it.
@@ -501,7 +504,7 @@ and nothing here holds file content, so the whole store stays kilobytes.
 
 The resume invocations are per-agent and were verified against the installed
 CLIs rather than assumed (codex takes a subcommand and its bypass flag is
-global, so it precedes it; claude and antigravity take flags). They're pinned by
+global, so it precedes it; claude, antigravity, and pi take flags). They're pinned by
 test because a resume that silently degrades into a fresh session looks exactly
 like success while losing precisely what this exists to protect.
 

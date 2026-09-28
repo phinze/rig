@@ -43,7 +43,7 @@ func writeRigClaudeMD(basedir string, m manifest) error {
 }
 
 // writeRigAgentInstructions writes the same live rig context in each agent's
-// native shape. Claude and Codex use parent instruction files; Antigravity's
+// native shape. Claude, Codex, and Pi use parent instruction files; Antigravity's
 // workspace rules live under .agents/rules. The launch prompt also points to
 // AGENTS.md explicitly, covering clients that stop discovery at the repo cwd.
 func writeRigAgentInstructions(basedir string, m manifest) error {
