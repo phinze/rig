@@ -177,23 +177,20 @@ ctrl-r refresh PRs, ctrl-u clear filter, esc/ctrl-c quit.`,
 	{
 		name:    "ls",
 		group:   "navigate",
-		usage:   []string{"ls [--format=json|table] [--full]"},
-		summary: "list rigs in flight",
-		details: `  --full         add PR and CI state (one gh call per repo).
-  --format=json  stable machine-readable rows.`,
-	},
-	{
-		name:    "census",
-		group:   "navigate",
-		usage:   []string{"census [--cheap] [--refresh] [--format=json]"},
-		summary: "the whole board as JSON, for agents and sweeps",
-		details: `JSON, always. ls --full is the human table over the same data.
+		usage:   []string{"ls [--format=json|table] [--full] [--refresh]"},
+		summary: "list rigs in flight, or the whole board as JSON",
+		details: `The default table is the human call-sheet. --format=json emits the same
+board as a document for agents and sweeps.
 
-  --cheap    board state only: no gh calls, so repo PR fields read null and
-             WIP is conservative (no PR heads to subtract). The tier for a
-             sweep that polls.
-  --refresh  ignore the PR cache. Full-tier answers younger than 60s normally
-             come from the same cache file the radar keeps warm.`,
+  --full      add PR/CI state and each rig's disposition (one gh call per
+              repo, answered from the radar's PR cache when possible).
+  --refresh   ignore the PR cache; only meaningful with --full. Full-tier
+              answers younger than 60s normally come from the cache the
+              radar keeps warm.
+
+The cheap tier (no --full) is local and instant: no gh calls, so repo PR
+fields read null and WIP is conservative (no PR heads to subtract). The tier
+for a board read that polls.`,
 	},
 	{
 		name:    "wake",

@@ -369,11 +369,11 @@ is why `sweep_test` measures its shared grid in runes.
 External tools learn the current rig through `rig info --format=json`, never by
 parsing `.rig/manifest.toml`. The manifest is Rig's private persistence format;
 the JSON shape is the compatibility boundary. The whole-board sibling of `info`
-is `rig census`: one JSON document over every rig for agents and sweeps, in two
-tiers — the full default shares the radar's PR cache (60s TTL, written back
-whole) instead of paying a second gh fan-out, and `--cheap` never calls gh,
-reading repo PRs as null ("not looked") and WIP conservatively. It stays
-read-only; sweep remains the writer of record for observed PRs. The API exposes the absolute rig
+is `rig ls --format=json`: one JSON document over every rig for agents and
+sweeps, in two tiers — `--full` shares the radar's PR cache (60s TTL, written
+back whole) instead of paying a second gh fan-out, and the cheap default never
+calls gh, reading repo PRs as null ("not looked") and WIP conservatively. It
+stays read-only; sweep remains the writer of record for observed PRs. The API exposes the absolute rig
 root as lifecycle identity. Review rigs also expose the current repository's
 durable PR locator, so Recto can restore PR context without learning Rig's
 private layout. Recto owns its authored state beneath XDG for standalone and

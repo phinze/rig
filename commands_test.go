@@ -109,13 +109,20 @@ func TestPrMarker(t *testing.T) {
 }
 
 func TestEncodeRigsJSON(t *testing.T) {
-	// nil must serialize as [] so consumers can iterate unconditionally.
-	blob, err := encodeRigsJSON(nil)
+	// An empty board still serializes its Rigs as [] so consumers can iterate
+	// unconditionally.
+	blob, err := encodeRigsJSON(boardDoc{Tier: "cheap"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(blob) != "[]" {
-		t.Errorf("empty encode = %q, want []", blob)
+	var empty struct {
+		Rigs []map[string]any `json:"rigs"`
+	}
+	if err := json.Unmarshal(blob, &empty); err != nil {
+		t.Fatalf("output is not valid json: %v", err)
+	}
+	if empty.Rigs == nil {
+		t.Errorf("empty encode rigs = null, want []")
 	}
 
 	last := time.Unix(1_700_000_000, 0).UTC()
@@ -133,16 +140,24 @@ func TestEncodeRigsJSON(t *testing.T) {
 		Agent:       "working",
 		LastActive:  &last,
 	}}
-	blob, err = encodeRigsJSON(statuses)
+	doc := boardDoc{GeneratedAt: last, Tier: "cheap", Rigs: rigsForJSON(statuses, false)}
+	blob, err = encodeRigsJSON(doc)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	var round []map[string]any
+	var round struct {
+		GeneratedAt string           `json:"generatedAt"`
+		Tier        string           `json:"tier"`
+		Rigs        []map[string]any `json:"rigs"`
+	}
 	if err := json.Unmarshal(blob, &round); err != nil {
 		t.Fatalf("output is not valid json: %v", err)
 	}
-	got := round[0]
+	if round.Tier != "cheap" || round.GeneratedAt == "" {
+		t.Errorf("envelope = tier %q generatedAt %q, want cheap and a timestamp", round.Tier, round.GeneratedAt)
+	}
+	got := round.Rigs[0]
 	for k, want := range map[string]any{
 		"id":           "mir-75",
 		"slug":         "mir-75-add-zig-stack",
@@ -159,21 +174,19 @@ func TestEncodeRigsJSON(t *testing.T) {
 	if _, ok := got["last_active"]; !ok {
 		t.Error("expected last_active field to be present")
 	}
-	// PRs are omitted unless --full populated them.
-	if _, ok := got["prs"]; ok {
-		t.Error("prs should be omitted when empty")
-	}
 
 	// A row with no agent omits last_active entirely (omitempty on a nil ptr).
-	blob, _ = encodeRigsJSON([]rigStatus{{ID: "x"}})
-	var bare []map[string]any
+	blob, _ = encodeRigsJSON(boardDoc{Tier: "cheap", Rigs: rigsForJSON([]rigStatus{{ID: "x"}}, false)})
+	var bare struct {
+		Rigs []map[string]any `json:"rigs"`
+	}
 	if err := json.Unmarshal(blob, &bare); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := bare[0]["last_active"]; ok {
+	if _, ok := bare.Rigs[0]["last_active"]; ok {
 		t.Error("last_active should be omitted when nil")
 	}
-	if bare[0]["agent"] != "" {
-		t.Errorf("agent = %v, want empty", bare[0]["agent"])
+	if bare.Rigs[0]["agent"] != "" {
+		t.Errorf("agent = %v, want empty", bare.Rigs[0]["agent"])
 	}
 }

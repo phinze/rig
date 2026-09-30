@@ -47,7 +47,7 @@ type rigMessage struct {
 }
 
 // messagesPath is a rig's thread log, under the rig's own .rig so teardown
-// and census reasoning stay per-rig. appendRigMessage takes the lock around
+// and board reasoning stay per-rig. appendRigMessage takes the lock around
 // its single line write because senders can run concurrently from any rig.
 func messagesPath(basedir string) string {
 	return filepath.Join(basedir, ".rig", "messages.jsonl")

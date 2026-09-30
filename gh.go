@@ -26,7 +26,7 @@ type prInfo struct {
 	// FailingChecks names the individual checks that make Checks read
 	// "failing", so a sweep can see *what* is red — "pop", "lint" — without
 	// digging CI logs. Empty otherwise. It rides the ls JSON and the radar's
-	// PR cache so the census feed can report it without a second fetch.
+	// PR cache so a board read can report it without a second fetch.
 	FailingChecks []string `json:"failingChecks,omitempty"`
 	// Review is GitHub's rollup review decision on the PR:
 	// APPROVED | CHANGES_REQUESTED | REVIEW_REQUIRED, or "" when the repo has

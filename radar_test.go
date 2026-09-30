@@ -535,7 +535,7 @@ func TestRadarMatchByRepo(t *testing.T) {
 	s := rigStatus{
 		ID:    "MIR-1484",
 		Title: "download metrics: add per-replica label",
-		Repos: []string{"mirendev/cloud", "mirendev/infra", "mirendev/rfd"},
+		Repos: []rigRepo{{Name: "mirendev/cloud"}, {Name: "mirendev/infra"}, {Name: "mirendev/rfd"}},
 	}
 	for _, q := range []string{"cloud", "infra", "rfd", "mirendev", "rfd label"} {
 		if !fuzzyMatch(q, radarHaystack(s)) {
@@ -557,7 +557,7 @@ func TestRadarMatchByRepo(t *testing.T) {
 // A repo match ranks a rig honestly against the field: typing a repo name puts
 // the rigs actually in that repo above one that merely spells it out in prose.
 func TestRankByRepo(t *testing.T) {
-	inRepo := rigStatus{Slug: "a", ID: "MIR-1", Title: "fix the deploy blip", Repos: []string{"mirendev/runtime"}}
+	inRepo := rigStatus{Slug: "a", ID: "MIR-1", Title: "fix the deploy blip", Repos: []rigRepo{{Name: "mirendev/runtime"}}}
 	decoy := rigStatus{Slug: "b", ID: "MIR-2", Title: "document the runtime upgrade path"}
 	m := radarModel{inflight: []rigStatus{decoy, inRepo}}
 	m.setFilter("runtime")

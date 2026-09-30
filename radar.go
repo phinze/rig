@@ -551,7 +551,7 @@ func (m radarModel) fetchMissing() []tea.Cmd {
 }
 
 // radarCacheEntry is one rig's cached PR answer in ~/.cache/rig/radar-prs.json.
-// The file's readers are the radar and `rig census`'s full tier.
+// The file's readers are the radar and the `rig ls --full` board tier.
 type radarCacheEntry struct {
 	At  time.Time
 	PRs []rigPR
@@ -1594,7 +1594,7 @@ func radarHayFields(s rigStatus) []hayField {
 		fields = []hayField{{s.ID, "id"}, {s.Title, "title"}}
 	}
 	for _, repo := range s.Repos {
-		fields = append(fields, hayField{repo, ""})
+		fields = append(fields, hayField{repo.Name, ""})
 	}
 	for _, c := range s.agents {
 		if ctx := strings.TrimSpace(c.Context); ctx != "" {

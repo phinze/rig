@@ -86,8 +86,6 @@ func main() {
 		err = runRecto(args)
 	case "ls":
 		err = runLs(args)
-	case "census":
-		err = runCensus(args)
 	case "notify":
 		err = runNotify(args)
 	case "switch": // reached as `cd` too, a retained alias
