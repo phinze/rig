@@ -120,6 +120,9 @@ func dropCodexTrust(home, basedir string) error {
 		return err
 	}
 
+	// seedCodexTrust wrote both the given and the resolved spelling of each
+	// dir, so match on the canonical form to take both back out.
+	canonicalBase := resolveExistingPath(basedir)
 	lines := strings.Split(string(body), "\n")
 	kept := make([]string, 0, len(lines))
 	dropping := false
@@ -130,7 +133,7 @@ func dropCodexTrust(home, basedir string) error {
 			// Any table header ends the previous table, so the decision to keep
 			// or drop is remade here and nowhere else.
 			dir, isProject := codexProjectHeader(line)
-			dropping = isProject && isUnder(dir, basedir)
+			dropping = isProject && (isUnder(dir, basedir) || isUnder(resolveExistingPath(dir), canonicalBase))
 			if dropping {
 				changed = true
 				// Take the blank line that separated this stanza from the one

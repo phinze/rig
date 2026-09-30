@@ -300,6 +300,24 @@ func resolvePath(dir string) string {
 	return filepath.Clean(dir)
 }
 
+// resolveExistingPath is resolvePath for a directory that may already be gone:
+// it resolves the deepest ancestor that still exists and reattaches the rest.
+// Teardown compares paths after the basedir has been quarantined, and on macOS
+// a plain Abs fallback would keep /tmp while the stored spelling is /private/tmp.
+func resolveExistingPath(dir string) string {
+	abs := resolvePath(dir)
+	var tail []string
+	for p := abs; ; p = filepath.Dir(p) {
+		if resolved, err := filepath.EvalSymlinks(p); err == nil {
+			return filepath.Join(append([]string{resolved}, tail...)...)
+		}
+		if filepath.Dir(p) == p {
+			return abs
+		}
+		tail = append([]string{filepath.Base(p)}, tail...)
+	}
+}
+
 // isUnder reports whether child is parent or nested inside it.
 func isUnder(child, parent string) bool {
 	return child == parent || strings.HasPrefix(child, parent+string(os.PathSeparator))
