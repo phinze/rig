@@ -1,7 +1,11 @@
 package main
 
 import (
+	"bufio"
+	"encoding/json"
+	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -216,5 +220,213 @@ func TestCurrentSenderRig(t *testing.T) {
 	s := currentSender()
 	if s.rig == nil || s.name != "mir-75" || s.addr != "rig:mir-75" {
 		t.Errorf("sender = %+v, want rig mir-75", s)
+	}
+}
+
+// --- pi socket transport ----------------------------------------------------
+
+// writeRigPeerRecord drops a presence fixture into dir.
+func writeRigPeerRecord(t *testing.T, dir, name, cwd string, pid int, sock, token, heartbeat string) {
+	t.Helper()
+	rec := rigPeerPresence{
+		V: 1, InstanceID: strings.TrimSuffix(name, ".json"), PID: pid,
+		SessionID: "sess-" + name, Cwd: cwd, Sock: sock, Token: token,
+		StartedAt: "2026-09-30T16:00:00Z", HeartbeatAt: heartbeat, Status: "idle",
+	}
+	data, err := json.Marshal(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// deadPID borrows a completed process's pid: guaranteed gone, practically
+// unrecycled for the life of the test.
+func deadPID(t *testing.T) int {
+	t.Helper()
+	cmd := exec.Command("true")
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	return cmd.Process.Pid
+}
+
+// liveSock stands up a throwaway unix socket so findRigPeer's stat check
+// sees the real thing, and returns its path.
+func liveSock(t *testing.T, dir, name string) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	return path
+}
+
+func TestRigPeerDir(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", "/run/user/1000")
+	if got := rigPeerDir("/home/x"); got != "/run/user/1000/rig-peer" {
+		t.Errorf("rigPeerDir with XDG = %q", got)
+	}
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	want := filepath.Join("/home/x", ".pi", "agent", "rig-peer", "run")
+	if got := rigPeerDir("/home/x"); got != want {
+		t.Errorf("rigPeerDir without XDG = %q, want %q", got, want)
+	}
+}
+
+// The probe's contract: match by workspace cwd, require a live pid and a
+// real socket, and take the freshest heartbeat when two sessions share a
+// root. Dead-pid records are SIGKILL litter and get reaped on the way by.
+func TestFindRigPeer(t *testing.T) {
+	dir := t.TempDir()
+	basedir := t.TempDir()
+	live := liveSock(t, dir, "live.sock")
+	writeRigPeerRecord(t, dir, "live.json", basedir, os.Getpid(), live, "tok-live", "2026-09-30T16:00:00Z")
+	dead := deadPID(t)
+	writeRigPeerRecord(t, dir, "dead.json", basedir, dead, filepath.Join(dir, "dead.sock"), "tok-dead", "2026-09-30T15:00:00Z")
+	writeRigPeerRecord(t, dir, "other.json", filepath.Join(basedir, "elsewhere"), os.Getpid(), liveSock(t, dir, "other.sock"), "tok-other", "2026-09-30T17:00:00Z")
+
+	p, err := findRigPeer(dir, basedir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Token != "tok-live" {
+		t.Errorf("findRigPeer picked token %q, want tok-live", p.Token)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "dead.json")); !os.IsNotExist(err) {
+		t.Errorf("dead record not reaped: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "other.json")); err != nil {
+		t.Errorf("other-cwd record should be left alone: %v", err)
+	}
+}
+
+func TestFindRigPeerFreshestWins(t *testing.T) {
+	dir := t.TempDir()
+	basedir := t.TempDir()
+	writeRigPeerRecord(t, dir, "old.json", basedir, os.Getpid(), liveSock(t, dir, "old.sock"), "tok-old", "2026-09-30T15:00:00Z")
+	writeRigPeerRecord(t, dir, "new.json", basedir, os.Getpid(), liveSock(t, dir, "new.sock"), "tok-new", "2026-09-30T17:00:00Z")
+	p, err := findRigPeer(dir, basedir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Token != "tok-new" {
+		t.Errorf("findRigPeer picked %q, want the fresher heartbeat", p.Token)
+	}
+}
+
+func TestFindRigPeerNoMatch(t *testing.T) {
+	dir := t.TempDir()
+	writeRigPeerRecord(t, dir, "other.json", t.TempDir(), os.Getpid(), liveSock(t, dir, "other.sock"), "tok", "2026-09-30T17:00:00Z")
+	_, err := findRigPeer(dir, t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "no rig-peer presence for") {
+		t.Errorf("err = %v, want the no-presence failure", err)
+	}
+}
+
+// rigPeerExchange captures what the Go client wrote, for the fake-server
+// tests to assert on after the fact.
+type rigPeerExchange struct {
+	hello   map[string]any
+	message map[string]any
+}
+
+// serveRigPeer plays the extension's side of one connection: read hello,
+// check the token, answer ready, read message, send receipt. Bad token gets
+// the extension's error frame and a dropped conn instead.
+func serveRigPeer(t *testing.T, ln net.Listener, wantToken string, receipt map[string]any) chan rigPeerExchange {
+	got := make(chan rigPeerExchange, 1)
+	go func() {
+		defer close(got)
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		r := bufio.NewReader(conn)
+		enc := json.NewEncoder(conn)
+		var ex rigPeerExchange
+		read := func(dst *map[string]any) bool {
+			line, err := r.ReadBytes('\n')
+			if err != nil {
+				return false
+			}
+			return json.Unmarshal(line, dst) == nil
+		}
+		if !read(&ex.hello) {
+			got <- ex
+			return
+		}
+		if ex.hello["token"] != wantToken {
+			_ = enc.Encode(map[string]any{"type": "error", "reason": "auth"})
+			got <- ex
+			return
+		}
+		_ = enc.Encode(map[string]any{"type": "ready", "v": 1})
+		if !read(&ex.message) {
+			got <- ex
+			return
+		}
+		if receipt != nil {
+			_ = enc.Encode(receipt)
+		}
+		got <- ex
+	}()
+	return got
+}
+
+func newRigPeerServer(t *testing.T) (net.Listener, rigPeerPresence) {
+	t.Helper()
+	dir := t.TempDir()
+	ln, err := net.Listen("unix", filepath.Join(dir, "peer.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	pres := rigPeerPresence{V: 1, InstanceID: "i1", PID: os.Getpid(), SessionID: "s1", Sock: ln.Addr().String(), Token: "tok-1"}
+	return ln, pres
+}
+
+func TestPostPiMessageSubmitted(t *testing.T) {
+	ln, pres := newRigPeerServer(t)
+	receipt := map[string]any{"type": "receipt", "id": "m-1", "status": "submitted"}
+	got := serveRigPeer(t, ln, pres.Token, receipt)
+	record := rigMessage{ID: "m-1", To: "mir-75", Text: "cloud #304 merged, re-run pop", ReplyTo: "m-0"}
+	sender := rigSender{name: "pers-22", addr: "rig:pers-22"}
+	if err := postPiMessage(pres, record, sender); err != nil {
+		t.Fatalf("postPiMessage = %v", err)
+	}
+	ex := <-got
+	if ex.hello["v"].(float64) != 1 || ex.hello["type"] != "hello" {
+		t.Errorf("hello = %v", ex.hello)
+	}
+	m := ex.message
+	if m["type"] != "message" || m["id"] != "m-1" || m["to"] != "mir-75" ||
+		m["from"] != "pers-22" || m["fromAddr"] != "rig:pers-22" ||
+		m["text"] != record.Text || m["replyTo"] != "m-0" {
+		t.Errorf("message frame = %v", m)
+	}
+}
+
+func TestPostPiMessageBusyIsTheAnswer(t *testing.T) {
+	ln, pres := newRigPeerServer(t)
+	receipt := map[string]any{"type": "receipt", "id": "m-2", "status": "busy", "reason": "agent mid-run; nothing was queued"}
+	serveRigPeer(t, ln, pres.Token, receipt)
+	err := postPiMessage(pres, rigMessage{ID: "m-2", To: "mir-75", Text: "hi"}, rigSender{name: "pers-22", addr: "rig:pers-22"})
+	if err == nil || !strings.Contains(err.Error(), "busy") {
+		t.Errorf("err = %v, want the busy refusal", err)
+	}
+}
+
+func TestPostPiMessageBadToken(t *testing.T) {
+	ln, pres := newRigPeerServer(t)
+	serveRigPeer(t, ln, "the-right-token", nil)
+	err := postPiMessage(pres, rigMessage{ID: "m-3", To: "mir-75", Text: "hi"}, rigSender{name: "pers-22", addr: "rig:pers-22"})
+	if err == nil || !strings.Contains(err.Error(), "refused the handshake") {
+		t.Errorf("err = %v, want handshake refusal", err)
 	}
 }

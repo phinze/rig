@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
@@ -17,11 +18,13 @@ import (
 
 // Rig-mediated cross-agent messaging. Rig owns addressing (a rig id), the
 // message envelope, persistence (.rig/messages.jsonl), and the verbs;
-// each agent vendor's mechanism is a transport underneath. The claude
-// transport — posting one NDJSON line to the session's pid-named inbox
-// socket — is the one this file implements, because it's the one verified
-// end to end by hand (see the pers-22 lab notes). Delivery lands at the
-// receiver's next turn boundary, attributed by sender name.
+// each agent vendor's mechanism is a transport underneath. Three are
+// implemented: claude (one NDJSON line to the session's pid-named inbox
+// socket), codex (`codex queue` through the app-server daemon, gated on
+// its control socket), and pi (a JSONL hello → message → receipt
+// exchange with the rig-peer extension listening in the target session).
+// Delivery lands at the receiver's next turn boundary, attributed by
+// sender name.
 //
 // At-most-once, fully logged: failure is loud, and both sides of a
 // rig-to-rig send get a record. A message is an instruction with
@@ -457,6 +460,203 @@ func postCodexMessage(thread, text string) error {
 	return nil
 }
 
+// --- pi socket transport --------------------------------------------------
+
+// rigPeerPresence is one live pi session's registration record, written by
+// the rig-peer extension (pi/rig-peer.ts) on session_start and refreshed by
+// its heartbeat. Readers reap records whose pid is dead: SIGKILL can't run
+// the extension's own cleanup.
+type rigPeerPresence struct {
+	V           int    `json:"v"`
+	InstanceID  string `json:"instanceId"`
+	PID         int    `json:"pid"`
+	SessionID   string `json:"sessionId"`
+	Cwd         string `json:"cwd"`
+	Sock        string `json:"sock"`
+	Token       string `json:"token"`
+	StartedAt   string `json:"startedAt"`
+	HeartbeatAt string `json:"heartbeatAt"`
+	Status      string `json:"status"`
+}
+
+// rigPeerDir is where the extension keeps its records: $XDG_RUNTIME_DIR
+// when set, else ~/.pi/agent/rig-peer/run (darwin has no runtime dir).
+// Must match presenceDir() in pi/rig-peer.ts.
+func rigPeerDir(home string) string {
+	if xdg := os.Getenv("XDG_RUNTIME_DIR"); xdg != "" {
+		return filepath.Join(xdg, "rig-peer")
+	}
+	return filepath.Join(home, ".pi", "agent", "rig-peer", "run")
+}
+
+// findRigPeer scans the presence dir for a live record whose cwd matches
+// basedir. Dead-pid records are reaped as they're found (record and its
+// socket); a live pid with a missing socket is skipped but left alone —
+// that's either a session mid-shutdown, which removes its own record, or
+// a state only the extension can explain. Multiple live matches (a second
+// pi in the same root) resolve to the freshest heartbeat.
+func findRigPeer(dir, basedir string) (rigPeerPresence, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return rigPeerPresence{}, fmt.Errorf("no rig-peer presence at %s: the pi session needs the rig-peer extension (it ships in the rig package's share/rig) and a restart to load it", dir)
+	}
+	var best *rigPeerPresence
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			continue
+		}
+		var p rigPeerPresence
+		if err := json.Unmarshal(data, &p); err != nil || p.V != 1 || p.Token == "" {
+			continue
+		}
+		if p.Cwd != basedir {
+			continue
+		}
+		if unix.Kill(p.PID, 0) != nil {
+			// Dead pid: SIGKILL litter. Reap record and socket, keep scanning.
+			_ = os.Remove(filepath.Join(dir, e.Name()))
+			_ = os.Remove(p.Sock)
+			continue
+		}
+		if info, err := os.Stat(p.Sock); err != nil || info.Mode()&os.ModeSocket == 0 {
+			continue
+		}
+		if best == nil || p.HeartbeatAt > best.HeartbeatAt {
+			cp := p
+			best = &cp
+		}
+	}
+	if best == nil {
+		return rigPeerPresence{}, fmt.Errorf("no rig-peer presence for %s: the rig's pi session may predate the extension — restart it so it loads", basedir)
+	}
+	return *best, nil
+}
+
+// probePiReachable is the fail-loud check every pi send runs: session
+// live, a pi process under the agent pane, then a presence record for the
+// rig's workspace root — the record is the reachability fact itself, so
+// its absence means the session lacks the extension and the failure says
+// how to fix that.
+func probePiReachable(rs rigSession, basedir string, m manifest) (rigPeerPresence, error) {
+	if !rs.live() {
+		return rigPeerPresence{}, fmt.Errorf("%s has no live session (wake or dispatch it first)", m.ID)
+	}
+	if _, err := agentPanePID(rs, basedir, m, "pi"); err != nil {
+		return rigPeerPresence{}, err
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return rigPeerPresence{}, fmt.Errorf("resolving home for rig-peer state: %w", err)
+	}
+	return findRigPeer(rigPeerDir(home), basedir)
+}
+
+// postPiMessage runs the three-frame exchange — hello under the presence
+// record's token, message, receipt — under one deadline for the whole
+// conversation. Receipt semantics are the transport's designed narrowness:
+// "submitted" means the extension's SDK call returned (nothing more),
+// "busy" means the agent was mid-run and nothing was queued anywhere, and
+// "error" carries the extension's own reason.
+func postPiMessage(pres rigPeerPresence, record rigMessage, sender rigSender) error {
+	conn, err := net.DialTimeout("unix", pres.Sock, 2*time.Second)
+	if err != nil {
+		return fmt.Errorf("dialing rig-peer socket %s: %w", pres.Sock, err)
+	}
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	r := bufio.NewReader(conn)
+
+	writeFrame := func(v any) error {
+		line, err := marshalWire(v)
+		if err != nil {
+			return err
+		}
+		_, err = conn.Write(append(line, '\n'))
+		return err
+	}
+	readFrame := func(v any) error {
+		line, err := r.ReadBytes('\n')
+		if err != nil {
+			return err
+		}
+		if len(line) > 1<<20 {
+			return fmt.Errorf("oversize frame from rig-peer")
+		}
+		return json.Unmarshal(line, v)
+	}
+
+	if err := writeFrame(map[string]any{"v": 1, "type": "hello", "token": pres.Token}); err != nil {
+		return fmt.Errorf("rig-peer hello: %w", err)
+	}
+	var ready struct {
+		Type   string `json:"type"`
+		Reason string `json:"reason"`
+	}
+	if err := readFrame(&ready); err != nil {
+		return fmt.Errorf("rig-peer ready: %w", err)
+	}
+	if ready.Type == "error" {
+		return fmt.Errorf("rig-peer refused the handshake: %s", ready.Reason)
+	}
+	if ready.Type != "ready" {
+		return fmt.Errorf("rig-peer answered %q where ready was expected", ready.Type)
+	}
+
+	msg := map[string]any{
+		"type":     "message",
+		"id":       record.ID,
+		"from":     sender.name,
+		"fromAddr": sender.addr,
+		"to":       record.To,
+		"text":     record.Text,
+	}
+	if record.ReplyTo != "" {
+		msg["replyTo"] = record.ReplyTo
+	}
+	if err := writeFrame(msg); err != nil {
+		return fmt.Errorf("rig-peer message: %w", err)
+	}
+	var receipt struct {
+		Type   string `json:"type"`
+		Status string `json:"status"`
+		Reason string `json:"reason"`
+	}
+	if err := readFrame(&receipt); err != nil {
+		return fmt.Errorf("rig-peer receipt: %w", err)
+	}
+	switch receipt.Status {
+	case "submitted":
+		return nil
+	case "busy":
+		return fmt.Errorf("rig %s's pi session is busy (%s)", record.To, receipt.Reason)
+	case "error":
+		return fmt.Errorf("rig-peer rejected the message: %s", receipt.Reason)
+	default:
+		return fmt.Errorf("rig-peer answered with unknown receipt status %q", receipt.Status)
+	}
+}
+
+// deliverPiMessage probes presence, then speaks hello → message → receipt
+// to the extension's socket. Unlike claude's always-open inbox or codex's
+// daemon-side spool, the extension refuses a busy session outright — by
+// design there is no rig-side queue, so a busy receipt is the send's
+// answer and the sender decides whether to retry later.
+func deliverPiMessage(rs rigSession, target rigInfo, m manifest, record rigMessage, sender rigSender) error {
+	pres, err := probePiReachable(rs, target.Path, m)
+	if err != nil {
+		return err
+	}
+	if err := postPiMessage(pres, record, sender); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "rig: sent to %s\n", m.ID)
+	return nil
+}
+
 // --- verbs ------------------------------------------------------------------
 
 // deliverRigMessage is the shared core of send and reply: probe, post, log
@@ -487,8 +687,11 @@ func deliverRigMessage(target rigInfo, text, replyTo string, sender rigSender) e
 	case agentCodex:
 		record.Transport = "codex-queue"
 		postErr = deliverCodexMessage(rs, target, m, text, sender)
+	case agentPi:
+		record.Transport = "pi-socket"
+		postErr = deliverPiMessage(rs, target, m, record, sender)
 	default:
-		postErr = fmt.Errorf("rig send speaks claude and codex for now; %s runs %s", m.ID, kind)
+		postErr = fmt.Errorf("rig send speaks claude, codex, and pi for now; %s runs %s", m.ID, kind)
 	}
 
 	if postErr != nil {

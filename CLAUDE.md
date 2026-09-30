@@ -172,7 +172,7 @@ Agent-to-agent messaging lives beside these rather than under relay:
 `rig reply` answers the latest inbound with a correlation id, and `rig
 messages` reads the thread. Rig owns addressing, the envelope, and the
 per-rig `.rig/messages.jsonl` each attempt lands in; each vendor mechanism is
-a transport. Two are implemented and verified by hand. Claude posts one
+a transport. Three are implemented and verified by hand. Claude posts one
 NDJSON line to the session's pid-named inbox socket; launch lines carry
 `--name <rig-id>` plus a rig-owned settings file with
 `crossSessionInbound: accept`, since the inbound default would otherwise hold
@@ -185,9 +185,16 @@ why reachability is checked before queueing rather than trusted after: with
 the app-server daemon down, `codex queue` still exits 0 and prints "Queued
 message" while delivering nothing, and it also accepts a thread that nobody is
 listening to. So the daemon's control socket is the real reachability signal,
-and its absence fails loudly with the start command. Sends fail loudly with
-the probe's reason — no session, no agent under the agent pane, no socket or
-no daemon — and a message is an instruction with provenance, never consent.
+and its absence fails loudly with the start command. Pi speaks hello →
+message → receipt over JSONL to the rig-peer extension
+(`pi/rig-peer.ts`, shipped in the package's `share/rig` and loaded via pi's
+`settings.extensions`): each session registers a presence record (cwd, pid,
+socket, token) that the probe matches by the rig's workspace root; a busy
+session is refused with nothing queued anywhere, and a session without the
+extension simply has no presence, which fails loudly with the restart
+remediation. Sends fail loudly with the probe's reason — no session, no
+agent under the agent pane, no socket, no daemon, or no presence — and a
+message is an instruction with provenance, never consent.
 
 `rig sweep` is the pass over every rig that proposes each one's next step. It's
 plan-then-stream: a Bubble Tea board of checkable actions, then the TUI exits and

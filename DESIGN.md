@@ -872,7 +872,7 @@ nicety.
 Adding a vendor means one switch case plus four things: a discovery story for
 the session's handle (claude: the pid-named inbox socket found down the
 pane's process tree; codex: the newest rollout's thread UUID matched by cwd;
-pi, designed but not yet built: the rig-peer extension's presence record
+pi: the rig-peer extension's presence record
 matched by workspace cwd); a wire format rig can emit (claude: one NDJSON
 envelope; codex: attribution-prefixed queue text; pi: JSONL
 hello → message → receipt against the extension's socket); a probe whose

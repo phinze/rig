@@ -133,10 +133,14 @@ issue that belongs to a project.`,
 		group:   "work",
 		usage:   []string{"send RIG MESSAGE..."},
 		summary: "message another rig's agent, delivered at its next turn boundary",
-		details: `Claude and codex rigs. Reachability is checked first and failure is loud:
-no live session, no agent process, no claude inbox socket, or no codex
-app-server daemon each say so by name. The codex daemon probe matters most:
-queue accepts a message with the daemon down and delivers nothing.
+		details: `Claude, codex, and pi rigs. Reachability is checked first and failure is loud:
+no live session, no agent process, no claude inbox socket, no codex
+app-server daemon, or no rig-peer presence (pi sessions load the rig-peer
+extension at startup; an older session reports itself and asks for a
+restart) each say so by name. The codex daemon probe matters most: queue
+accepts a message with the daemon down and delivers nothing. A pi session
+mid-turn answers busy and nothing is queued anywhere — retry when it
+settles.
 Every attempt is logged to the receiver's .rig/messages.jsonl (and yours,
 when you send from a rig). Unlike dispatch, send never wakes a rig.`,
 	},

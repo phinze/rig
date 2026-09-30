@@ -26,6 +26,12 @@
           version = "0.0.1";
           src = ./.;
           vendorHash = "sha256-Myhws+jwLQE6N5gv41E5BlQJ1dXHG3gydEi8VVYShWs=";
+          # The pi half of `rig send`'s pi transport ships inside the rig
+          # package so both sides version and deploy together; nix-config's
+          # pi.nix points pi's settings.extensions at this store path.
+          postInstall = ''
+            install -Dm644 $src/pi/rig-peer.ts $out/share/rig/rig-peer.ts
+          '';
           meta.mainProgram = "rig";
         };
       in
