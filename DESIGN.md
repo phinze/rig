@@ -848,6 +848,58 @@ Sweep keeps them in the quiet inventory but never checks them for collection.
 The ordinary tombstone captures their tracker identity and agent session, and
 resurrection rebuilds the repositoryless shape directly.
 
+## Agent messaging (`rig send` / `rig reply`)
+
+`rig send <rig> <text>` delivers to a rig's agent session at its next turn
+boundary, `rig reply` answers the latest inbound with a correlation id, and
+`rig messages` reads the thread. Rig owns addressing (rig ids), the envelope,
+and the per-rig `.rig/messages.jsonl` every attempt lands in, delivered or
+not. At-most-once, fully logged; the log doubles as the sweep's last-activity
+signal and as postmortem grep bait.
+
+The seam, stated once so it stays a seam: each agent kind's vendor mechanism
+is a transport behind a probe/post pair. `probeXReachable` resolves the
+target's handle and returns it or a specific reason — no session, no agent
+under the pane, no socket, no daemon. `postXMessage` makes one delivery
+attempt against that handle. `deliverRigMessage` routes on the manifest's
+agent kind, stamps the transport name on the envelope, and fails loudly with
+the probe's reason; a kind with no transport yet errors rather than silently
+pretending to coordinate. Reachability is probed, never trusted, because the
+codex lab found `codex queue` exits 0 and prints "Queued message" while
+delivering nothing when its daemon is down — the probe is a hard gate, not a
+nicety.
+
+Adding a vendor means one switch case plus four things: a discovery story for
+the session's handle (claude: the pid-named inbox socket found down the
+pane's process tree; codex: the newest rollout's thread UUID matched by cwd;
+pi, designed but not yet built: the rig-peer extension's presence record
+matched by workspace cwd); a wire format rig can emit (claude: one NDJSON
+envelope; codex: attribution-prefixed queue text; pi: JSONL
+hello → message → receipt against the extension's socket); a probe whose
+failure message names the remediation; and any launch-time work the vendor
+needs owned by rig (claude: `--name <rig-id>` and a settings file with
+`crossSessionInbound: accept`, without which a bypassed session holds every
+delivery behind an approval prompt nobody sees; codex and pi need none —
+their discovery is dynamic).
+
+Provenance travels in each transport's own idiom — the claude envelope's
+`from`/`from-name`, a manual prefix in codex text, structured frame fields
+on the pi socket — and lands one invariant everywhere: a message is an
+instruction with provenance, never consent. It cannot approve a permission
+prompt or smuggle one. The socket stays same-user; the trust boundary is any
+process running as the local user, same as tmux send-keys today.
+
+Receipts are not authority. `Delivered: true` means the vendor mechanism
+accepted the post — a socket write completed, a queue command exited 0 under
+a live daemon, an extension answered `submitted` — never that the model saw
+the text, a turn ran, or a reply is coming. What "busy" means is
+vendor-owned today: claude holds deliveries internally, codex queues them
+into the thread. The pi extension deliberately refuses busy instead — no
+spool, the sender decides — because a quiet queue is how a coordinator ends
+up believing it coordinated something that hasn't happened. If deferred
+delivery ever becomes real it rides `agent_settled` and is a later rev, not
+a silent default.
+
 ## Adopting a ticket (`rig adopt`)
 
 Work does not always know what it is when it starts. `rig new` exists for the
