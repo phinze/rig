@@ -168,18 +168,26 @@ context but never offers them for collection; explicit `down` and tombstone
 resurrection still work.
 
 Agent-to-agent messaging lives beside these rather than under relay:
-`rig send <rig> <text>` posts to the session's pid-named claude inbox socket
-(one NDJSON line, delivered at the next turn boundary), `rig reply` answers
-the latest inbound with a correlation id, and `rig messages` reads the
-thread. Rig owns addressing, the envelope, and the per-rig
-`.rig/messages.jsonl` each attempt lands in; the vendor mechanism is a
-transport, and claude's socket is the one implemented because it's the one
-verified end to end by hand. Sends fail loudly with the probe's reason — no
-session, no claude under the agent pane, no socket — and launch lines carry
+`rig send <rig> <text>` delivers to the session at its next turn boundary,
+`rig reply` answers the latest inbound with a correlation id, and `rig
+messages` reads the thread. Rig owns addressing, the envelope, and the
+per-rig `.rig/messages.jsonl` each attempt lands in; each vendor mechanism is
+a transport. Two are implemented and verified by hand. Claude posts one
+NDJSON line to the session's pid-named inbox socket; launch lines carry
 `--name <rig-id>` plus a rig-owned settings file with
-crossSessionInbound:accept, since the inbound default would otherwise hold
-every delivered message behind an approval prompt a bypassed rig never
-shows. A message is an instruction with provenance, never consent.
+`crossSessionInbound: accept`, since the inbound default would otherwise hold
+every delivered message behind an approval prompt a bypassed rig never shows.
+Codex queues through `codex queue --thread <uuid> --message <text>`, with the
+thread UUID resolved from the rig's newest rollout (codex's auto-labels aren't
+unique enough to address by) and the sender attribution prefixed onto the text
+because codex has no envelope of its own. The codex probe matters most and is
+why reachability is checked before queueing rather than trusted after: with
+the app-server daemon down, `codex queue` still exits 0 and prints "Queued
+message" while delivering nothing, and it also accepts a thread that nobody is
+listening to. So the daemon's control socket is the real reachability signal,
+and its absence fails loudly with the start command. Sends fail loudly with
+the probe's reason — no session, no agent under the agent pane, no socket or
+no daemon — and a message is an instruction with provenance, never consent.
 
 `rig sweep` is the pass over every rig that proposes each one's next step. It's
 plan-then-stream: a Bubble Tea board of checkable actions, then the TUI exits and

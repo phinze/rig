@@ -291,12 +291,12 @@ func descendantPID(procs []procEntry, root int, name string) (int, bool) {
 	return 0, false
 }
 
-// claudeAgentPID answers the live question "which pid is this rig's claude":
+// agentPanePID answers the live question "which pid is this rig's <name>":
 // the pane whose mark says agent, its root pid from tmux, and the shallowest
-// claude in that subtree. Each step's failure says its own reason, because
+// <name> in that subtree. Each step's failure says its own reason, because
 // these are the messages `rig send` surfaces when a rig is unreachable —
-// the difference between "no session" and "session, but claude exited".
-func claudeAgentPID(rs rigSession, basedir string, m manifest) (int, error) {
+// the difference between "no session" and "session, but the agent exited".
+func agentPanePID(rs rigSession, basedir string, m manifest, name string) (int, error) {
 	backend, ok := rs.b.(interface{ PaneRootPID(string) (int, error) })
 	if !ok {
 		return 0, fmt.Errorf("can't probe a %s session (only local tmux for now)", rs.b.Name())
@@ -324,11 +324,17 @@ func claudeAgentPID(rs rigSession, basedir string, m manifest) (int, error) {
 		if err != nil {
 			continue
 		}
-		if pid, ok := descendantPID(procs, root, "claude"); ok {
+		if pid, ok := descendantPID(procs, root, name); ok {
 			return pid, nil
 		}
 	}
-	return 0, fmt.Errorf("no claude process under the agent pane (agent exited to its shell?)")
+	return 0, fmt.Errorf("no %s process under the agent pane (agent exited to its shell?)", name)
+}
+
+// claudeAgentPID is the claude spelling of agentPanePID, kept for the socket
+// probe's callers.
+func claudeAgentPID(rs rigSession, basedir string, m manifest) (int, error) {
+	return agentPanePID(rs, basedir, m, "claude")
 }
 
 // probeClaudeReachable is the fail-loud reachability check every send runs
@@ -374,12 +380,88 @@ func postClaudeMessage(sockPath string, line []byte) error {
 	return nil
 }
 
+// --- codex queue transport ------------------------------------------------
+
+// codexDaemonSock is the app-server control socket `codex queue` talks to.
+// The lab found the hard part of this transport: when the daemon is down,
+// `codex queue` still exits 0 and prints "Queued message", but nothing is
+// delivered until the daemon comes back — and a stopped daemon's session
+// shows a reconnect banner, not an error. So the socket is probed up front;
+// without it a queue success is not a delivery.
+func codexDaemonSock(home string) string {
+	return filepath.Join(home, ".codex", "app-server-control", "app-server-control.sock")
+}
+
+// codexThreadFor resolves the thread UUID a rig's codex session answers to.
+// Codex auto-labels sessions from the first prompt, but those labels are not
+// reliably unique (the lab's lookup refused when more than one session
+// shared a name), so the UUID from the rollout's session_meta is what the
+// transport uses. Empty when the rig has no codex rollout recorded yet.
+func codexThreadFor(home, basedir string) string {
+	_, id := codexNewestSession(home, basedir)
+	return id
+}
+
+// codexMessage prefixes sender attribution onto the text. Codex's queue has
+// no cross-session envelope of its own, so without this the receiver sees a
+// bare instruction with no provenance — the one property the rig envelope
+// exists to guarantee on every transport.
+func codexMessage(sender rigSender, text string) string {
+	return fmt.Sprintf("[rig message from %s (%s)]\n%s", sender.name, sender.addr, text)
+}
+
+// probeCodexReachable is the fail-loud check every codex send runs: the
+// session is live, a codex process holds the agent pane, the app-server
+// daemon is up, and the rig's thread UUID resolves. Each failure names its
+// own repair — the daemon one in particular, because a down daemon is the
+// failure that otherwise looks like success.
+func probeCodexReachable(rs rigSession, basedir string, m manifest) (string, error) {
+	if !rs.live() {
+		return "", fmt.Errorf("%s has no live session (wake or dispatch it first)", m.ID)
+	}
+	if _, err := agentPanePID(rs, basedir, m, "codex"); err != nil {
+		return "", err
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolving home for codex state: %w", err)
+	}
+	sockPath := codexDaemonSock(home)
+	info, err := os.Stat(sockPath)
+	if err != nil {
+		return "", fmt.Errorf("codex app-server daemon isn't running (start it: `codex app-server daemon start`); without it queue accepts the message and delivers nothing: %w", err)
+	}
+	if info.Mode()&os.ModeSocket == 0 {
+		return "", fmt.Errorf("%s is not a socket", sockPath)
+	}
+	thread := codexThreadFor(home, basedir)
+	if thread == "" {
+		return "", fmt.Errorf("no codex thread recorded for %s (nothing to queue into)", m.ID)
+	}
+	return thread, nil
+}
+
+// postCodexMessage runs `codex queue` against the rig's thread. The daemon
+// probe ran first, so exit 0 here means the daemon accepted and persisted the
+// message; delivery to the session is durable and flushes on reconnect.
+func postCodexMessage(thread, text string) error {
+	cmd := exec.Command("codex", "queue", "--thread", thread, "--message", text)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			return fmt.Errorf("codex queue: %w", err)
+		}
+		return fmt.Errorf("codex queue: %s", msg)
+	}
+	return nil
+}
+
 // --- verbs ------------------------------------------------------------------
 
 // deliverRigMessage is the shared core of send and reply: probe, post, log
-// both sides, report. Delivery is at-most-once with the outcome recorded,
-// including failures — a send that couldn't deliver logs delivery:false
-// before returning its loud error, so the record never says quiet success.
+// both sides, report. Each agent kind routes to its transport; a kind with no
+// transport yet fails loudly rather than silently pretending to coordinate.
 func deliverRigMessage(target rigInfo, text, replyTo string, sender rigSender) error {
 	m, err := readManifest(target.Path)
 	if err != nil {
@@ -392,36 +474,28 @@ func deliverRigMessage(target rigInfo, text, replyTo string, sender rigSender) e
 	record := rigMessage{
 		V: 1, ID: msgID, At: time.Now(), Dir: "in",
 		From: sender.name, FromAddr: sender.addr, To: m.ID, Text: text, ReplyTo: replyTo,
-		Transport: "claude-socket",
 	}
 
-	if kind := m.agentKind(); kind != agentClaude {
-		err := fmt.Errorf("rig send speaks claude for now; %s runs %s", m.ID, kind)
-		record.Delivered = false
-		record.Error = err.Error()
-		_ = appendRigMessage(target.Path, record)
-		return err
-	}
-
+	kind := m.agentKind()
 	rs := sessionFor(target.Path, m)
-	sockPath, _, err := probeClaudeReachable(rs, target.Path, m)
-	if err != nil {
-		record.Delivered = false
-		record.Error = err.Error()
-		_ = appendRigMessage(target.Path, record)
-		return err
+
+	var postErr error
+	switch kind {
+	case agentClaude:
+		record.Transport = "claude-socket"
+		postErr = deliverClaudeMessage(rs, target, m, record, text, sender)
+	case agentCodex:
+		record.Transport = "codex-queue"
+		postErr = deliverCodexMessage(rs, target, m, text, sender)
+	default:
+		postErr = fmt.Errorf("rig send speaks claude and codex for now; %s runs %s", m.ID, kind)
 	}
 
-	env := buildClaudeEnvelope(msgID, sender.addr, sender.name, text)
-	line, err := marshalWire(env)
-	if err != nil {
-		return err
-	}
-	if err := postClaudeMessage(sockPath, line); err != nil {
+	if postErr != nil {
 		record.Delivered = false
-		record.Error = err.Error()
+		record.Error = postErr.Error()
 		_ = appendRigMessage(target.Path, record)
-		return err
+		return postErr
 	}
 
 	record.Delivered = true
@@ -434,16 +508,46 @@ func deliverRigMessage(target rigInfo, text, replyTo string, sender rigSender) e
 			fmt.Fprintf(os.Stderr, "rig: warning: logging to %s: %v\n", sender.rig.Path, err)
 		}
 	}
+	return nil
+}
 
-	// A session launched before messaging landed accepts the post at the
-	// socket but holds it behind an approval prompt nobody sees — the lab's
-	// silent pile-up. The settings file is written at launch, so its absence
-	// is how one of those sessions tells on itself.
+// deliverClaudeMessage posts the verified NDJSON envelope to the session's
+// inbox socket. A pre-messaging session accepts the post but holds it behind
+// an approval prompt nobody sees — the lab's silent pile-up — so a missing
+// settings file downgrades the success line to a warning.
+func deliverClaudeMessage(rs rigSession, target rigInfo, m manifest, record rigMessage, text string, sender rigSender) error {
+	sockPath, _, err := probeClaudeReachable(rs, target.Path, m)
+	if err != nil {
+		return err
+	}
+	env := buildClaudeEnvelope(record.ID, sender.addr, sender.name, text)
+	line, err := marshalWire(env)
+	if err != nil {
+		return err
+	}
+	if err := postClaudeMessage(sockPath, line); err != nil {
+		return err
+	}
 	if _, err := os.Stat(claudeRigSettingsPath(target.Path)); err != nil {
 		fmt.Fprintf(os.Stderr, "rig: delivered, but %s predates messaging settings: resume it (`rig resume`) or the message may wait behind an approval prompt\n", m.ID)
 	} else {
 		fmt.Fprintf(os.Stderr, "rig: sent to %s\n", m.ID)
 	}
+	return nil
+}
+
+// deliverCodexMessage probes the daemon and thread, then hands the message to
+// `codex queue`. The receiver sees the sender attribution prefix, so a codex
+// message carries the same provenance the claude envelope does.
+func deliverCodexMessage(rs rigSession, target rigInfo, m manifest, text string, sender rigSender) error {
+	thread, err := probeCodexReachable(rs, target.Path, m)
+	if err != nil {
+		return err
+	}
+	if err := postCodexMessage(thread, codexMessage(sender, text)); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "rig: sent to %s\n", m.ID)
 	return nil
 }
 

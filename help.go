@@ -133,8 +133,10 @@ issue that belongs to a project.`,
 		group:   "work",
 		usage:   []string{"send RIG MESSAGE..."},
 		summary: "message another rig's agent, delivered at its next turn boundary",
-		details: `Claude rigs only for now. Reachability is checked first and failure is loud:
-no live session, no claude process, no inbox socket each say so by name.
+		details: `Claude and codex rigs. Reachability is checked first and failure is loud:
+no live session, no agent process, no claude inbox socket, or no codex
+app-server daemon each say so by name. The codex daemon probe matters most:
+queue accepts a message with the daemon down and delivers nothing.
 Every attempt is logged to the receiver's .rig/messages.jsonl (and yours,
 when you send from a rig). Unlike dispatch, send never wakes a rig.`,
 	},

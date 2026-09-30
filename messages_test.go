@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -90,6 +91,72 @@ func TestRigMessageLogRoundTrip(t *testing.T) {
 	_ = f.Close()
 	if got := readRigMessages(dir); len(got) != 2 {
 		t.Errorf("after torn line: read %d, want 2", len(got))
+	}
+}
+
+// Codex's queue has no cross-session envelope, so the sender attribution is
+// a literal prefix. Pin it: without it a codex message loses the provenance
+// the rig envelope exists to carry.
+func TestCodexMessageCarriesSender(t *testing.T) {
+	s := rigSender{name: "pers-22", addr: "rig:pers-22"}
+	got := codexMessage(s, "cloud #304 merged, re-run pop")
+	want := "[rig message from pers-22 (rig:pers-22)]\ncloud #304 merged, re-run pop"
+	if got != want {
+		t.Errorf("codexMessage =\n%q\nwant\n%q", got, want)
+	}
+}
+
+// The thread id is resolved from the rollout's session_meta by cwd, the same
+// probe resume uses — codex's auto-labels aren't unique enough to address by.
+func TestCodexThreadFor(t *testing.T) {
+	home := t.TempDir()
+	basedir := filepath.Join(home, "workspaces", "mir-75-slug")
+	if err := os.MkdirAll(basedir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rollout := filepath.Join(home, ".codex", "sessions", "2026", "09", "30", "rollout-x.jsonl")
+	if err := os.MkdirAll(filepath.Dir(rollout), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	meta := `{"type":"session_meta","payload":{"cwd":` + strconv.Quote(basedir) + `,"id":"01a0f314-669d-7192-9c04-9626f73d9cc6"}}`
+	if err := os.WriteFile(rollout, []byte(meta+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := codexThreadFor(home, basedir); got != "01a0f314-669d-7192-9c04-9626f73d9cc6" {
+		t.Errorf("codexThreadFor = %q, want the rollout's session id", got)
+	}
+	// A rig with no codex rollout resolves to empty, which the probe reports
+	// as its own loud failure rather than queueing into nothing.
+	if got := codexThreadFor(home, filepath.Join(home, "elsewhere")); got != "" {
+		t.Errorf("codexThreadFor elsewhere = %q, want empty", got)
+	}
+}
+
+// The daemon-down failure is the one this transport exists to make loud:
+// `codex queue` exits 0 with the daemon stopped, so the socket is the real
+// reachability signal. postCodexMessage must surface queue's own error text.
+func TestPostCodexMessageSurfacesFailure(t *testing.T) {
+	bin := t.TempDir()
+	script := filepath.Join(bin, "codex")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho 'Error: no active session found' >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	err := postCodexMessage("01a0f314-669d-7192-9c04-9626f73d9cc6", "hi")
+	if err == nil || !strings.Contains(err.Error(), "no active session found") {
+		t.Errorf("postCodexMessage err = %v, want queue's message", err)
+	}
+}
+
+func TestPostCodexMessageSuccess(t *testing.T) {
+	bin := t.TempDir()
+	script := filepath.Join(bin, "codex")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho 'Queued message abc for thread def'\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if err := postCodexMessage("01a0f314-669d-7192-9c04-9626f73d9cc6", "hi"); err != nil {
+		t.Errorf("postCodexMessage = %v, want nil", err)
 	}
 }
 
