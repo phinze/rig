@@ -257,13 +257,27 @@ esac
 	}
 }
 
+// shortSocketDir is a temp dir short enough to hold a unix socket. macOS caps
+// socket paths at 104 bytes and its per-user $TMPDIR under /var/folders eats
+// most of that before t.TempDir adds the test name, so prefer /tmp when it
+// exists (it may not inside a Linux build sandbox, where TMPDIR is short).
+func shortSocketDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "rig-")
+	if err != nil {
+		return t.TempDir()
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
 func TestTeardownUsesRecordedTmuxSocket(t *testing.T) {
 	realTmux, err := exec.LookPath("tmux")
 	if err != nil {
 		t.Skip("tmux not installed")
 	}
 	root := t.TempDir()
-	socket := filepath.Join(root, "rig.sock")
+	socket := filepath.Join(shortSocketDir(t), "rig.sock")
 	session := "rig-recorded-socket"
 	if out, err := exec.Command(realTmux, "-S", socket, "-f", "/dev/null",
 		"new-session", "-d", "-s", session).CombinedOutput(); err != nil {

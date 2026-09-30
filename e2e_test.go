@@ -52,7 +52,7 @@ func TestSpawnSessionAgents(t *testing.T) {
 	if err != nil {
 		t.Skip("tmux not installed")
 	}
-	home := t.TempDir()
+	home := canonicalTempDir(t)
 	bin := filepath.Join(home, "bin")
 	mustMkdir(t, bin)
 	tmuxWrap := fmt.Sprintf("#!/bin/sh\nexec %s -L rig-agent-e2e -f /dev/null \"$@\"\n", realTmux)
@@ -117,7 +117,7 @@ func TestProjectRigCreatesRepositorylessRuntimeAndJoinedStatus(t *testing.T) {
 	if err != nil {
 		t.Skip("tmux not installed")
 	}
-	home := t.TempDir()
+	home := canonicalTempDir(t)
 	bin := filepath.Join(home, "bin")
 	rigBin := filepath.Join(home, "rig")
 	marker := filepath.Join(home, "codex.args")
@@ -234,7 +234,7 @@ func TestNew(t *testing.T) {
 		t.Skip("tmux not installed")
 	}
 
-	home := t.TempDir()
+	home := canonicalTempDir(t)
 	bin := filepath.Join(home, "bin")
 	repoDir := filepath.Join(home, "src", "github.com", "fakeowner", "fakerepo")
 	rigBin := filepath.Join(home, "rig")
@@ -399,7 +399,7 @@ func TestUpDown(t *testing.T) {
 		t.Skip("tmux not installed")
 	}
 
-	home := t.TempDir()
+	home := canonicalTempDir(t)
 	bin := filepath.Join(home, "bin")
 	// Lives under ~/src/<host>/<owner>/<repo> so owner derivation (and thus
 	// the manifest's [repos] table / GH_REPO wiring) has something to chew on.
@@ -608,7 +608,7 @@ func TestReview(t *testing.T) {
 		t.Skip("tmux not installed")
 	}
 
-	home := t.TempDir()
+	home := canonicalTempDir(t)
 	bin := filepath.Join(home, "bin")
 	// ghq root == ~/src; the "already cloned" repo lives at the ghq path.
 	repoDir := filepath.Join(home, "src", "github.com", "fakeowner", "fakerepo")
@@ -830,7 +830,7 @@ func TestUpFromOwnPR(t *testing.T) {
 		t.Skip("tmux not installed")
 	}
 
-	home := t.TempDir()
+	home := canonicalTempDir(t)
 	bin := filepath.Join(home, "bin")
 	repoDir := filepath.Join(home, "src", "github.com", "fakeowner", "fakerepo")
 	rigBin := filepath.Join(home, "rig")
@@ -974,7 +974,7 @@ func TestReap(t *testing.T) {
 		t.Skip("tmux not installed")
 	}
 
-	home := t.TempDir()
+	home := canonicalTempDir(t)
 	bin := filepath.Join(home, "bin")
 	repoDir := filepath.Join(home, "src", "github.com", "fakeowner", "fakerepo")
 	rigBin := filepath.Join(home, "rig")
@@ -1101,7 +1101,7 @@ func TestParkWake(t *testing.T) {
 		t.Skip("tmux not installed")
 	}
 
-	home := t.TempDir()
+	home := canonicalTempDir(t)
 	bin := filepath.Join(home, "bin")
 	repoDir := filepath.Join(home, "src", "github.com", "fakeowner", "fakerepo")
 	rigBin := filepath.Join(home, "rig")
@@ -1291,6 +1291,19 @@ func waitFor(t *testing.T, timeout time.Duration, description string, ready func
 	}
 }
 
+// canonicalTempDir is t.TempDir with symlinks resolved. On macOS the temp root
+// lives under /var or /tmp, both symlinks into /private, and tmux and agents
+// report their cwd by the physical path. A real HOME has no such split, so
+// tests that compare paths against what tmux reports start from this.
+func canonicalTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 func mustMkdir(t *testing.T, dir string) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -1345,7 +1358,7 @@ func TestDownLeavesRecoverableTombstone(t *testing.T) {
 		t.Skip("tmux not installed")
 	}
 
-	home := t.TempDir()
+	home := canonicalTempDir(t)
 	bin := filepath.Join(home, "bin")
 	repoDir := filepath.Join(home, "src", "github.com", "fakeowner", "fakerepo")
 	rigBin := filepath.Join(home, "rig")
@@ -1481,7 +1494,7 @@ func TestUpFinishesHalfBuiltRig(t *testing.T) {
 		t.Skip("tmux not installed")
 	}
 
-	home := t.TempDir()
+	home := canonicalTempDir(t)
 	bin := filepath.Join(home, "bin")
 	repoDir := filepath.Join(home, "src", "github.com", "fakeowner", "fakerepo")
 	rigBin := filepath.Join(home, "rig")

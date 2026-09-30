@@ -120,10 +120,12 @@ func TestEnrichBoardPRsUsesFreshCache(t *testing.T) {
 	// A fresh cache entry for every rig means no gh work at all: the test would
 	// hang or fail against a real gh if the fan-out ran, so passing is the proof
 	// the cache short-circuited it.
-	cacheRoot := t.TempDir()
-	t.Setenv("XDG_CACHE_HOME", cacheRoot)
-	dir := filepath.Join(cacheRoot, "rig")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	isolateRadarCache(t)
+	path, err := radarCachePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	cached := map[string]radarCacheEntry{
@@ -133,7 +135,7 @@ func TestEnrichBoardPRsUsesFreshCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "radar-prs.json"), blob, 0o644); err != nil {
+	if err := os.WriteFile(path, blob, 0o644); err != nil {
 		t.Fatal(err)
 	}
 

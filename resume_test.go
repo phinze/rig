@@ -15,7 +15,7 @@ func TestEnsureRigRuntimeUpgradesLegacyBareSession(t *testing.T) {
 	if err != nil {
 		t.Skip("tmux not installed")
 	}
-	home := t.TempDir()
+	home := canonicalTempDir(t)
 	bin := filepath.Join(home, "bin")
 	basedir := filepath.Join(home, "workspaces", "legacy-rig")
 	marker := filepath.Join(home, "claude.args")
