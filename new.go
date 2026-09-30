@@ -148,6 +148,8 @@ func createNewRig(target newRigTarget, context string, repo repoRef, agent agent
 		repo:     repo.Name,
 		agent:    agent,
 		prompt:   kickoffPrompt(target.Kickoff, context != ""),
+		rigID:    target.ID,
+		basedir:  target.Basedir,
 	}
 	rs := sessionFor(target.Basedir, m)
 	if err := spawnSession(rs, repoDest, sess); err != nil {

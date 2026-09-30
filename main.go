@@ -66,6 +66,12 @@ func main() {
 		err = runDispatch(args)
 	case "relay":
 		err = runRelay(args)
+	case "send":
+		err = runSend(args)
+	case "reply":
+		err = runReply(args)
+	case "messages":
+		err = runMessages(args)
 	case "review":
 		err = runReview(args)
 	case "pr":

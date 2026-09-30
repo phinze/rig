@@ -93,7 +93,7 @@ func prepareResurrect(id string, nonblocking bool, report io.Writer) (rigSession
 		if err != nil {
 			agent = agentClaude
 		}
-		sess := sessionSpec{agent: agent}
+		sess := sessionSpec{agent: agent, rigID: t.ID, basedir: t.Basedir}
 		if t.resurrectable() {
 			sess.command = agent.resumeCommand(t.Session.ID)
 		} else {
@@ -161,6 +161,8 @@ func prepareResurrect(id string, nonblocking bool, report io.Writer) (rigSession
 		rectoCmd: rectoCommand(),
 		repo:     filepath.Base(primary),
 		agent:    agent,
+		rigID:    t.ID,
+		basedir:  t.Basedir,
 	}
 	if t.resurrectable() {
 		sess.command = agent.resumeCommand(t.Session.ID)

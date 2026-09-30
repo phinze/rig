@@ -167,6 +167,20 @@ relationship, issue, or project update. Sweep renders project rigs as quiet
 context but never offers them for collection; explicit `down` and tombstone
 resurrection still work.
 
+Agent-to-agent messaging lives beside these rather than under relay:
+`rig send <rig> <text>` posts to the session's pid-named claude inbox socket
+(one NDJSON line, delivered at the next turn boundary), `rig reply` answers
+the latest inbound with a correlation id, and `rig messages` reads the
+thread. Rig owns addressing, the envelope, and the per-rig
+`.rig/messages.jsonl` each attempt lands in; the vendor mechanism is a
+transport, and claude's socket is the one implemented because it's the one
+verified end to end by hand. Sends fail loudly with the probe's reason — no
+session, no claude under the agent pane, no socket — and launch lines carry
+`--name <rig-id>` plus a rig-owned settings file with
+crossSessionInbound:accept, since the inbound default would otherwise hold
+every delivered message behind an approval prompt a bypassed rig never
+shows. A message is an instruction with provenance, never consent.
+
 `rig sweep` is the pass over every rig that proposes each one's next step. It's
 plan-then-stream: a Bubble Tea board of checkable actions, then the TUI exits and
 the real gh and teardown output streams. It reuses `parkedDisposition` for state
@@ -346,7 +360,12 @@ is why `sweep_test` measures its shared grid in runes.
 
 External tools learn the current rig through `rig info --format=json`, never by
 parsing `.rig/manifest.toml`. The manifest is Rig's private persistence format;
-the JSON shape is the compatibility boundary. The API exposes the absolute rig
+the JSON shape is the compatibility boundary. The whole-board sibling of `info`
+is `rig census`: one JSON document over every rig for agents and sweeps, in two
+tiers — the full default shares the radar's PR cache (60s TTL, written back
+whole) instead of paying a second gh fan-out, and `--cheap` never calls gh,
+reading repo PRs as null ("not looked") and WIP conservatively. It stays
+read-only; sweep remains the writer of record for observed PRs. The API exposes the absolute rig
 root as lifecycle identity. Review rigs also expose the current repository's
 durable PR locator, so Recto can restore PR context without learning Rig's
 private layout. Recto owns its authored state beneath XDG for standalone and

@@ -196,6 +196,12 @@ type sessionSpec struct {
 	// rather than a different prompt: the conversation it's reopening already
 	// contains everything a kickoff would have said.
 	command string
+	// rigID and basedir identify the rig the session belongs to, which the
+	// launch line needs: claudeLaunchLine writes the rig's claude settings
+	// under basedir and names the session rigID. Empty disables that
+	// affordance rather than inventing a name.
+	rigID   string
+	basedir string
 }
 
 // spawnSession creates the rig's session (recto right, agent left) on the
@@ -235,6 +241,7 @@ func spawnSession(rs rigSession, paneCwd string, sess sessionSpec) error {
 	if agentLine == "" {
 		agentLine = sess.agent.launchCommand(sess.prompt)
 	}
+	agentLine = claudeLaunchLine(sess.basedir, sess.rigID, sess.agent, agentLine)
 	if err := rs.b.SendKeys(agentPane, agentLine); err != nil {
 		return fmt.Errorf("tmux send-keys: %w", err)
 	}
@@ -262,6 +269,7 @@ func spawnProjectSession(rs rigSession, basedir string, sess sessionSpec) error 
 	if agentLine == "" {
 		agentLine = sess.agent.launchProjectCommand(sess.prompt)
 	}
+	agentLine = claudeLaunchLine(basedir, sess.rigID, sess.agent, agentLine)
 	if err := rs.b.SendKeys(agentPane, agentLine); err != nil {
 		return fmt.Errorf("tmux send-keys: %w", err)
 	}

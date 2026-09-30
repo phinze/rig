@@ -155,8 +155,10 @@ func runProject(args []string) error {
 	}
 	rs := sessionFor(basedir, m)
 	err = spawnProjectSession(rs, basedir, sessionSpec{
-		agent:  pick.kind,
-		prompt: projectKickoff(project.Name),
+		agent:   pick.kind,
+		prompt:  projectKickoff(project.Name),
+		rigID:   m.ID,
+		basedir: basedir,
 	})
 	if err != nil {
 		return err

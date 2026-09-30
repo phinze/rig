@@ -201,6 +201,7 @@ func ensureRigRuntimeWithPrompt(basedir string, m manifest, prompt string) (rigS
 	if !rs.live() {
 		err := spawnSession(rs, paneCwd, sessionSpec{
 			rectoCmd: rectoCommand(), repo: repo, agent: m.agentKind(), command: command,
+			rigID: m.ID, basedir: basedir,
 		})
 		if err != nil {
 			return rigSession{}, err
@@ -210,6 +211,10 @@ func ensureRigRuntimeWithPrompt(basedir string, m manifest, prompt string) (rigS
 		}
 		return rs, nil
 	}
+
+	// The spawn branch above wraps via sessionSpec; the live rebuild below
+	// sends the same line by hand, so it folds messaging in here instead.
+	command = claudeLaunchLine(basedir, m.ID, m.agentKind(), command)
 
 	panes, err := adoptLegacyRigPanes(rs, basedir, m)
 	if err != nil {
@@ -301,8 +306,10 @@ func ensureProjectRuntime(basedir string, m manifest, prompt string) (rigSession
 	rs := sessionFor(basedir, m)
 	command := rigResumeCommand(m, prompt)
 	if !rs.live() {
-		return rs, spawnProjectSession(rs, basedir, sessionSpec{agent: m.agentKind(), command: command})
+		return rs, spawnProjectSession(rs, basedir, sessionSpec{agent: m.agentKind(), command: command, rigID: m.ID, basedir: basedir})
 	}
+
+	command = claudeLaunchLine(basedir, m.ID, m.agentKind(), command)
 
 	panes, err := rs.panes()
 	if err != nil {

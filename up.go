@@ -155,6 +155,8 @@ func runUp(args []string) error {
 		repo:     repo.Name,
 		agent:    pick.kind,
 		prompt:   pickupPrompt(tk, context != ""),
+		rigID:    m.ID,
+		basedir:  basedir,
 	}
 	rs := sessionFor(basedir, m)
 	if err := spawnSession(rs, repoDest, sess); err != nil {

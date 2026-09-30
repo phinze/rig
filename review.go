@@ -326,6 +326,8 @@ func reviewPickupPR(pr *prRef, meta prMeta, pick *agentPick) error {
 			"/review-pr %d (%s). You are already on the PR branch in a dedicated jj workspace; skip branch verification.",
 			pr.Number, meta.Title,
 		),
+		rigID:   rigID,
+		basedir: basedir,
 	}
 	rs := sessionFor(basedir, m)
 	if err := spawnSession(rs, repoDest, sess); err != nil {
@@ -435,6 +437,8 @@ func authorPickupPR(pr *prRef, meta prMeta, pick *agentPick) error {
 			"Resuming your PR #%d (%s) on its branch in a dedicated jj workspace. Read the PR and any review feedback, then help me address it.",
 			pr.Number, meta.Title,
 		),
+		rigID:   rigID,
+		basedir: basedir,
 	}
 	rs := sessionFor(basedir, m)
 	if err := spawnSession(rs, repoDest, sess); err != nil {

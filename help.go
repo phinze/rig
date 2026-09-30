@@ -129,6 +129,32 @@ is already running. Use -- before a prompt that starts with a dash.`,
 issue that belongs to a project.`,
 	},
 	{
+		name:    "send",
+		group:   "work",
+		usage:   []string{"send RIG MESSAGE..."},
+		summary: "message another rig's agent, delivered at its next turn boundary",
+		details: `Claude rigs only for now. Reachability is checked first and failure is loud:
+no live session, no claude process, no inbox socket each say so by name.
+Every attempt is logged to the receiver's .rig/messages.jsonl (and yours,
+when you send from a rig). Unlike dispatch, send never wakes a rig.`,
+	},
+	{
+		name:    "reply",
+		group:   "work",
+		usage:   []string{"reply MESSAGE..."},
+		summary: "answer the latest message delivered to this rig",
+		details: `Run inside a rig. Replies are sends with a correlation id; the verb exists
+so an agent's cheap path is also the right one.`,
+	},
+	{
+		name:    "messages",
+		group:   "work",
+		usage:   []string{"messages [RIG] [--format=json|table]"},
+		summary: "read a rig's message thread",
+		details: `Default rig: the one you're in. ✗ rows are failed deliveries, with the
+reason on the following line.`,
+	},
+	{
 		name:    "switch",
 		group:   "navigate",
 		usage:   []string{"switch [QUERY]"},

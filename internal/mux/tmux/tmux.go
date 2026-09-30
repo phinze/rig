@@ -209,6 +209,23 @@ func (b Backend) CurrentPane() string {
 	return os.Getenv("TMUX_PANE")
 }
 
+// PaneRootPID is the OS pid of the process a pane started with — usually a
+// login shell, so a caller looking for the agent walks its descendants. It
+// stays off the Backend interface on purpose: a local tmux is the only
+// backend whose process tree means anything to the caller, and the messaging
+// probe asserts for it rather than making every backend fake an answer.
+func (b Backend) PaneRootPID(pane string) (int, error) {
+	out, err := b.output("display-message", "-p", "-t", pane, "#{pane_pid}")
+	if err != nil {
+		return 0, err
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		return 0, fmt.Errorf("reading pane_pid of %s: %q", pane, strings.TrimSpace(string(out)))
+	}
+	return pid, nil
+}
+
 // Attach switches to the target if already inside tmux, otherwise attaches.
 // A remote instance can only attach from a bare terminal, over ssh -t; from
 // inside a multiplexer the client to move is somewhere else entirely, which

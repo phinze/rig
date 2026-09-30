@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -443,4 +444,62 @@ func updatePiActivity(home string, basedirs []string, out map[string]int64) {
 func pathInside(parent, child string) bool {
 	rel, err := filepath.Rel(parent, child)
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// --- Cross-rig messaging: launch-side support -----------------------------
+
+// claudeRigSettingsPath is the rig-owned settings file every claude launch in
+// this rig layers in via --settings. Rig owns the file outright (rewritten
+// whenever it drifts, so hand edits don't survive a launch), and --settings
+// layers over the user's own settings rather than replacing them, so nothing
+// else about the agent's environment changes.
+func claudeRigSettingsPath(basedir string) string {
+	return filepath.Join(basedir, ".rig", "claude-settings.json")
+}
+
+// claudeRigSettings is what the file carries. crossSessionInbound:accept is
+// the whole point: without it, a message posted to a rig's inbox socket is
+// held behind an approval prompt that a bypassed rig session never surfaces —
+// the message looks delivered and isn't.
+const claudeRigSettings = "{\n  \"crossSessionInbound\": \"accept\"\n}\n"
+
+// ensureClaudeRigSettings writes the settings file when it's missing or
+// stale. Callers warn and continue: a failed write must not block the launch,
+// but it has to be visible — an unwritable file here is exactly the
+// silently-dead messaging the launch flags exist to prevent.
+func ensureClaudeRigSettings(basedir string) {
+	path := claudeRigSettingsPath(basedir)
+	if body, err := os.ReadFile(path); err == nil && string(body) == claudeRigSettings {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		fmt.Fprintf(os.Stderr, "rig: warning: claude messaging settings: %v\n", err)
+		return
+	}
+	if err := os.WriteFile(path, []byte(claudeRigSettings), 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "rig: warning: claude messaging settings: %v\n", err)
+	}
+}
+
+// claudeLaunchLine folds rig messaging into a finalized claude launch line:
+// `--name` pins the session's handle (what the vendor-native SendMessage
+// plane and `rig send` logs address it by), and `--settings` layers in
+// crossSessionInbound. Every agent-line seam calls this right before the
+// line is sent, so fresh launches, resumes, rebuilds, and resurrections all
+// carry the flags — a rig without them can't be replied to. Other agents
+// pass through untouched.
+func claudeLaunchLine(basedir, rigID string, kind agentKind, line string) string {
+	// Empty identity disables the affordance outright rather than inventing
+	// a name — or worse, writing a settings file at a relative path
+	// underneath whatever cwd the process happens to have.
+	if kind != agentClaude || basedir == "" || rigID == "" {
+		return line
+	}
+	rest, ok := strings.CutPrefix(line, "claude ")
+	if !ok {
+		return line
+	}
+	ensureClaudeRigSettings(basedir)
+	return "claude --settings " + shellQuote(claudeRigSettingsPath(basedir)) +
+		" --name " + shellQuote(rigID) + " " + rest
 }
