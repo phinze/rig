@@ -155,6 +155,19 @@ ctrl-r refresh PRs, ctrl-u clear filter, esc/ctrl-c quit.`,
   --format=json  stable machine-readable rows.`,
 	},
 	{
+		name:    "census",
+		group:   "navigate",
+		usage:   []string{"census [--cheap] [--refresh] [--format=json]"},
+		summary: "the whole board as JSON, for agents and sweeps",
+		details: `JSON, always. ls --full is the human table over the same data.
+
+  --cheap    board state only: no gh calls, so repo PR fields read null and
+             WIP is conservative (no PR heads to subtract). The tier for a
+             sweep that polls.
+  --refresh  ignore the PR cache. Full-tier answers younger than 60s normally
+             come from the same cache file the radar keeps warm.`,
+	},
+	{
 		name:    "wake",
 		group:   "navigate",
 		usage:   []string{"wake [QUERY|PR-URL]"},

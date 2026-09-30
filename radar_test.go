@@ -262,7 +262,10 @@ func TestRadarCacheRoundTrip(t *testing.T) {
 	isolateRadarCache(t)
 	now := time.Now().Round(time.Second)
 	prs := map[string][]rigPR{
-		"fresh":   {{Repo: "o/r", Branch: "b", Number: 7, State: "OPEN", Checks: "passing"}},
+		"fresh": {{Repo: "o/r", Branch: "b", prInfo: prInfo{
+			Number: 7, State: "OPEN", Checks: "passing", Title: "shiny",
+			HeadOID: "abc123", FailingChecks: []string{"pop"},
+		}}},
 		"ancient": {{Repo: "o/r", Branch: "c", Number: 8, State: "MERGED"}},
 	}
 	at := map[string]time.Time{
@@ -281,6 +284,11 @@ func TestRadarCacheRoundTrip(t *testing.T) {
 	}
 	if len(e.PRs) != 1 || e.PRs[0].Number != 7 || e.PRs[0].Checks != "passing" {
 		t.Errorf("fresh entry PRs = %+v", e.PRs)
+	}
+	// The fields ls's public JSON drops must still survive the cache: without
+	// the head OID a cache hit can't subtract PR commits from the WIP scan.
+	if e.PRs[0].HeadOID != "abc123" || e.PRs[0].Title != "shiny" || len(e.PRs[0].FailingChecks) != 1 {
+		t.Errorf("internal fields lost in round-trip: %+v", e.PRs[0])
 	}
 	if !e.At.Equal(now) {
 		t.Errorf("fresh entry At = %v, want %v", e.At, now)

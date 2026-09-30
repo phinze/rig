@@ -23,6 +23,11 @@ type prInfo struct {
 	// account for squash-merged work after GitHub deletes the head branch.
 	HeadOID string `json:"-"`
 	Checks  string `json:"checks,omitempty"` // passing | failing | pending | ""
+	// FailingChecks names the individual checks that make Checks read
+	// "failing", so a sweep can see *what* is red — "pop", "lint" — without
+	// digging CI logs. Empty otherwise. It rides the ls JSON and the radar's
+	// PR cache so the census feed can report it without a second fetch.
+	FailingChecks []string `json:"failingChecks,omitempty"`
 	// Review is GitHub's rollup review decision on the PR:
 	// APPROVED | CHANGES_REQUESTED | REVIEW_REQUIRED, or "" when the repo has
 	// no required-review policy and nobody's weighed in. It's the signal park
@@ -35,9 +40,45 @@ type prInfo struct {
 // modern CheckRuns carry status+conclusion, legacy StatusContexts carry state.
 type checkItem struct {
 	Typename   string `json:"__typename"`
+	Name       string `json:"name"`       // CheckRun's name
+	Context    string `json:"context"`    // StatusContext's name
 	Status     string `json:"status"`     // CheckRun: COMPLETED | IN_PROGRESS | QUEUED | ...
 	Conclusion string `json:"conclusion"` // CheckRun: SUCCESS | FAILURE | SKIPPED | ...
 	State      string `json:"state"`      // StatusContext: SUCCESS | PENDING | FAILURE | ERROR
+}
+
+// label is a check's human name: a CheckRun's name or a legacy
+// StatusContext's context.
+func (it checkItem) label() string {
+	if it.Name != "" {
+		return it.Name
+	}
+	return it.Context
+}
+
+// checkItemFailing is the same verdict rollupChecks applies per check: a hard
+// failure on either shape. A check still running is not failing.
+func checkItemFailing(it checkItem) bool {
+	if it.Typename == "StatusContext" {
+		return it.State == "FAILURE" || it.State == "ERROR"
+	}
+	if it.Status != "COMPLETED" {
+		return false
+	}
+	switch it.Conclusion {
+	case "FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE":
+		return true
+	}
+	return false
+}
+
+// checkItemPending is rollupChecks' other per-check verdict: the check hasn't
+// settled yet, on either shape.
+func checkItemPending(it checkItem) bool {
+	if it.Typename == "StatusContext" {
+		return it.State == "PENDING" || it.State == "EXPECTED"
+	}
+	return it.Status != "COMPLETED"
 }
 
 // rollupChecks collapses a PR's checks to one word, mirroring how gh itself
@@ -46,24 +87,8 @@ type checkItem struct {
 func rollupChecks(items []checkItem) string {
 	failing, pending := false, false
 	for _, it := range items {
-		if it.Typename == "StatusContext" {
-			switch it.State {
-			case "FAILURE", "ERROR":
-				failing = true
-			case "PENDING", "EXPECTED":
-				pending = true
-			}
-			continue
-		}
-		// CheckRun: not-yet-COMPLETED is pending; a bad conclusion is failing.
-		if it.Status != "COMPLETED" {
-			pending = true
-			continue
-		}
-		switch it.Conclusion {
-		case "FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE":
-			failing = true
-		}
+		failing = failing || checkItemFailing(it)
+		pending = pending || checkItemPending(it)
 	}
 	switch {
 	case failing:
@@ -75,6 +100,18 @@ func rollupChecks(items []checkItem) string {
 	default:
 		return ""
 	}
+}
+
+// failingCheckNames names the checks behind a "failing" rollup, keeping the
+// fetch's per-check detail alive past the one-word summary.
+func failingCheckNames(items []checkItem) []string {
+	var names []string
+	for _, it := range items {
+		if checkItemFailing(it) {
+			names = append(names, it.label())
+		}
+	}
+	return names
 }
 
 // ghCurrentLogin returns the authenticated user's GitHub login, the identity a
@@ -174,5 +211,6 @@ func prForBranch(nameWithOwner, branch string) (*prInfo, error) {
 	return &prInfo{
 		Number: v.Number, State: v.State, URL: v.URL, Title: v.Title, HeadOID: v.HeadOID,
 		Checks: rollupChecks(v.StatusCheckRollup), Review: v.ReviewDecision,
+		FailingChecks: failingCheckNames(v.StatusCheckRollup),
 	}, nil
 }

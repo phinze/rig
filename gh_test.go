@@ -213,3 +213,26 @@ func TestRollupChecks(t *testing.T) {
 		})
 	}
 }
+
+func TestFailingCheckNames(t *testing.T) {
+	items := []checkItem{
+		{Typename: "CheckRun", Name: "pop", Status: "COMPLETED", Conclusion: "FAILURE"},
+		{Typename: "CheckRun", Name: "lint", Status: "COMPLETED", Conclusion: "SUCCESS"},
+		{Typename: "CheckRun", Name: "slow", Status: "IN_PROGRESS"},
+		{Typename: "StatusContext", Context: "ci/legacy", State: "ERROR"},
+		{Typename: "StatusContext", Context: "ci/quiet", State: "PENDING"},
+	}
+	got := failingCheckNames(items)
+	want := []string{"pop", "ci/legacy"}
+	if len(got) != len(want) {
+		t.Fatalf("failingCheckNames = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("failingCheckNames[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+	if got := failingCheckNames(nil); got != nil {
+		t.Errorf("failingCheckNames(nil) = %v, want nil", got)
+	}
+}

@@ -551,9 +551,56 @@ func (m radarModel) fetchMissing() []tea.Cmd {
 }
 
 // radarCacheEntry is one rig's cached PR answer in ~/.cache/rig/radar-prs.json.
+// The file's readers are the radar and `rig census`'s full tier.
 type radarCacheEntry struct {
-	At  time.Time `json:"at"`
-	PRs []rigPR   `json:"prs,omitempty"`
+	At  time.Time
+	PRs []rigPR
+}
+
+// radarCachePR is a rigPR as the cache file persists it. The on-disk shape is
+// deliberately NOT rigPR's own json tags: those keep HeadOID and Title out of
+// `rig ls`'s public JSON, but a cache entry without the head OID can't
+// subtract the PR's commits from the WIP scan, so every open branch read as
+// uncommitted work on the second look. Spelling the fields out here keeps the
+// public API lean and the cache lossless at the same time.
+type radarCachePR struct {
+	Repo          string   `json:"repo"`
+	Branch        string   `json:"branch"`
+	Number        int      `json:"number"`
+	State         string   `json:"state"`
+	URL           string   `json:"url"`
+	Title         string   `json:"title,omitempty"`
+	HeadOID       string   `json:"headOID,omitempty"`
+	Checks        string   `json:"checks,omitempty"`
+	Review        string   `json:"review,omitempty"`
+	FailingChecks []string `json:"failingChecks,omitempty"`
+}
+
+func cachePRFrom(pr rigPR) radarCachePR {
+	return radarCachePR{
+		Repo: pr.Repo, Branch: pr.Branch,
+		Number: pr.Number, State: pr.State, URL: pr.URL,
+		Title: pr.Title, HeadOID: pr.HeadOID, Checks: pr.Checks,
+		Review: pr.Review, FailingChecks: pr.FailingChecks,
+	}
+}
+
+func (p radarCachePR) rigPR() rigPR {
+	return rigPR{
+		Repo: p.Repo, Branch: p.Branch,
+		prInfo: prInfo{
+			Number: p.Number, State: p.State, URL: p.URL,
+			Title: p.Title, HeadOID: p.HeadOID, Checks: p.Checks,
+			Review: p.Review, FailingChecks: p.FailingChecks,
+		},
+	}
+}
+
+// cacheEntryJSON is the file form of a radarCacheEntry; see radarCachePR for
+// why it isn't marshaled directly.
+type cacheEntryJSON struct {
+	At  time.Time      `json:"at"`
+	PRs []radarCachePR `json:"prs,omitempty"`
 }
 
 func radarCachePath() (string, error) {
@@ -575,9 +622,17 @@ func loadRadarCache() map[string]radarCacheEntry {
 	if err != nil {
 		return nil
 	}
-	var entries map[string]radarCacheEntry
-	if err := json.Unmarshal(blob, &entries); err != nil {
+	var raw map[string]cacheEntryJSON
+	if err := json.Unmarshal(blob, &raw); err != nil {
 		return nil
+	}
+	entries := make(map[string]radarCacheEntry, len(raw))
+	for slug, e := range raw {
+		prs := make([]rigPR, len(e.PRs))
+		for i, p := range e.PRs {
+			prs[i] = p.rigPR()
+		}
+		entries[slug] = radarCacheEntry{At: e.At, PRs: prs}
 	}
 	return entries
 }
@@ -591,12 +646,16 @@ func saveRadarCache(prs map[string][]rigPR, fetchedAt map[string]time.Time) {
 	if err != nil {
 		return
 	}
-	entries := make(map[string]radarCacheEntry)
+	entries := make(map[string]cacheEntryJSON)
 	for slug, at := range fetchedAt {
 		if time.Since(at) > time.Hour {
 			continue
 		}
-		entries[slug] = radarCacheEntry{At: at, PRs: prs[slug]}
+		cached := make([]radarCachePR, len(prs[slug]))
+		for i, pr := range prs[slug] {
+			cached[i] = cachePRFrom(pr)
+		}
+		entries[slug] = cacheEntryJSON{At: at, PRs: cached}
 	}
 	blob, err := json.Marshal(entries)
 	if err != nil {
