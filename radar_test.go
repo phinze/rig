@@ -357,7 +357,7 @@ func TestRadarTailSegs(t *testing.T) {
 		{"stopped peers say nothing", rigStatus{peers: []isoPeer{{"coordinator", "exited"}}}, true, nil},
 	}
 	for _, c := range cases {
-		got := plains(radarTailSegs(c.s, c.fetched))
+		got := plains(radarTailSegs(c.s, c.fetched, ""))
 		if len(got) != len(c.want) {
 			t.Errorf("%s: segs = %q, want %q", c.name, got, c.want)
 			continue
@@ -436,7 +436,8 @@ func TestMatchPositions(t *testing.T) {
 // name (no column of their own) never do.
 func TestRadarMatchFields(t *testing.T) {
 	s := rigStatus{ID: "MIR-1", Title: "add radar"}
-	idHits, titleHits := radarMatchFields("mir radar", s)
+	h := radarMatchFields("mir radar", s)
+	idHits, titleHits := h.id, h.title
 	for _, i := range []int{0, 1, 2} { // "mir" at the head of the id
 		if !idHits[i] {
 			t.Errorf("id rune %d not highlighted", i)
@@ -450,7 +451,7 @@ func TestRadarMatchFields(t *testing.T) {
 
 	// A bare session matched only through its raw name lights up no cell.
 	b := bareSession(mux.Session{Name: "notes-box", Path: "/n"}, "")
-	_, tHits := radarMatchFields("box", b)
+	tHits := radarMatchFields("box", b).title
 	if len(tHits) != 0 {
 		t.Errorf("session-name-only match lit the title: %v", tHits)
 	}
@@ -557,9 +558,9 @@ func TestRadarMatchByRepo(t *testing.T) {
 
 	// Repos are match-only: surfacing the row is the whole job, and there's no
 	// repo column for a hit to light up.
-	idHits, titleHits := radarMatchFields("cloud", s)
-	if len(idHits) != 0 || len(titleHits) != 0 {
-		t.Errorf("repo-only match lit a cell: id=%v title=%v", idHits, titleHits)
+	h := radarMatchFields("cloud", s)
+	if len(h.id) != 0 || len(h.title) != 0 {
+		t.Errorf("repo-only match lit a cell: id=%v title=%v", h.id, h.title)
 	}
 }
 
@@ -579,6 +580,88 @@ func TestRankByRepo(t *testing.T) {
 	}
 }
 
+// A rig is findable by the PRs its tail shows: the bare number, "#N", and
+// "repo#N" all land on one contiguous run, the PR title matches as words, and
+// merged PRs count as much as open ones. Only the "#N" has a cell to light up.
+func TestRadarMatchByPR(t *testing.T) {
+	s := rigStatus{
+		ID:    "MIR-1484",
+		Title: "download metrics",
+		PRs: []rigPR{
+			{Repo: "mirendev/runtime", prInfo: prInfo{Number: 1277, State: "MERGED", Title: "sandbox: retry the pull"}},
+			{Repo: "mirendev/cloud", prInfo: prInfo{Number: 88, State: "OPEN", Title: "wire up billing"}},
+		},
+	}
+	for _, q := range []string{"1277", "#1277", "runtime#1277", "mirendev/runtime#1277", "cloud#88", "retry pull", "billing"} {
+		if !fuzzyMatch(q, radarHaystack(s)) {
+			t.Errorf("query %q should match a rig with PRs %v", q, s.PRs)
+		}
+	}
+	if fuzzyMatch("1299", radarHaystack(s)) {
+		t.Error("a PR number the rig doesn't have should not match")
+	}
+
+	h := radarMatchFields("#1277", s)
+	if len(h.id) != 0 || len(h.title) != 0 {
+		t.Errorf("PR-number match lit the id or title: id=%v title=%v", h.id, h.title)
+	}
+	for _, i := range []int{0, 1, 2, 3, 4} {
+		if !h.pr[0][i] {
+			t.Errorf("rune %d of #1277 not highlighted: %v", i, h.pr[0])
+		}
+	}
+	if len(h.pr[1]) != 0 {
+		t.Errorf("the other PR lit up: %v", h.pr[1])
+	}
+	if h := radarMatchFields("retry", s); len(h.pr) != 0 {
+		t.Errorf("PR-title match lit the number: %v", h.pr)
+	}
+}
+
+// The tail bolds the matched PR number in place, past the repo prefix a
+// multi-repo rig draws, and leaves the other PR alone.
+func TestRadarTailPRHits(t *testing.T) {
+	s := rigStatus{PRs: []rigPR{
+		{Repo: "mirendev/runtime", prInfo: prInfo{Number: 1277}},
+		{Repo: "mirendev/cloud", prInfo: prInfo{Number: 88}},
+	}}
+	hits := radarTailPRHits("1277", s)
+	label := radarPRLabel(s, s.PRs[0])
+	if label != "runtime #1277" {
+		t.Fatalf("label = %q", label)
+	}
+	for i, r := range []rune(label) {
+		if want := i >= 9; hits[0][i] != want {
+			t.Errorf("rune %d (%q) lit = %v, want %v", i, r, hits[0][i], want)
+		}
+	}
+	if len(hits[1]) != 0 {
+		t.Errorf("unmatched PR lit up: %v", hits[1])
+	}
+	if len(radarTailPRHits("", s)) != 0 {
+		t.Error("no filter should light nothing")
+	}
+}
+
+// Typing a number finds both ways a rig can carry it, ticket id and PR, above
+// a rig whose digits merely scatter across its text.
+func TestRankByPRNumber(t *testing.T) {
+	byPR := rigStatus{Slug: "a", ID: "MIR-1500", Title: "flaky deploy", PRs: []rigPR{
+		{Repo: "mirendev/runtime", prInfo: prInfo{Number: 1277, Title: "retry deploys"}},
+	}}
+	byID := rigStatus{Slug: "b", ID: "MIR-1277", Title: "billing export"}
+	decoy := rigStatus{Slug: "c", ID: "MIR-1200", Title: "port 7 to 7.1"}
+	m := radarModel{inflight: []rigStatus{decoy, byPR, byID}}
+	m.setFilter("1277")
+	rows := m.rows()
+	if len(rows) != 3 {
+		t.Fatalf("rows = %d, want all three (decoy scatters 1-2-7-7)", len(rows))
+	}
+	if top := map[string]bool{rows[0].Slug: true, rows[1].Slug: true}; !top["a"] || !top["b"] {
+		t.Errorf("top two = %q, %q; want the PR rig and the MIR-1277 rig", rows[0].Slug, rows[1].Slug)
+	}
+}
+
 // A bare session renders as a neutral row: the open-ring glyph, no PR tail, and
 // its haystack matches on both the path-title and the raw session name.
 func TestRadarBareSession(t *testing.T) {
@@ -595,7 +678,7 @@ func TestRadarBareSession(t *testing.T) {
 	if g, _ := radarGlyph(s, false); g != "○" {
 		t.Errorf("glyph = %q, want ○", g)
 	}
-	if segs := radarTailSegs(s, false); segs != nil {
+	if segs := radarTailSegs(s, false, ""); segs != nil {
 		t.Errorf("bare tail = %v, want nil", segs)
 	}
 	if !fuzzyMatch("rig", radarHaystack(s)) {
@@ -1440,15 +1523,15 @@ func TestRadarHistoryRowRendering(t *testing.T) {
 		t.Errorf("unrecoverable glyph = %q", g)
 	}
 
-	segs := radarTailSegs(live, false)
+	segs := radarTailSegs(live, false, "")
 	if len(segs) != 1 || segs[0].plain != "codex" {
 		t.Errorf("recoverable tail = %+v, want the agent name", segs)
 	}
-	if segs := radarTailSegs(dead, false); len(segs) != 1 || segs[0].plain != "no session" {
+	if segs := radarTailSegs(dead, false, ""); len(segs) != 1 || segs[0].plain != "no session" {
 		t.Errorf("unrecoverable tail = %+v", segs)
 	}
 	// The unfetched ellipsis is the specific wrong answer we're guarding.
-	if segs := radarTailSegs(live, false); segs[0].plain == "…" {
+	if segs := radarTailSegs(live, false, ""); segs[0].plain == "…" {
 		t.Error("history row showed a pending-PR ellipsis it will never resolve")
 	}
 }

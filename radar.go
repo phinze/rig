@@ -1610,12 +1610,14 @@ func stripAgentGlyph(title string) string {
 }
 
 // hayField is one segment of a row's fuzzy haystack, tagged with the rendered
-// column it maps back to ("id", "title") or "" when it's match-only text with no
-// cell of its own (a bare session's raw name). The tag is what lets a match light
-// up the exact runes it landed on.
+// column it maps back to ("id", "title", "pr") or "" when it's match-only text
+// with no cell of its own (a bare session's raw name). The tag is what lets a
+// match light up the exact runes it landed on. A "pr" field also says which of
+// the row's PRs it is, since each one draws its own tail segment.
 type hayField struct {
 	text  string
 	field string
+	pr    int
 }
 
 // radarHayFields is a row's fuzzy haystack split into rendered fields: a rig by
@@ -1632,22 +1634,37 @@ type hayField struct {
 // repo already. They're the full owner/repo: the slash is a boundary the scorer
 // rewards, so "runtime" still lands cleanly on mirendev/runtime, and the owner
 // costs nothing but buys "phinze" as a way to sweep up personal work.
+//
+// So does every PR the row's tail shows, merged and closed included, because
+// "which rig was #1277" is still a question after it lands. Each one is the
+// owner/repo, "#", and the number as one run, then its title: that single run is
+// what lets "1277", "#1277", and "runtime#1277" all land contiguously, and the
+// title is how you find a rig by what its PR says rather than what the ticket
+// said. Only the "#N" has a cell to light up; the title is match-only.
 func radarHayFields(s rigStatus) []hayField {
 	var fields []hayField
 	if s.bare {
-		fields = []hayField{{s.Title, "title"}, {s.session.name, ""}}
+		fields = []hayField{{text: s.Title, field: "title"}, {text: s.session.name}}
 	} else {
-		fields = []hayField{{s.ID, "id"}, {s.Title, "title"}}
+		fields = []hayField{{text: s.ID, field: "id"}, {text: s.Title, field: "title"}}
 	}
 	for _, repo := range s.Repos {
-		fields = append(fields, hayField{repo.Name, ""})
+		fields = append(fields, hayField{text: repo.Name})
 	}
 	for _, c := range s.agents {
 		if ctx := strings.TrimSpace(c.Context); ctx != "" {
-			fields = append(fields, hayField{ctx, ""})
+			fields = append(fields, hayField{text: ctx})
 		}
 	}
+	for i, pr := range s.PRs {
+		fields = append(fields, hayField{radarPRHay(pr), "pr", i})
+	}
 	return fields
+}
+
+// radarPRHay is one PR's haystack text: "owner/repo#N title".
+func radarPRHay(pr rigPR) string {
+	return fmt.Sprintf("%s#%d %s", pr.Repo, pr.Number, pr.Title)
 }
 
 // radarHaystack is the flat text a row is fuzzy-matched against: its fields
@@ -1661,14 +1678,21 @@ func radarHaystack(s rigStatus) string {
 	return strings.Join(parts, " ")
 }
 
+// radarHits is where a query landed on a row's rendered cells, as rune offsets
+// into each: the id, the title, and per PR index the "#N" its tail segment draws.
+type radarHits struct {
+	id, title map[int]bool
+	pr        map[int]map[int]bool
+}
+
 // radarMatchFields buckets the query's matched haystack positions back into the
-// rendered id and title columns, so renderRow can bold exactly the runes that
-// matched. Positions on the joining spaces or in a match-only field (a bare
-// session's name) have no cell and are dropped.
-func radarMatchFields(query string, s rigStatus) (idHits, titleHits map[int]bool) {
-	idHits, titleHits = map[int]bool{}, map[int]bool{}
+// rendered id, title, and PR-number cells, so renderRow can bold exactly the
+// runes that matched. Positions on the joining spaces or in a match-only field
+// (a bare session's name, a PR's repo or title) have no cell and are dropped.
+func radarMatchFields(query string, s rigStatus) radarHits {
+	h := radarHits{id: map[int]bool{}, title: map[int]bool{}, pr: map[int]map[int]bool{}}
 	if query == "" {
-		return
+		return h
 	}
 	fields := radarHayFields(s)
 	var runes []rune
@@ -1683,19 +1707,33 @@ func radarMatchFields(query string, s rigStatus) (idHits, titleHits map[int]bool
 	hits := fuzzyPositions(query, string(runes))
 	for i, f := range fields {
 		start, n := starts[i], len([]rune(f.text))
+		// A PR's cell is its "#N", which sits right after the owner/repo.
+		var numAt, numLen int
+		if f.field == "pr" {
+			pr := s.PRs[f.pr]
+			numAt = len([]rune(pr.Repo))
+			numLen = len(fmt.Sprintf("#%d", pr.Number))
+		}
 		for p := range hits {
 			if p < start || p >= start+n {
 				continue
 			}
-			switch f.field {
+			switch off := p - start; f.field {
 			case "id":
-				idHits[p-start] = true
+				h.id[off] = true
 			case "title":
-				titleHits[p-start] = true
+				h.title[off] = true
+			case "pr":
+				if off >= numAt && off < numAt+numLen {
+					if h.pr[f.pr] == nil {
+						h.pr[f.pr] = map[int]bool{}
+					}
+					h.pr[f.pr][off-numAt] = true
+				}
 			}
 		}
 	}
-	return
+	return h
 }
 
 // fuzzyPositions is the set of haystack rune indices the query matched, unioned
@@ -1762,7 +1800,7 @@ func matchBonus(prev rune) float64 {
 	switch prev {
 	case '/':
 		return scoreMatchSlash
-	case '-', '_', ' ':
+	case '-', '_', ' ', '#':
 		return scoreMatchWord
 	case '.':
 		return scoreMatchDot
@@ -2090,8 +2128,9 @@ type tailSeg struct {
 // as number + review glyph + CI glyph, repo-prefixed when the rig spans repos.
 // The review glyph is what surfaces review state on in-flight rigs too, not just
 // parked ones. Loading reads as a bare "…"; an in-flight rig with no PR trails
-// nothing at all.
-func radarTailSegs(s rigStatus, fetched bool) []tailSeg {
+// nothing at all. Under a filter, a PR number the query landed on bolds its
+// matched digits, so typing "1277" shows you which PR it found.
+func radarTailSegs(s rigStatus, fetched bool, query string) []tailSeg {
 	if s.bare {
 		return nil
 	}
@@ -2128,13 +2167,11 @@ func radarTailSegs(s rigStatus, fetched bool) []tailSeg {
 		disp := parkedDisposition(s.PRs)
 		segs = append(segs, tailSeg{disp, radarStateStyle(disp).Render(disp)})
 	}
-	multi := len(s.PRs) > 1
-	for _, pr := range s.PRs {
-		plain := fmt.Sprintf("#%d", pr.Number)
-		if multi {
-			plain = shortRepo(pr.Repo) + " " + plain
-		}
-		styled := radarPRNumStyle(pr.State).Render(plain)
+	hits := radarTailPRHits(query, s)
+	for i, pr := range s.PRs {
+		plain := radarPRLabel(s, pr)
+		numStyle := radarPRNumStyle(pr.State)
+		styled := highlightRunesBase(plain, hits[i], &numStyle)
 		if g, st := radarReviewGlyph(pr); g != "" {
 			plain += " " + g
 			styled += " " + st.Render(g)
@@ -2146,6 +2183,30 @@ func radarTailSegs(s rigStatus, fetched bool) []tailSeg {
 		segs = append(segs, tailSeg{plain, styled})
 	}
 	return segs
+}
+
+// radarPRLabel is how a PR's number reads in the tail: "#N", repo-prefixed
+// when the rig spans repos.
+func radarPRLabel(s rigStatus, pr rigPR) string {
+	if len(s.PRs) > 1 {
+		return fmt.Sprintf("%s #%d", shortRepo(pr.Repo), pr.Number)
+	}
+	return fmt.Sprintf("#%d", pr.Number)
+}
+
+// radarTailPRHits is radarMatchFields' per-PR "#N" hits moved into each PR
+// label's own coordinates, past the repo prefix a multi-repo rig draws.
+func radarTailPRHits(query string, s rigStatus) map[int]map[int]bool {
+	out := map[int]map[int]bool{}
+	for i, numHits := range radarMatchFields(query, s).pr {
+		label := []rune(radarPRLabel(s, s.PRs[i]))
+		shift := len(label) - len(fmt.Sprintf("#%d", s.PRs[i].Number))
+		out[i] = map[int]bool{}
+		for off := range numHits {
+			out[i][off+shift] = true
+		}
+	}
+	return out
 }
 
 // radarColumns is the resolved column layout for one render: each cell's width
@@ -2162,7 +2223,7 @@ type radarColumns struct {
 // radarTailWidth is the display width of a row's rendered PR tail (plain), the
 // segments joined the way the row draws them. Zero for a row with no tail.
 func (m radarModel) radarTailWidth(s rigStatus) int {
-	segs := radarTailSegs(s, prsFetched(m.prs, s.Slug))
+	segs := radarTailSegs(s, prsFetched(m.prs, s.Slug), "")
 	w := 0
 	for i, seg := range segs {
 		if i > 0 {
@@ -2371,13 +2432,12 @@ func (m radarModel) view() string {
 			// than bolding runes that have shifted out from under their hits.
 			styled := radarFaintStyle.Render(idCell.id)
 			if m.filter != "" && !idCell.clipped {
-				idHits, _ := radarMatchFields(m.filter, s)
-				styled = highlightRunesBase(idCell.id, idHits, &radarFaintStyle)
+				styled = highlightRunesBase(idCell.id, radarMatchFields(m.filter, s).id, &radarFaintStyle)
 			}
 			rightPlain, rightStyled = append(rightPlain, idCell.plain()), append(rightStyled, styled)
 		}
 		if cols.wTail > 0 {
-			for _, seg := range radarTailSegs(s, fetched) {
+			for _, seg := range radarTailSegs(s, fetched, m.filter) {
 				rightPlain, rightStyled = append(rightPlain, seg.plain), append(rightStyled, seg.styled)
 			}
 		}
