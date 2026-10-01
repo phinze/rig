@@ -429,3 +429,19 @@ func TestPostPiMessageBadToken(t *testing.T) {
 		t.Errorf("err = %v, want handshake refusal", err)
 	}
 }
+
+// Claude listens under XDG_RUNTIME_DIR when there is one; without it, Linux
+// spells that /run/user/<uid> and darwin, which has none, uses /tmp.
+func TestClaudeSocketRoot(t *testing.T) {
+	for _, tc := range []struct{ goos, xdg, uid, want string }{
+		{"linux", "/run/user/1000", "1000", "/run/user/1000"},
+		{"linux", "", "1000", "/run/user/1000"},
+		{"darwin", "", "501", "/tmp"},
+		{"darwin", "/custom", "501", "/custom"},
+		{"linux", "", "", ""},
+	} {
+		if got := claudeSocketRoot(tc.goos, tc.xdg, tc.uid); got != tc.want {
+			t.Errorf("claudeSocketRoot(%q, %q, %q) = %q, want %q", tc.goos, tc.xdg, tc.uid, got, tc.want)
+		}
+	}
+}

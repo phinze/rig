@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -214,20 +215,32 @@ func buildClaudeEnvelope(msgID, fromAddr, fromName, text string) claudeEnvelope 
 }
 
 // claudeSocketPath is where a pid's claude session listens, mirroring the
-// vendor's cc-socks convention. XDG_RUNTIME_DIR drives it; /run/user/<uid>
-// is its systemd spelling. Elsewhere (notably darwin) the location is
-// unverified, so the probe says it doesn't know rather than guessing a path.
+// vendor's cc-socks convention: under XDG_RUNTIME_DIR when it's set, else
+// /run/user/<uid> on Linux (its systemd spelling) and /tmp on darwin, which
+// has no runtime dir and where claude was seen listening at
+// /tmp/cc-socks/<pid>.sock.
 func claudeSocketPath(pid int) (string, error) {
-	root := os.Getenv("XDG_RUNTIME_DIR")
-	if root == "" {
-		if u, err := user.Current(); err == nil && u.Uid != "" {
-			root = filepath.Join("/run/user", u.Uid)
-		}
+	uid := ""
+	if u, err := user.Current(); err == nil {
+		uid = u.Uid
 	}
+	root := claudeSocketRoot(runtime.GOOS, os.Getenv("XDG_RUNTIME_DIR"), uid)
 	if root == "" {
 		return "", fmt.Errorf("no XDG_RUNTIME_DIR; claude's socket root is unverified on this platform")
 	}
 	return filepath.Join(root, "cc-socks", fmt.Sprintf("%d.sock", pid)), nil
+}
+
+func claudeSocketRoot(goos, xdg, uid string) string {
+	switch {
+	case xdg != "":
+		return xdg
+	case goos == "darwin":
+		return "/tmp"
+	case uid != "":
+		return filepath.Join("/run/user", uid)
+	}
+	return ""
 }
 
 // procEntry is one row of the process table the walker reads.
