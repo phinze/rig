@@ -21,6 +21,16 @@ func fakeRex(t *testing.T) (log string) {
 	script := `#!/bin/sh
 printf '%s\n' "$*" >> "` + log + `"
 if [ -n "$REX_FAKE_DOWN" ]; then echo 'Error: connecting to the server timed out after 3s: context deadline exceeded' >&2; exit 1; fi
+case "$*" in
+*"client ls --json"*)
+  echo '{"clients":[{"client_id":"client:app","info":{"kind":"app"}},{"client_id":"client:cli","info":{"kind":"cli"}}]}'
+  exit 0 ;;
+*" do session.select "*)
+  if [ -n "$REX_FAKE_NO_REMOTE_CONTROL" ]; then
+    echo 'Error: Rex.app is not accepting actions. Turn on Remote Control in its Settings under Rex Server.' >&2; exit 1
+  fi
+  echo null; exit 0 ;;
+esac
 method=""
 for a in "$@"; do case "$a" in *.*) method="$a";; esac; done
 case "$method" in
@@ -152,15 +162,6 @@ func TestKillSessionAtMissingSocket(t *testing.T) {
 	}
 }
 
-// Inside Rex there is no client switch, and the caller is told so with the
-// sentinel rather than a failed command.
-func TestAttachInsideRexIsNoClientSwitch(t *testing.T) {
-	t.Setenv("REX_SESSION", "session:1")
-	if err := (Backend{}).Attach("~-workspaces-alpha"); !errors.Is(err, mux.ErrNoClientSwitch) {
-		t.Errorf("attach inside rex = %v, want ErrNoClientSwitch", err)
-	}
-}
-
 // Popup opens one layer in the session running the command through a login
 // shell, sized from the focused block's grid (120 columns of 300 and 32 rows
 // of 100, centred) and told that size and its colour.
@@ -186,17 +187,13 @@ func TestPopupOpensASizedLayer(t *testing.T) {
 	}
 }
 
-// Attach decides among four outcomes without ever driving the GUI: the
-// session it is already showing is a no-op, a block in that session is a
-// focus, another live session is a hop, and a session that isn't there is
-// ErrNoClientSwitch rather than a picker that would create it by name.
+// Attach decides among its moves from what's on screen: the session already
+// shown is a no-op, a block in it is a focus, and anything elsewhere is the
+// app told to show it by id, a block's own window included. A session that
+// isn't there is an error rather than a select aimed at nothing.
 func TestAttachInsideRexChoosesItsMove(t *testing.T) {
-	fakeRex(t)
+	log := fakeRex(t)
 	t.Setenv("REX_SESSION", "session:1")
-	var hopped []string
-	saved := hop
-	hop = func(label string) error { hopped = append(hopped, label); return nil }
-	t.Cleanup(func() { hop = saved })
 
 	b := Backend{}
 	if err := b.Attach("~-workspaces-alpha"); err != nil {
@@ -205,38 +202,84 @@ func TestAttachInsideRexChoosesItsMove(t *testing.T) {
 	if err := b.Attach("block:a"); err != nil {
 		t.Errorf("attaching to a block in the shown session = %v, want nil", err)
 	}
-	if len(hopped) != 0 {
-		t.Errorf("hopped %v; neither case needed the picker", hopped)
+	if got := selects(t, log); len(got) != 0 {
+		t.Errorf("selected %v; neither case needed the app", got)
 	}
-	if err := b.Attach("~-workspaces-beta"); !errors.Is(err, mux.ErrNoClientSwitch) {
-		t.Errorf("attaching to an absent session = %v, want ErrNoClientSwitch", err)
+	if err := b.Attach("~-workspaces-beta"); err == nil {
+		t.Error("attaching to an absent session succeeded")
 	}
-	if len(hopped) != 0 {
-		t.Errorf("hopped to a session that does not exist: %v", hopped)
+	if got := selects(t, log); len(got) != 0 {
+		t.Errorf("selected a session that does not exist: %v", got)
 	}
 
-	// The same target once that session is live is the hop.
 	t.Setenv("REX_FAKE_SECOND", "1")
 	if err := b.Attach("~-workspaces-beta"); err != nil {
-		t.Errorf("attaching to a live second session = %v, want the hop to carry it", err)
+		t.Errorf("attaching to a live second session = %v", err)
 	}
-	if len(hopped) != 1 || hopped[0] != "~-workspaces-beta" {
-		t.Errorf("hopped %v, want one hop to the beta session", hopped)
+	got := selects(t, log)
+	if len(got) != 1 || !strings.HasPrefix(got[0], `-C client:app do session.select --args {"session_id":"session:2"}`) {
+		t.Errorf("selects = %q, want the app told to show session:2", got)
 	}
+}
+
+// A block in another session is that session shown at the block's window,
+// with the block focused first so the window opens on it.
+func TestAttachToABlockElsewhereSelectsItsWindow(t *testing.T) {
+	log := fakeRex(t)
+	t.Setenv("REX_SESSION", "session:2")
+	t.Setenv("REX_FAKE_SECOND", "1")
+
+	if err := (Backend{}).Attach("block:z"); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(log)
+	focus := strings.Index(string(raw), "session.focus_block")
+	sel := strings.Index(string(raw), "do session.select")
+	if focus < 0 || sel < 0 || focus > sel {
+		t.Errorf("want focus_block then session.select, got:\n%s", raw)
+	}
+	got := selects(t, log)
+	if len(got) != 1 || !strings.Contains(got[0], `{"session_id":"session:1","window_id":"window:z"}`) {
+		t.Errorf("selects = %q, want session:1 at window:z", got)
+	}
+}
+
+// With the app's Remote Control off, the switch is refused with the app's
+// own reason attached, as ErrNoClientSwitch so the radar keeps it on screen.
+func TestAttachReportsRemoteControlOff(t *testing.T) {
+	fakeRex(t)
+	t.Setenv("REX_SESSION", "session:1")
+	t.Setenv("REX_FAKE_SECOND", "1")
+	t.Setenv("REX_FAKE_NO_REMOTE_CONTROL", "1")
+
+	err := (Backend{}).Attach("~-workspaces-beta")
+	if !errors.Is(err, mux.ErrNoClientSwitch) {
+		t.Fatalf("attach = %v, want ErrNoClientSwitch", err)
+	}
+	if !strings.Contains(err.Error(), "Turn on Remote Control") {
+		t.Errorf("attach = %v, want the app's reason", err)
+	}
+}
+
+func selects(t *testing.T, log string) []string {
+	t.Helper()
+	raw, _ := os.ReadFile(log)
+	var out []string
+	for line := range strings.SplitSeq(strings.TrimSpace(string(raw)), "\n") {
+		if strings.Contains(line, "do session.select") {
+			out = append(out, line)
+		}
+	}
+	return out
 }
 
 // A Backend aimed at another server sends every call there, tags what it
 // lists with its own surface, is never the session this process is inside,
-// and never drives the picker: a label hop could land on this host's session
-// of the same name.
+// and never tells the app to switch.
 func TestRemoteInstanceTargetsItsServer(t *testing.T) {
 	log := fakeRex(t)
 	t.Setenv("REX_SESSION", "session:1")
 	t.Setenv("REX_FAKE_SECOND", "1")
-	var hopped []string
-	saved := hop
-	hop = func(label string) error { hopped = append(hopped, label); return nil }
-	t.Cleanup(func() { hop = saved })
 
 	b := Backend{Server: "https://devbox.example.ts.net", Place: "devbox"}
 	if got := b.Surface(); got != "rex@devbox" {
@@ -262,8 +305,8 @@ func TestRemoteInstanceTargetsItsServer(t *testing.T) {
 	if err := b.Attach("~-workspaces-beta"); !errors.Is(err, mux.ErrNoClientSwitch) {
 		t.Errorf("remote attach = %v, want ErrNoClientSwitch", err)
 	}
-	if len(hopped) != 0 {
-		t.Errorf("hopped %v for a remote row", hopped)
+	if got := selects(t, log); len(got) != 0 {
+		t.Errorf("selected %v for a remote row", got)
 	}
 
 	raw, err := os.ReadFile(log)

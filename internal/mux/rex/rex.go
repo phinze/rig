@@ -9,15 +9,12 @@ package rex
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/phinze/rig/internal/mux"
@@ -337,19 +334,18 @@ func (b Backend) CurrentPane() string {
 }
 
 // Attach from a bare terminal is Rex's text-mode attach. From inside Rex the
-// client can be moved within the session it's showing (a block target is
-// focus_block, the session itself is already there); another session goes
-// through hopToSession, and is ErrNoClientSwitch when that isn't available.
+// app is told to show the target: the session itself, or a block's window
+// with that block focused. A block in the session already on screen needs
+// only the focus.
 func (b Backend) Attach(target string) error {
 	if os.Getenv("REX_SESSION") == "" {
 		cmd := b.command("attach", target)
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 		return cmd.Run()
 	}
-	// The picker hop matches a label, and labels collide across hosts (every
-	// host slugs ~/workspaces/foo the same), so aiming it at another server's
-	// session could land in this one's. Until a client can be moved by
-	// session id, a remote row is a switch by hand.
+	// The app that would be told to switch is a client of this host's
+	// server. Whether it can be pointed at a session on another server it
+	// has added is untested, so a remote row stays a switch by hand.
 	if b.remote() {
 		return mux.ErrNoClientSwitch
 	}
@@ -358,62 +354,90 @@ func (b Backend) Attach(target string) error {
 		return nil
 	}
 	if strings.HasPrefix(target, "block:") {
-		if owner, err := b.sessionOfBlock(target); err == nil && owner == current {
-			return b.SelectPane(target)
+		owner, err := b.sessionOfBlock(target)
+		if err != nil {
+			return err
 		}
+		if err := b.SelectPane(target); err != nil {
+			return err
+		}
+		if owner == current {
+			return nil
+		}
+		id, err := b.SessionID(owner)
+		if err != nil {
+			return err
+		}
+		return b.selectSession(id, b.windowOfBlock(owner, target))
 	}
-	// Only ever aim the picker at a session that exists: typing a name it
-	// can't match makes a new session by that name, which would turn a
-	// mistyped hop into a phantom rig.
-	if b.HasSession(target) && hop(target) == nil {
-		return nil
-	}
-	return mux.ErrNoClientSwitch
-}
-
-// hop is hopToSession, swappable so a test can assert the decision without
-// driving the user's actual windows.
-var hop = hopToSession
-
-// hopToSession moves the GUI client to another session by driving the app's
-// own session picker through AppleScript. It is a stopgap: no API moves a
-// client between sessions, because focus is client-local state the server
-// doesn't hold. When one lands this function goes away and Attach calls it.
-//
-// The work happens in a detached process after a delay, for a caller that is
-// usually the radar running inside a floating layer: that layer closes when
-// the radar exits, and keystrokes aimed at it before then land in the layer
-// rather than the picker. The child gets its own process group so the closing
-// layer's SIGHUP doesn't take it with it.
-func hopToSession(label string) error {
-	if runtime.GOOS != "darwin" {
-		return errNoHop
-	}
-	script := []string{
-		"-e", "on run argv",
-		"-e", "delay 0.4",
-		"-e", "set target to item 1 of argv",
-		"-e", `tell application "Rex" to activate`,
-		"-e", "delay 0.25",
-		"-e", `tell application "System Events" to tell process "Rex"`,
-		"-e", `click menu item "Change Session…" of menu 1 of menu bar item "View" of menu bar 1`,
-		"-e", "delay 0.45",
-		"-e", "keystroke target",
-		"-e", "delay 0.45",
-		"-e", "key code 36",
-		"-e", "end tell",
-		"-e", "end run",
-	}
-	cmd := exec.Command("osascript", append(script, label)...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if err := cmd.Start(); err != nil {
+	id, err := b.SessionID(target)
+	if err != nil {
 		return err
 	}
-	go func() { _ = cmd.Wait() }()
+	return b.selectSession(id, "")
+}
+
+// selectSession tells the app to show the session, and the window in it
+// when one is given. Every failure is ErrNoClientSwitch carrying the reason,
+// so the radar keeps it on screen beside "switch by hand": the common one is
+// the app's Remote Control setting being off, which only the user can fix.
+func (b Backend) selectSession(sessionID, windowID string) error {
+	client, err := b.appClient()
+	if err != nil {
+		return fmt.Errorf("%v: %w", err, mux.ErrNoClientSwitch)
+	}
+	args := obj{"session_id": sessionID}
+	if windowID != "" {
+		args["window_id"] = windowID
+	}
+	raw, err := json.Marshal(args)
+	if err != nil {
+		return err
+	}
+	cmd := b.command("-C", client, "do", "session.select", "--args", string(raw))
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimPrefix(strings.TrimSpace(stderr.String()), "Error: ")
+		if msg == "" {
+			msg = err.Error()
+		}
+		return fmt.Errorf("%s: %w", msg, mux.ErrNoClientSwitch)
+	}
 	return nil
 }
 
-var errNoHop = errors.New("no way to move this client between sessions")
+// appClient is the id of the one Rex.app connected to the server. The CLI
+// would pick it alone when it's the only one, but naming it means a second
+// app (another window host, a paired device) is an error that says so rather
+// than whatever the CLI decides.
+func (b Backend) appClient() (string, error) {
+	raw, err := b.command("client", "ls", "--json").Output()
+	if err != nil {
+		return "", fmt.Errorf("listing rex clients: %w", err)
+	}
+	var out struct {
+		Clients []struct {
+			ID   string `json:"client_id"`
+			Info struct {
+				Kind string `json:"kind"`
+			} `json:"info"`
+		} `json:"clients"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return "", fmt.Errorf("listing rex clients: %w", err)
+	}
+	var apps []string
+	for _, c := range out.Clients {
+		if c.Info.Kind == "app" {
+			apps = append(apps, c.ID)
+		}
+	}
+	if len(apps) != 1 {
+		return "", fmt.Errorf("%d Rex apps are connected, want exactly one", len(apps))
+	}
+	return apps[0], nil
+}
 
 // Popup opens a floating layer centred over the session's active window
 // running the command, closing when it exits. The layer is sized in cells
@@ -805,6 +829,25 @@ func (b Backend) sessionOfWindow(window string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("rex window %s not found in any session", window)
+}
+
+// windowOfBlock is the window holding the block in its tiled layout, or ""
+// when it isn't found, which leaves the app to open the session as usual.
+func (b Backend) windowOfBlock(session, block string) string {
+	v, err := b.view(session)
+	if err != nil {
+		return ""
+	}
+	for _, w := range v.Windows {
+		for _, layer := range w.Layers {
+			for _, bl := range layer.Blocks {
+				if bl.BlockID == block {
+					return w.WindowID
+				}
+			}
+		}
+	}
+	return ""
 }
 
 // Panes lists a session's tiled blocks in window then layout order, with the

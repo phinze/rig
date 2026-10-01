@@ -641,16 +641,23 @@ environment. `adoptLocalPortal` repairs that on the way into any portal
 stamped, it is on screen in Rex, so rig takes `tmux-local`'s session as
 `REX_SESSION` and a remote row goes through the Rex portal. The tty match is the
 whole test, so a tmux in a plain terminal still reads as tmux and refuses. Enter on
-a remote Rex row is `ErrNoClientSwitch` until a client can be moved by session
-id: the picker hop matches a label, and labels collide across hosts.
+a remote Rex row is still `ErrNoClientSwitch`: the app that would be told to
+switch is a client of the local server, and pointing it at a session on a
+server it has added is untested until a second real Rex server exists.
 
 `Attach` returns `mux.ErrNoClientSwitch` from a backend that can't move the
 client between sessions; radar prints a "switch by hand" line and waits for a
-key before its popup closes. The Rex backend answers that itself where it can:
-a target in the session already on screen is a focus, and another live session
-is driven through the app's session picker (`hop`, stubbed in tests). It only
-ever aims the picker at a session that exists, because a name the picker can't
-match becomes a new session by that name. `rig radar --popup` opens the radar over the
+key before its popup closes. The Rex backend switches by session id: a target
+in the session already on screen is a focus, and anything elsewhere is the app
+told to show that session (`rex -C <app> do session.select`), at the block's
+own window when the target is a block. That needs the app's Remote Control
+setting, an opt-in only the user can turn on, so every
+failure of the select comes back as `ErrNoClientSwitch` carrying the app's own
+reason, and the radar's wait-for-a-key keeps "turn on Remote Control" on screen.
+It used to drive the app's session picker over AppleScript, which typed a label
+into a picker that creates a session when nothing matches; don't bring that
+back as a fallback, since a missing setting would then look like the old jank
+working. `rig radar --popup` opens the radar over the
 caller's current session on either backend. Rex is a private alpha: its API
 notes and the reasons behind that package's workarounds live in memex
 (`Projects/Ideas/rex-trial-tmux-profile.md`, `rex-feedback.md`), not here.
