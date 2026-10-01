@@ -592,10 +592,16 @@ session rows, never rigs.
 
 Surfaces elsewhere come from a hand-edited `[surfaces]` table in the config,
 keyed by place and valued `kind+endpoint` (`devbox =
-"rex+https://devbox.tail1234.ts.net"`). `rig config` prints each one with the
-surface it became or why it was skipped, and that's the only place a bad entry
-speaks up: `knownBackends()` runs inside the radar's scan, where a line of
-stderr would draw over the board. `writeRigConfig` carries the table through
+"rex+https://devbox.tail1234.ts.net"`). The same table can also live in
+`~/.config/rig/surfaces.toml`, which rig only reads, for home-manager to own:
+`config.toml` is rewritten whole by every `rig config` write, so nix can't, and
+the 2026-09-28 wipe that took it took every surface with it. A `config.toml`
+entry wins on conflict, and `configuredSurfaces` is a read-only merge that never
+reaches `writeRigConfig`, since a managed entry copied into the rewritten file
+would outlive its removal from the managed one. `rig config` prints each entry
+with the surface it became or why it was skipped, plus its file, and that's the
+only place a bad entry speaks up: `knownBackends()` runs inside the radar's
+scan, where a line of stderr would draw over the board. `writeRigConfig` carries the table through
 every `rig config` write, including entries it can't use. A kind (`rig config
 backend`, a manifest's `backend`) always resolves through `localBackends()`,
 never to a surface, because a rig is built and torn down where it lives.

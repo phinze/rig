@@ -27,6 +27,14 @@ import (
 // everyone's fingers.
 const configName = "config.toml"
 
+// surfacesName is the [surfaces] table's second home, one rig only ever reads.
+// config.toml is rewritten whole by every `rig config` write, so nothing else
+// can own it, and a machine wipe that took it took every surface with it (the
+// 2026-09-28 one did). This file is for a config manager like home-manager to
+// own instead. It's read with the same parser, and only its [surfaces] table
+// counts.
+const surfacesName = "surfaces.toml"
+
 // rigConfig is the whole settable surface. Add a field here, add its entry to
 // configSettings, and both the reader and `rig config` pick it up.
 type rigConfig struct {
@@ -68,6 +76,12 @@ func readRigConfig() rigConfig {
 	if err != nil {
 		return rigConfig{}
 	}
+	return readConfigFile(path)
+}
+
+// readConfigFile is readRigConfig's parser, apart from the path so the
+// managed surfaces file can share it.
+func readConfigFile(path string) rigConfig {
 	f, err := os.Open(path)
 	if err != nil {
 		return rigConfig{}
@@ -423,4 +437,30 @@ func listConfig(out *os.File) error {
 	sw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 	listSurfaces(sw)
 	return sw.Flush()
+}
+
+// surfaceEntry is one configured surface with the file it came from, so `rig
+// config` can say which one to edit.
+type surfaceEntry struct {
+	spec   string
+	source string // configName or surfacesName
+}
+
+// configuredSurfaces is every [surfaces] entry rig reads: the managed file
+// first, then config.toml on top, since a hand edit is the narrower statement
+// and the way to override a managed entry on one machine without a rebuild.
+// It's a read-only view and never goes back through writeRigConfig, which is
+// what keeps a managed entry out of the file rig rewrites. Copied there, it
+// would outlive its removal from the managed file.
+func configuredSurfaces() map[string]surfaceEntry {
+	out := map[string]surfaceEntry{}
+	if dir, err := rigConfigDir(); err == nil {
+		for place, spec := range readConfigFile(filepath.Join(dir, surfacesName)).Surfaces {
+			out[place] = surfaceEntry{spec, surfacesName}
+		}
+	}
+	for place, spec := range readRigConfig().Surfaces {
+		out[place] = surfaceEntry{spec, configName}
+	}
+	return out
 }

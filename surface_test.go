@@ -100,3 +100,46 @@ func TestRemoteTitleFoldsTheFarHome(t *testing.T) {
 		}
 	}
 }
+
+// The managed surfaces file is read beside config.toml, a hand edit there wins
+// on conflict, and a `rig config` write never copies a managed entry into the
+// file it rewrites, where it would outlive its removal from the managed one.
+func TestManagedSurfacesStayManaged(t *testing.T) {
+	isolateRigConfig(t)
+	dir, err := rigConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	managed := "[surfaces]\nfoxtrotbase = \"tmux+ssh://foxtrotbase\"\ndevbox = \"rex+https://managed\"\n"
+	if err := os.WriteFile(filepath.Join(dir, surfacesName), []byte(managed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hand := "[surfaces]\ndevbox = \"rex+https://hand\"\n"
+	if err := os.WriteFile(filepath.Join(dir, configName), []byte(hand), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runConfigCmd([]string{"agent", "cdx"}); err != nil {
+		t.Fatal(err)
+	}
+
+	got := configuredSurfaces()
+	want := map[string]surfaceEntry{
+		"foxtrotbase": {"tmux+ssh://foxtrotbase", surfacesName},
+		"devbox":      {"rex+https://hand", configName},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("surfaces = %v, want %v", got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("surface %q = %v, want %v", k, got[k], v)
+		}
+	}
+	if _, leaked := readRigConfig().Surfaces["foxtrotbase"]; leaked {
+		t.Error("a config write copied the managed foxtrotbase entry into config.toml")
+	}
+}

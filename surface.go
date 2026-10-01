@@ -15,8 +15,9 @@ import (
 
 // A surface is a multiplexer somewhere else that this machine's boards list
 // beside its own: the devbox's Rex server, say, seen from the Mac. Each one is
-// a line in the config's [surfaces] table, keyed by the place name it shows
-// under and valued kind+endpoint:
+// a line in a [surfaces] table, in config.toml or the managed surfaces.toml
+// (see configuredSurfaces), keyed by the place name it shows under and valued
+// kind+endpoint:
 //
 //	[surfaces]
 //	devbox = "rex+https://devbox.tail1234.ts.net"
@@ -73,10 +74,10 @@ func parseSurface(place, spec string) (mux.Backend, error) {
 // rex surface on a machine without the rex CLI is skipped too, since that's an
 // install question and not a typo.
 func surfaceBackends() []mux.Backend {
-	surfaces := readRigConfig().Surfaces
+	surfaces := configuredSurfaces()
 	var out []mux.Backend
 	for _, place := range slices.Sorted(maps.Keys(surfaces)) {
-		b, err := parseSurface(place, surfaces[place])
+		b, err := parseSurface(place, surfaces[place].spec)
 		if err != nil || (b.Name() == "rex" && !rex.Installed()) {
 			continue
 		}
@@ -85,23 +86,24 @@ func surfaceBackends() []mux.Backend {
 	return out
 }
 
-// listSurfaces is `rig config`'s account of the [surfaces] table: each entry
-// with the surface it became, or why it was skipped.
+// listSurfaces is `rig config`'s account of the [surfaces] tables: each entry
+// with the surface it became, or why it was skipped, and the file it came from.
 func listSurfaces(w io.Writer) {
-	surfaces := readRigConfig().Surfaces
+	surfaces := configuredSurfaces()
 	if len(surfaces) == 0 {
 		return
 	}
 	fmt.Fprintln(w, "\nsurfaces:")
 	for _, place := range slices.Sorted(maps.Keys(surfaces)) {
-		b, err := parseSurface(place, surfaces[place])
+		e := surfaces[place]
+		b, err := parseSurface(place, e.spec)
 		switch {
 		case err != nil:
-			fmt.Fprintf(w, "  %s\tskipped: %v\n", place, err)
+			fmt.Fprintf(w, "  %s\tskipped: %v\t%s\n", place, err, e.source)
 		case b.Name() == "rex" && !rex.Installed():
-			fmt.Fprintf(w, "  %s\tskipped: the rex CLI isn't installed here\n", place)
+			fmt.Fprintf(w, "  %s\tskipped: the rex CLI isn't installed here\t%s\n", place, e.source)
 		default:
-			fmt.Fprintf(w, "  %s\t%s\n", b.Surface(), b.Endpoint())
+			fmt.Fprintf(w, "  %s\t%s\t%s\n", b.Surface(), b.Endpoint(), e.source)
 		}
 	}
 }

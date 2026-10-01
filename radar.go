@@ -162,7 +162,7 @@ func radarPick(home string) (*radarChoice, error) {
 		return nil, scan.err
 	}
 	m.apply(scan)
-	m.remoteBusy = len(readRigConfig().Surfaces) > 0
+	m.remoteBusy = len(configuredSurfaces()) > 0
 	m.peersBusy = true
 
 	final, err := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
@@ -554,7 +554,7 @@ func (m radarModel) Init() tea.Cmd {
 // remoteScan starts a pass over the surfaces elsewhere unless one is still
 // out or there are none to ask.
 func (m *radarModel) remoteScan() tea.Cmd {
-	if m.remoteBusy || len(readRigConfig().Surfaces) == 0 {
+	if m.remoteBusy || len(configuredSurfaces()) == 0 {
 		return nil
 	}
 	m.remoteBusy = true
