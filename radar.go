@@ -1325,20 +1325,26 @@ func (m radarModel) displayItems() []radarLine {
 		)
 	}
 	parent := func(p rigStatus) {
-		// A rig with one live agent has one meaningful destination. Fold the
-		// agent's fresher context into the rig row and make Enter target that pane
-		// exactly. With several agents the rig becomes a group label: only the
+		// A row with one live agent has one meaningful destination. Fold the
+		// agent's fresher context into the row and make Enter target that pane
+		// exactly. With several agents a rig becomes a group label: only the
 		// children are choices, so the cursor doesn't stop on an ambiguous parent.
-		// Bare tmux sessions keep their path row because it is their only visible
-		// identity; this folding is specifically about a rig and its agents.
-		if !p.bare && len(p.agents) == 1 {
+		// Bare sessions fold too. Their path is their only identity, but the fold
+		// keeps the row's own title, so nothing is lost; leaving them unfolded
+		// drew every remote rig as two lines, its session and then its agent.
+		if len(p.agents) == 1 {
 			c := p.agents[0]
 			display := p
-			// The subject stays — that is what tells you which rig this is. The
+			// The subject stays — that is what tells you which row this is. The
 			// agent's title rides along verbatim for the cursor row to show, and
 			// Enter targets the agent's pane, which was always the useful half of
 			// the fold.
 			display.activity = strings.TrimSpace(c.Context)
+			// A rig reads attention from its own session; a bare session has
+			// nothing but this agent, so the agent's state is the row's.
+			if p.bare && c.Working {
+				display.Agent = "working"
+			}
 			action := display
 			action.child = true
 			action.session = rigSession{name: c.Target, b: surfaceNamed(c.Surface)}
@@ -2034,7 +2040,12 @@ func radarGlyph(s rigStatus, fetched bool) (string, lipgloss.Style) {
 	}
 	if s.bare {
 		// A plain session carries no rig state to read; an open ring marks it
-		// as "just a place to land" without competing with the rigs' dots.
+		// as "just a place to land" without competing with the rigs' dots. It
+		// lights the way a rig's dot does when the agent folded into it is
+		// working, since that row is the only place the board shows it.
+		if s.Agent == "working" {
+			return "○", radarGoodStyle
+		}
 		return "○", radarFaintStyle
 	}
 	// A half-built rig is the one row Enter cannot land on, so it stays out of

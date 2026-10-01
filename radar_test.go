@@ -532,7 +532,7 @@ func TestRankByAgentContext(t *testing.T) {
 	m := radarModel{sessions: []rigStatus{media, nix}}
 	m.setFilter("ups")
 	rows := m.rows()
-	if len(rows) == 0 || rows[0].session != nix.session {
+	if len(rows) == 0 || rows[0].Title != nix.Title {
 		t.Fatalf("best match = %+v, want the nix-config row (agent context win)", rows[0])
 	}
 }
@@ -999,8 +999,8 @@ func TestDisplayItemsSingleRigAgent(t *testing.T) {
 }
 
 // With several agents the rig is a non-selectable group label and its children
-// are the choices, in order. Bare sessions retain their path parent even with a
-// lone child because that row is their visible identity.
+// are the choices, in order. A bare session with a lone agent folds like a rig
+// does, keeping its path as the row's title, so it's one line and not two.
 func TestDisplayItemsChildren(t *testing.T) {
 	m := radarModel{
 		inflight: []rigStatus{{Slug: "a", ID: "mir-1", Title: "build the thing", Path: "/work/a", agents: []agentChild{
@@ -1013,9 +1013,9 @@ func TestDisplayItemsChildren(t *testing.T) {
 	}
 
 	items := m.displayItems()
-	// One in-flight header, then parent, child, child, parent, child.
-	if len(items) != 6 {
-		t.Fatalf("items = %d, want 6", len(items))
+	// One in-flight header, then parent, child, child, folded session.
+	if len(items) != 5 {
+		t.Fatalf("items = %d, want 5", len(items))
 	}
 	if items[0].header != "IN FLIGHT" {
 		t.Fatalf("header = %q, want IN FLIGHT", items[0].header)
@@ -1023,8 +1023,8 @@ func TestDisplayItemsChildren(t *testing.T) {
 	if !items[1].label {
 		t.Error("multi-agent rig parent is selectable; want group label")
 	}
-	if items[4].label {
-		t.Error("bare session parent became a group label")
+	if s := items[4]; s.label || s.child || s.row.Title != "~/src/meet" || s.row.activity != "Replace emoji" {
+		t.Errorf("bare session = %+v, want one selectable row keeping its path, carrying the agent's title", s)
 	}
 	// The rig's two children carry their window labels and the second closes.
 	c1, c2 := items[2], items[3]
@@ -1034,17 +1034,11 @@ func TestDisplayItemsChildren(t *testing.T) {
 	if !c2.child || c2.row.childKey != "rfd" || !c2.last {
 		t.Errorf("child 2 = %+v, want rfd last", c2)
 	}
-	// The session's lone child drops the label (nothing to disambiguate).
-	c3 := items[5]
-	if !c3.child || c3.row.childKey != "" || c3.row.Title != "Replace emoji" || !c3.last {
-		t.Errorf("session child = %+v, want unlabeled last 'Replace emoji'", c3)
-	}
-
 	// The rig label is skipped; its children remain distinct exact-window choices.
-	// The bare session and its lone child retain their existing separate choices.
+	// The folded bare session is one choice, landing on its agent's pane.
 	rows := m.rows()
-	if len(rows) != 4 { // 2 rig children + bare parent + bare child
-		t.Fatalf("selectable rows = %d, want 4", len(rows))
+	if len(rows) != 3 { // 2 rig children + folded bare session
+		t.Fatalf("selectable rows = %d, want 3", len(rows))
 	}
 	if rowKey(rows[0]) == rowKey(rows[1]) {
 		t.Error("sibling children share a rowKey")
@@ -1055,9 +1049,17 @@ func TestDisplayItemsChildren(t *testing.T) {
 	if rows[0].Slug != "a" {
 		t.Errorf("child lost parent rig identity: %+v", rows[0])
 	}
-	if !rows[2].bare || rows[2].session.name != "meet" || !rows[3].child {
-		t.Errorf("bare session choices = %+v, want parent then lone child", rows[2:])
+	if !rows[2].bare || rows[2].session.name != "meet:0" {
+		t.Errorf("bare session choice = %+v, want the bare row targeting its agent pane", rows[2])
 	}
+	if g, _ := radarGlyph(items[4].row, true); g != "○" || items[4].row.Agent != "" {
+		t.Errorf("idle folded session = %q/%q, want a plain ring", g, items[4].row.Agent)
+	}
+	m.sessions[0].agents[0].Working = true
+	if row := m.displayItems()[4].row; row.Agent != "working" {
+		t.Errorf("folded session agent = %q, want working carried from its lone agent", row.Agent)
+	}
+	m.sessions[0].agents[0].Working = false
 
 	// Under a filter the HUD holds: a matched parent still dangles its children,
 	// and rows that miss drop out entirely.
