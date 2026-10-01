@@ -255,9 +255,9 @@ func deadPID(t *testing.T) int {
 
 // liveSock stands up a throwaway unix socket so findRigPeer's stat check
 // sees the real thing, and returns its path.
-func liveSock(t *testing.T, dir, name string) string {
+func liveSock(t *testing.T, name string) string {
 	t.Helper()
-	path := filepath.Join(dir, name)
+	path := filepath.Join(shortSocketDir(t), name)
 	ln, err := net.Listen("unix", path)
 	if err != nil {
 		t.Fatal(err)
@@ -284,11 +284,11 @@ func TestRigPeerDir(t *testing.T) {
 func TestFindRigPeer(t *testing.T) {
 	dir := t.TempDir()
 	basedir := t.TempDir()
-	live := liveSock(t, dir, "live.sock")
+	live := liveSock(t, "live.sock")
 	writeRigPeerRecord(t, dir, "live.json", basedir, os.Getpid(), live, "tok-live", "2026-09-30T16:00:00Z")
 	dead := deadPID(t)
 	writeRigPeerRecord(t, dir, "dead.json", basedir, dead, filepath.Join(dir, "dead.sock"), "tok-dead", "2026-09-30T15:00:00Z")
-	writeRigPeerRecord(t, dir, "other.json", filepath.Join(basedir, "elsewhere"), os.Getpid(), liveSock(t, dir, "other.sock"), "tok-other", "2026-09-30T17:00:00Z")
+	writeRigPeerRecord(t, dir, "other.json", filepath.Join(basedir, "elsewhere"), os.Getpid(), liveSock(t, "other.sock"), "tok-other", "2026-09-30T17:00:00Z")
 
 	p, err := findRigPeer(dir, basedir)
 	if err != nil {
@@ -308,8 +308,8 @@ func TestFindRigPeer(t *testing.T) {
 func TestFindRigPeerFreshestWins(t *testing.T) {
 	dir := t.TempDir()
 	basedir := t.TempDir()
-	writeRigPeerRecord(t, dir, "old.json", basedir, os.Getpid(), liveSock(t, dir, "old.sock"), "tok-old", "2026-09-30T15:00:00Z")
-	writeRigPeerRecord(t, dir, "new.json", basedir, os.Getpid(), liveSock(t, dir, "new.sock"), "tok-new", "2026-09-30T17:00:00Z")
+	writeRigPeerRecord(t, dir, "old.json", basedir, os.Getpid(), liveSock(t, "old.sock"), "tok-old", "2026-09-30T15:00:00Z")
+	writeRigPeerRecord(t, dir, "new.json", basedir, os.Getpid(), liveSock(t, "new.sock"), "tok-new", "2026-09-30T17:00:00Z")
 	p, err := findRigPeer(dir, basedir)
 	if err != nil {
 		t.Fatal(err)
@@ -321,7 +321,7 @@ func TestFindRigPeerFreshestWins(t *testing.T) {
 
 func TestFindRigPeerNoMatch(t *testing.T) {
 	dir := t.TempDir()
-	writeRigPeerRecord(t, dir, "other.json", t.TempDir(), os.Getpid(), liveSock(t, dir, "other.sock"), "tok", "2026-09-30T17:00:00Z")
+	writeRigPeerRecord(t, dir, "other.json", t.TempDir(), os.Getpid(), liveSock(t, "other.sock"), "tok", "2026-09-30T17:00:00Z")
 	_, err := findRigPeer(dir, t.TempDir())
 	if err == nil || !strings.Contains(err.Error(), "no rig-peer presence for") {
 		t.Errorf("err = %v, want the no-presence failure", err)
@@ -381,8 +381,7 @@ func serveRigPeer(t *testing.T, ln net.Listener, wantToken string, receipt map[s
 
 func newRigPeerServer(t *testing.T) (net.Listener, rigPeerPresence) {
 	t.Helper()
-	dir := t.TempDir()
-	ln, err := net.Listen("unix", filepath.Join(dir, "peer.sock"))
+	ln, err := net.Listen("unix", filepath.Join(shortSocketDir(t), "peer.sock"))
 	if err != nil {
 		t.Fatal(err)
 	}
