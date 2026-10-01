@@ -33,7 +33,8 @@ func rigKindOf(s rigStatus) rigKind {
 	// a Linear pickup is the issue identifier and nothing else. "pr-<n>" is
 	// rig's own reserved id for a PR-derived rig rather than a team prefix, so
 	// it's the one shape this must not read as an issue.
-	if !strings.HasPrefix(s.ID, "pr-") && leadingIssueID(s.ID) == s.ID {
+	// A bare session has no id, and would otherwise match as the empty one.
+	if s.ID != "" && !strings.HasPrefix(s.ID, "pr-") && leadingIssueID(s.ID) == s.ID {
 		return rigKindTicket
 	}
 	return rigKindLoose

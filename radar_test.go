@@ -1673,9 +1673,11 @@ func TestRadarRigKindFallsBackToTheID(t *testing.T) {
 		{ID: "pr-1153", Title: "Add miren top"},
 		{ID: "lets-try-depot-ci-again", Title: "lets try depot ci again"},
 		{ID: "fix-500-errors", Title: "fix 500 errors"},
+		// A bare session has no id at all, and "" is not an issue id.
+		bareSession(mux.Session{Surface: "tmux@foxtrotbase", Name: "~/workspaces/x/runtime", Path: "/home/p/workspaces/x/runtime"}, "/home/p"),
 	} {
 		if got := rigKindOf(row); got != rigKindLoose {
-			t.Errorf("%s = %v, want loose", row.ID, got)
+			t.Errorf("%q = %v, want loose", row.Title, got)
 		}
 	}
 }
