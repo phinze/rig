@@ -103,16 +103,70 @@ func runningPeers(peers []isoPeer) int {
 	return n
 }
 
-// removeISOLeftovers finishes what `iso stop` was supposed to: every container
-// and network iso labelled with this session and workspace. It runs after iso
+// discoverISOSessions finds every iso session that has anything (a container,
+// network, or volume) from a project directory under basedir. Teardown can't
+// derive these from the rig: rig exports dev-<id>-<sub> as ISO_SESSION, but an
+// agent is free to start another, and mir-1994 left a test-mir-1994-runtime
+// running beside its dev session for exactly that reason. iso's own labels
+// answer the question rig can't, whatever the session was called, and they
+// also catch the eph- sessions an interrupted `iso run` leaves behind.
+//
+// Workspace is the project dir as iso recorded it, which is where `iso stop`
+// has to run from. Cache volumes carry neither label and never match.
+func discoverISOSessions(basedir string) ([]isoCleanup, error) {
+	base := resolvePath(basedir)
+	format := `{{.Label "iso.session"}}` + "\t" + `{{.Label "iso.project.dir"}}`
+	seen := map[isoCleanup]bool{}
+	var found []isoCleanup
+	for _, args := range [][]string{{"container", "ls", "-a"}, {"network", "ls"}, {"volume", "ls"}} {
+		out, err := isoDocker(append(args, "--filter", "label=iso.managed=true", "--format", format)...)
+		if err != nil {
+			return nil, fmt.Errorf("listing iso %ss: %w", args[0], err)
+		}
+		for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
+			session, dir, ok := strings.Cut(line, "\t")
+			if !ok || session == "" || dir == "" || !isUnder(resolvePath(dir), base) {
+				continue
+			}
+			item := isoCleanup{Workspace: dir, Session: session}
+			if !seen[item] {
+				seen[item] = true
+				found = append(found, item)
+			}
+		}
+	}
+	return found, nil
+}
+
+// mergeISOCleanups adds discovered sessions to the derived ones, keeping one
+// entry per (workspace, session) and a stable order so a retried job replays
+// the same sequence.
+func mergeISOCleanups(derived, discovered []isoCleanup) []isoCleanup {
+	key := func(c isoCleanup) string { return resolveExistingPath(c.Workspace) + "\x00" + c.Session }
+	seen := map[string]bool{}
+	var out []isoCleanup
+	for _, c := range append(derived, discovered...) {
+		if k := key(c); !seen[k] {
+			seen[k] = true
+			out = append(out, c)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return key(out[i]) < key(out[j]) })
+	return out
+}
+
+// removeISOLeftovers finishes what `iso stop` was supposed to: every container,
+// network, and session volume iso labelled with this session and workspace. It runs after iso
 // stop on purpose, so the normal path finds nothing; it exists because iso stop
 // warns and moves on when a network still has endpoints, and `iso peers up`
 // attaches the session's services to a peers network that stop tries to remove
 // before those services are gone. That left runtime-dev-mir-1979-runtime-iso-peers
 // behind on 2026-10-01, and -mir-1827- before it without anyone noticing.
 //
-// Volumes are never touched. iso stop already removes the session's own, and
-// the cache volumes are shared across every session of the repo.
+// Only session volumes (iso.volume.type=session) are touched. iso stop
+// normally removes those itself; cache volumes are shared across every session
+// of the repo and carry no session label anyway, but the type filter makes that
+// a rule rather than a coincidence.
 //
 // It fails closed, like compose cleanup: a resource that survives is an error,
 // so the teardown job stays on disk and reap retries it.
@@ -122,12 +176,19 @@ func removeISOLeftovers(item isoCleanup) error {
 	sessionFilter := "label=iso.session=" + item.Session
 
 	list := func(kind string) ([]string, error) {
-		args := []string{kind, "ls", "-a"}
-		if kind == "network" {
-			args = []string{kind, "ls"}
+		args := []string{kind, "ls"}
+		switch kind {
+		case "container":
+			args = append(args, "-a")
+		case "volume":
+			args = append(args, "--filter", "label=iso.volume.type=session")
+		}
+		id := `{{.ID}}`
+		if kind == "volume" {
+			id = `{{.Name}}` // volumes have no ID; the name is the handle
 		}
 		args = append(args, "--filter", "label=iso.managed=true", "--filter", sessionFilter,
-			"--format", `{{.ID}}`+"\t"+`{{.Label "iso.project.dir"}}`)
+			"--format", id+"\t"+`{{.Label "iso.project.dir"}}`)
 		out, err := isoDocker(args...)
 		if err != nil {
 			return nil, fmt.Errorf("listing iso %ss for %s: %w", kind, item.Session, err)
@@ -142,7 +203,7 @@ func removeISOLeftovers(item isoCleanup) error {
 		return ids, nil
 	}
 
-	for _, kind := range []string{"container", "network"} {
+	for _, kind := range []string{"container", "network", "volume"} {
 		ids, err := list(kind)
 		if err != nil {
 			return err
@@ -159,7 +220,7 @@ func removeISOLeftovers(item isoCleanup) error {
 			return fmt.Errorf("removing iso %ss for %s: %w: %s", kind, item.Session, err, strings.TrimSpace(string(out)))
 		}
 	}
-	for _, kind := range []string{"container", "network"} {
+	for _, kind := range []string{"container", "network", "volume"} {
 		ids, err := list(kind)
 		if err != nil {
 			return err

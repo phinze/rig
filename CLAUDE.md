@@ -272,8 +272,16 @@ because iso stop leaks the peers network: it tries to remove that network
 while the session's services are still attached, warns, and never retries.
 That happens whether the peers are running or already gone, so it's every
 teardown after a `peers up`, not an edge. The sweep is scoped by session label *and*
-project dir, never touches volumes (cache volumes are shared across sessions),
-and fails closed so reap retries it. Don't swap the label read for `iso
+project dir, touches only `iso.volume.type=session` volumes (cache volumes are
+shared across sessions), and fails closed so reap retries it.
+
+Which sessions to stop is discovered, not derived. Rig exports
+`dev-<id>-<sub>` as `ISO_SESSION`, but agents start others (mir-1994 left a
+`test-` session running beside its dev one), so `discoverISOSessions` asks
+docker for every session with a container, network, or volume whose
+`iso.project.dir` is under the basedir, and the derived name is merged in only
+as a floor. Discovery happens at prepare time and fails closed like compose,
+because once the basedir is quarantined the labels are the only record left. Don't swap the label read for `iso
 peers down` on the theory that iso stop forgot to call it: current iso calls
 it from stop, and it has the same ordering bug.
 

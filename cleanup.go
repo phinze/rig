@@ -320,6 +320,11 @@ func prepareTeardownJob(basedir string, m manifest) (*teardownJob, error) {
 			job.Compose = append(job.Compose, project)
 		}
 		sort.Strings(job.Compose)
+		sessions, err := discoverISOSessions(basedir)
+		if err != nil {
+			return nil, fmt.Errorf("discovering iso sessions: %w", err)
+		}
+		job.ISOWorkspaces = mergeISOCleanups(job.ISOWorkspaces, sessions)
 	}
 	if err := writeTeardownJob(job); err != nil {
 		return nil, fmt.Errorf("persisting teardown job: %w", err)
@@ -380,15 +385,15 @@ func executeTeardownJobForPlatform(job *teardownJob, platform string) error {
 			return fmt.Errorf("iso cleanup required but iso is unavailable")
 		}
 		for _, item := range job.ISOWorkspaces {
-			if dirExists(item.Workspace) {
+			if dirExists(filepath.Join(item.Workspace, ".iso")) {
 				fmt.Fprintf(os.Stderr, "rig: iso stop --session %s\n", item.Session)
 				if err := isoStop(item.Workspace, item.Session); err != nil {
 					return fmt.Errorf("iso stop %s: %w", item.Session, err)
 				}
 			}
-			// Outside the dirExists guard: iso stop needs the workspace to find
-			// its project, but the leftovers are found by label, so a retry
-			// after quarantine can still finish them.
+			// Outside the guard: iso stop needs the project's .iso to run at all,
+			// but the leftovers are found by label, so a retry after quarantine
+			// (or a session whose .iso is gone) can still finish them.
 			if err := removeISOLeftovers(item); err != nil {
 				return err
 			}
