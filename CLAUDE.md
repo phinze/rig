@@ -262,6 +262,21 @@ passwordless sudo are both there. Do not replace them with a chmod standing in
 for root ownership: that is exactly the conflation that produced the bug, and
 the tests encoded it for as long as the code did.
 
+iso peers (`iso peers up`, which runtime's `hack/dev-distributed` drives) are
+the one part of a dev environment rig doesn't start but has to clean up and
+show. Everything goes through iso's docker labels (`iso.session`,
+`iso.project.dir`, `iso.peer`), never its CLI, because `iso peers status`
+answers for one workspace from its cwd and a board wants every workspace in a
+single `docker ps`. Teardown runs `removeISOLeftovers` after `iso stop`
+because iso stop leaks the peers network: it tries to remove that network
+while the session's services are still attached, warns, and never retries.
+That happens whether the peers are running or already gone, so it's every
+teardown after a `peers up`, not an edge. The sweep is scoped by session label *and*
+project dir, never touches volumes (cache volumes are shared across sessions),
+and fails closed so reap retries it. Don't swap the label read for `iso
+peers down` on the theory that iso stop forgot to call it: current iso calls
+it from stop, and it has the same ordering bug.
+
 Teardown is reversible for a week. `prepareTeardownJob` writes a tombstone
 before it destroys anything, so `down` and `sweep` both get it without knowing
 it exists and nothing can kill a rig by a path that skips it. The field that

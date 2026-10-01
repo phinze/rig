@@ -380,12 +380,17 @@ func executeTeardownJobForPlatform(job *teardownJob, platform string) error {
 			return fmt.Errorf("iso cleanup required but iso is unavailable")
 		}
 		for _, item := range job.ISOWorkspaces {
-			if !dirExists(item.Workspace) {
-				continue
+			if dirExists(item.Workspace) {
+				fmt.Fprintf(os.Stderr, "rig: iso stop --session %s\n", item.Session)
+				if err := isoStop(item.Workspace, item.Session); err != nil {
+					return fmt.Errorf("iso stop %s: %w", item.Session, err)
+				}
 			}
-			fmt.Fprintf(os.Stderr, "rig: iso stop --session %s\n", item.Session)
-			if err := isoStop(item.Workspace, item.Session); err != nil {
-				return fmt.Errorf("iso stop %s: %w", item.Session, err)
+			// Outside the dirExists guard: iso stop needs the workspace to find
+			// its project, but the leftovers are found by label, so a retry
+			// after quarantine can still finish them.
+			if err := removeISOLeftovers(item); err != nil {
+				return err
 			}
 		}
 	}

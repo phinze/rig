@@ -346,6 +346,15 @@ func TestRadarTailSegs(t *testing.T) {
 		{"parked changes", rigStatus{Parked: true, PRs: []rigPR{
 			{Repo: "o/api", Number: 7, State: "OPEN", Review: "CHANGES_REQUESTED"},
 		}}, true, []string{"changes requested", "#7 "}},
+		// Peers are local, so they lead the tail before the PR fetch lands, and
+		// only running ones count.
+		{"peers before fetch", rigStatus{peers: []isoPeer{
+			{"coordinator", "running"}, {"runner1", "running"}, {"runner2", "exited"},
+		}}, false, []string{"2 peers", "…"}},
+		{"one peer with pr", rigStatus{peers: []isoPeer{{"coordinator", "running"}}, PRs: []rigPR{
+			{Repo: "o/api", Number: 7, State: "OPEN", Checks: "passing"},
+		}}, true, []string{"1 peer", "#7  "}},
+		{"stopped peers say nothing", rigStatus{peers: []isoPeer{{"coordinator", "exited"}}}, true, nil},
 	}
 	for _, c := range cases {
 		got := plains(radarTailSegs(c.s, c.fetched))

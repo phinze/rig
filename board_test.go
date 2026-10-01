@@ -116,6 +116,35 @@ func TestRigsForJSONFullTierWithNoPR(t *testing.T) {
 	}
 }
 
+// Peers ride the cheap tier: they're a local docker fact, not a PR, so a
+// repo with peers says so in either tier and a repo without them omits the key.
+func TestRigsForJSONCarriesPeers(t *testing.T) {
+	row := rigStatus{ID: "mir-1858", Repos: []rigRepo{
+		{Name: "mirendev/runtime", Peers: []isoPeer{{"coordinator", "running"}, {"runner1", "exited"}}},
+		{Name: "mirendev/cloud"},
+	}}
+	blob, err := json.Marshal(rigsForJSON([]rigStatus{row}, false)[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var round struct {
+		Repos []map[string]any `json:"repos"`
+	}
+	if err := json.Unmarshal(blob, &round); err != nil {
+		t.Fatal(err)
+	}
+	peers, ok := round.Repos[0]["peers"].([]any)
+	if !ok || len(peers) != 2 {
+		t.Fatalf("runtime peers = %v, want two", round.Repos[0]["peers"])
+	}
+	if p := peers[0].(map[string]any); p["name"] != "coordinator" || p["state"] != "running" {
+		t.Errorf("peer = %v, want coordinator running", p)
+	}
+	if _, ok := round.Repos[1]["peers"]; ok {
+		t.Error("a repo with no peers should omit the key")
+	}
+}
+
 func TestEnrichBoardPRsUsesFreshCache(t *testing.T) {
 	// A fresh cache entry for every rig means no gh work at all: the test would
 	// hang or fail against a real gh if the fan-out ran, so passing is the proof

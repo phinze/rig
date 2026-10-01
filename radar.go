@@ -163,6 +163,7 @@ func radarPick(home string) (*radarChoice, error) {
 	}
 	m.apply(scan)
 	m.remoteBusy = len(readRigConfig().Surfaces) > 0
+	m.peersBusy = true
 
 	final, err := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
 	if err != nil {
@@ -297,6 +298,12 @@ type radarModel struct {
 	remote     radarRemoteMsg
 	remoteBusy bool
 
+	// iso peers, keyed by resolved workspace, on the same off-render clock as
+	// the remote pass: docker answers in milliseconds, but a wedged daemon must
+	// never hold the first frame.
+	peers     map[string][]isoPeer
+	peersBusy bool
+
 	prs         map[string][]rigPR
 	fetchedAt   map[string]time.Time // slug → when its PRs were fetched
 	pending     map[string]bool      // slug → PR fetch in flight
@@ -384,6 +391,30 @@ func (scan radarScanMsg) merged(remote radarRemoteMsg) radarScanMsg {
 	maps.Copy(agents, remote.agents)
 	scan.agents = agents
 	return scan
+}
+
+// radarPeersMsg is one docker pass over iso peers. A failed pass keeps the
+// previous answer rather than blanking every peer cell.
+type radarPeersMsg struct {
+	peers map[string][]isoPeer
+	err   error
+}
+
+// radarPeersCmd lists iso peers off the render path.
+func radarPeersCmd() tea.Cmd {
+	return func() tea.Msg {
+		peers, err := isoPeersByWorkspace()
+		return radarPeersMsg{peers, err}
+	}
+}
+
+// peersScan starts a peers pass unless one is still out.
+func (m *radarModel) peersScan() tea.Cmd {
+	if m.peersBusy {
+		return nil
+	}
+	m.peersBusy = true
+	return radarPeersCmd()
 }
 
 type radarPRsMsg struct {
@@ -512,6 +543,10 @@ func (m radarModel) Init() tea.Cmd {
 	// since Init's receiver is a copy and can't record that it fired one.
 	if m.remoteBusy {
 		cmds = append(cmds, radarRemoteCmd())
+	}
+	// Same trick as remoteBusy: radarPick marks it before the program starts.
+	if m.peersBusy {
+		cmds = append(cmds, radarPeersCmd())
 	}
 	return tea.Batch(cmds...)
 }
@@ -761,7 +796,17 @@ func (m radarModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 
 	case radarTickMsg:
-		return m, tea.Batch(radarScanCmd(m.home), m.remoteScan(), radarTickCmd())
+		return m, tea.Batch(radarScanCmd(m.home), m.remoteScan(), m.peersScan(), radarTickCmd())
+
+	case radarPeersMsg:
+		m.peersBusy = false
+		if msg.err == nil {
+			m.peers = msg.peers
+			if m.lastScan.statuses != nil {
+				m.apply(m.lastScan)
+			}
+		}
+		return m, nil
 
 	case radarRemoteMsg:
 		m.remote, m.remoteBusy = msg, false
@@ -1062,6 +1107,7 @@ func (m *radarModel) apply(scan radarScanMsg) {
 		if prs, ok := m.prs[s.Slug]; ok {
 			s.PRs = prs
 		}
+		s.peers = peersUnder(m.peers, s.Path)
 		switch {
 		case m.current != sessionKey{} && session == m.current:
 			current := s
@@ -2063,10 +2109,21 @@ func radarTailSegs(s rigStatus, fetched bool) []tailSeg {
 	if s.Building != "" {
 		return []tailSeg{{"half-built", radarWarnStyle.Render("half-built")}}
 	}
-	if !fetched {
-		return []tailSeg{{"…", radarFaintStyle.Render("…")}}
-	}
+	// Peers lead the tail and don't wait on the PR fetch: they're a local
+	// fact, and a dev environment still running is worth seeing before
+	// anything about review. Only running ones count; a stopped peer costs
+	// nothing and the board JSON has the full list.
 	var segs []tailSeg
+	if n := runningPeers(s.peers); n > 0 {
+		plain := fmt.Sprintf("%d peers", n)
+		if n == 1 {
+			plain = "1 peer"
+		}
+		segs = append(segs, tailSeg{plain, radarWarnStyle.Render(plain)})
+	}
+	if !fetched {
+		return append(segs, tailSeg{"…", radarFaintStyle.Render("…")})
+	}
 	if s.Parked {
 		disp := parkedDisposition(s.PRs)
 		segs = append(segs, tailSeg{disp, radarStateStyle(disp).Render(disp)})

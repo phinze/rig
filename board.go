@@ -28,14 +28,27 @@ const boardPRTTL = time.Minute
 // degrade-quiet — see the mir-822 note on rigDirtyRepos. No PRs: the cheap tier
 // leaves rigStatus.PRs nil, which the encoder renders as null per repo.
 func enrichBoardLocal(statuses []rigStatus) {
+	peers := boardPeers()
 	for i := range statuses {
-		enrichRowLocal(&statuses[i])
+		enrichRowLocal(&statuses[i], peers)
 	}
 }
 
+// boardPeers is the one docker call a board read makes for iso peers, shared
+// by every row. Degrade-quiet like the rest of the local tier: a daemon that
+// won't answer costs the peers lists, not the board.
+func boardPeers() map[string][]isoPeer {
+	peers, err := isoPeersByWorkspace()
+	if err != nil {
+		return nil
+	}
+	return peers
+}
+
 // enrichRowLocal is enrichBoardLocal's per-row half, also used by the full tier
-// before the PR pass so both tiers agree on branches, WIP, and links.
-func enrichRowLocal(s *rigStatus) {
+// before the PR pass so both tiers agree on branches, WIP, links, and peers.
+// peers is boardPeers' answer, keyed by resolved workspace path.
+func enrichRowLocal(s *rigStatus, peers map[string][]isoPeer) {
 	s.Links = rigLinks{URL: s.TrackerURL}
 	if s.TrackerID != "" {
 		id := s.TrackerID
@@ -68,7 +81,7 @@ func enrichRowLocal(s *rigStatus) {
 	repos := make([]rigRepo, 0, len(subdirs))
 	byName := make(map[string]int, len(subdirs)) // rigRepo index per owner/repo
 	for _, sub := range subdirs {
-		repo := rigRepo{Name: m.Repos[sub]}
+		repo := rigRepo{Name: m.Repos[sub], Peers: peers[resolvePath(filepath.Join(s.Path, sub))]}
 		if branches, err := repoBranches(m, sub, filepath.Join(s.Path, sub)); err == nil {
 			repo.Branches = branches
 		}
@@ -100,8 +113,9 @@ func enrichRowLocal(s *rigStatus) {
 // into the same cache, so a board read warms the radar and vice versa. Returns
 // the timestamp of the oldest answer used; fresh answers count as now.
 func enrichBoardPRs(statuses []rigStatus, refresh bool, now time.Time) *time.Time {
+	peers := boardPeers()
 	for i := range statuses {
-		enrichRowLocal(&statuses[i])
+		enrichRowLocal(&statuses[i], peers)
 	}
 
 	cache := map[string]radarCacheEntry{}

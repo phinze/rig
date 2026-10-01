@@ -285,6 +285,10 @@ type rigStatus struct {
 	// session to attach, and no PRs to fetch, so the pipelines that do those
 	// things skip them.
 	stone *tombstone
+	// peers is every iso peer container under the rig's repos, from the
+	// radar's own peers pass (radarPeersCmd). The board's JSON carries the
+	// same facts per repo instead, on rigRepo.
+	peers []isoPeer
 }
 
 // rigLinks is the rig's identity in its trackers: the identifier as a plain
@@ -317,6 +321,10 @@ type rigRepo struct {
 	// even the existence of work is a guess (the mir-822 lesson — name a broken
 	// state rather than silently reporting clean).
 	WIPUncertain bool `json:"wipUncertain,omitempty"`
+	// Peers is the repo's iso peer containers (`iso peers up`), running or
+	// not, read from iso's docker labels. Absent when there are none or
+	// docker couldn't be asked; see isopeers.go.
+	Peers []isoPeer `json:"peers,omitempty"`
 }
 
 // rigInbox condenses a rig's pinned notifications to a count and the loudest
@@ -574,11 +582,12 @@ type rigRowJSON struct {
 // flat list. PRs is null in the cheap tier ("not looked") and a possibly-empty
 // list in the full tier; the pointer is what keeps those apart.
 type rigRepoJSON struct {
-	Name         string   `json:"name"`
-	Branches     []string `json:"branches,omitempty"`
-	PRs          *[]rigPR `json:"prs"`
-	WIP          bool     `json:"wip"`
-	WIPUncertain bool     `json:"wipUncertain,omitempty"`
+	Name         string    `json:"name"`
+	Branches     []string  `json:"branches,omitempty"`
+	PRs          *[]rigPR  `json:"prs"`
+	WIP          bool      `json:"wip"`
+	WIPUncertain bool      `json:"wipUncertain,omitempty"`
+	Peers        []isoPeer `json:"peers,omitempty"`
 }
 
 // encodeRigsJSON marshals the board as the ls json API: a document, never a
@@ -608,6 +617,7 @@ func rigsForJSON(rows []rigStatus, looked bool) []rigRowJSON {
 				Branches:     repo.Branches,
 				WIP:          repo.WIP,
 				WIPUncertain: repo.WIPUncertain,
+				Peers:        repo.Peers,
 			}
 			if looked {
 				empty := []rigPR{}
