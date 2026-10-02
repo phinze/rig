@@ -681,6 +681,34 @@ PR fan-out (their answer came with the row), and refuse park and wake with a
 note to do it where they live. Changing a rig across hosts is a write path
 serve deliberately doesn't have.
 
+Serve is also what puts those rows on the radar's first frame. Every popup is
+a fresh process, so on its own it starts with no remote board and a cold
+breaker, and pays a round trip (or a whole timeout, for a host that's gone)
+before either the rows or the unreachable banner can show. Serve runs all day,
+so it polls the configured rig surfaces and writes what it heard to
+`~/.cache/rig/radar-remote.json`. Its cadence backs off from the time since a
+radar on this machine last touched `radar-open`: wait that long again, between
+the radar's 2s tick and 30m, which doubles the gap every pass, so an afk night
+costs a couple dozen polls and a laptop
+asleep beside an always-on VM costs the VM one failed connect every half hour.
+The backoff reads wall time, because a Mac's monotonic clock stops in sleep. `radarPick` seeds the board from
+that file and `radarRemoteCmd` reads it before asking anything itself. The split
+is local-live, expensive-in-the-daemon: the local scan stays in-process because
+it's cheap and it's where a stale answer hurts (you just made a rig), while
+remote boards and PRs, the tiers that cost a network, belong to the process
+that outlives the popup. Freshness decides who a reader believes. An entry
+younger than `remoteFreshFor` was written by something still polling, so it is
+the live answer and its "down" goes in the banner. An older one, up to a day, paints its rows
+faint while the radar asks for itself, and never repeats its reachability;
+the day is for the board from before the laptop slept, which is nearly always
+still right. A
+host that stops answering has its board removed from the file rather than
+kept, because those rows are exactly the ones the next open mustn't paint. The
+radar writes the same file when it has to ask, so a machine without serve
+still paints its last answer, faint, on the next open. What
+serve polls never feeds `/v1/board`, which keeps describing one host; folding
+it back in would have two hosts re-exporting each other's boards forever.
+
 Serve has exactly one action, `POST /v1/show`, and it exists because of where
 the screen is. The Mac radar entering a foxtrotbase row opens its own portal,
 since the client is on the Mac. foxtrotbase's radar entering a Mac row can't:

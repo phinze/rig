@@ -292,6 +292,9 @@ type rigStatus struct {
 	// radar's own peers pass (radarPeersCmd). The board's JSON carries the
 	// same facts per repo instead, on rigRepo.
 	peers []isoPeer
+	// stale marks a row from another host's board that nobody has vouched for
+	// recently: painted from the remote cache while the radar asks for itself.
+	stale bool
 }
 
 // rigLinks is the rig's identity in its trackers: the identifier as a plain

@@ -134,6 +134,7 @@ func runServe(args []string) error {
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
 	go refreshServedPRs(ctx, home, time.Minute)
+	go pollServedSurfaces(ctx, servePollEvery)
 
 	fmt.Fprintf(os.Stderr, "rig serve: listening on %s for %s\n", ln.Addr(), strings.Join(allow, ", "))
 	build := func() serveDoc {

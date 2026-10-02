@@ -95,9 +95,13 @@ type remoteBoard struct {
 }
 
 // boardSource is a surface that can describe its rigs and not only its
-// sessions, in one round trip.
+// sessions, in one round trip, and whose answer can be cached (remotecache.go).
 type boardSource interface {
+	mux.Backend
+	Endpoint() string
 	Board() (remoteBoard, error)
+	poll(now time.Time) remoteCacheEntry
+	lift(serveDoc) remoteBoard
 }
 
 func (b servedBackend) Board() (remoteBoard, error) {

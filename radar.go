@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/phinze/rig/internal/mux"
@@ -161,6 +160,7 @@ func radarPick(home string) (*radarChoice, error) {
 	if scan.err != nil {
 		return nil, scan.err
 	}
+	m.remote = radarRemoteSeed(time.Now())
 	m.apply(scan)
 	m.remoteBusy = len(configuredSurfaces()) > 0
 	m.peersBusy = true
@@ -359,8 +359,10 @@ type radarRemoteMsg struct {
 	sessions []mux.Session
 	agents   map[sessionKey][]agentChild
 	rigs     []rigStatus       // rigs a rig surface described; see served.go
+	panes    []mux.Pane        // a rig surface's agent panes, until agents are derived
 	icons    map[string]string // place → the glyph its serve chose
 	down     []string          // places that couldn't be reached on this pass
+	stale    map[string]bool   // places painted from an old cached board
 }
 
 // reachability is what a backend implements when it can tell "down" from
@@ -372,42 +374,55 @@ type reachability interface{ Unreachable() bool }
 // draws from local state first and gains the remote rows when they answer,
 // because a popup opened a hundred times a day can't wait on a tailnet, and
 // one surface that has dropped off would otherwise hold the first frame for a
-// whole timeout.
+// whole timeout. A rig surface that serve has polled recently is read from the
+// remote cache instead of asked (remotecache.go), so with serve running this
+// pass touches the network only for tmux+ssh and rex surfaces.
 func radarRemoteCmd() tea.Cmd {
 	return func() tea.Msg {
-		var listed, served []mux.Backend
+		var listed []mux.Backend
+		var served []boardSource
 		for _, b := range surfaceBackends() {
-			if _, ok := b.(boardSource); ok {
-				served = append(served, b)
+			if s, ok := b.(boardSource); ok {
+				served = append(served, s)
 			} else {
 				listed = append(listed, b)
 			}
 		}
+		now := time.Now()
+		touchRadarHeartbeat(now)
 		msg := radarRemoteMsg{sessions: allSessions(listed), agents: liveAgentChildren(listed)}
-		// A rig surface answers sessions, panes, and rigs in one fetch, so it's
-		// asked once rather than once per listing.
-		var panes []mux.Pane
-		msg.icons = map[string]string{}
-		boards := eachBackend(served, func(b mux.Backend) remoteBoard {
-			board, _ := b.(boardSource).Board()
-			return board
-		})
-		for i, board := range boards {
-			if board.icon != "" {
-				msg.icons[surfacePlace(served[i].Surface())] = board.icon
-			}
-			msg.sessions = append(msg.sessions, board.sessions...)
-			msg.rigs = append(msg.rigs, board.rigs...)
-			panes = append(panes, board.panes...)
+		ask := msg.addCached(served, loadRemoteCache(), now, false)
+		answers := pollServed(ask, now)
+		for _, b := range ask {
+			msg.add(b, answers[b.Endpoint()], false)
 		}
-		maps.Copy(msg.agents, agentChildren(panes, time.Now().Unix()))
-		for _, b := range slices.Concat(listed, served) {
+		msg.derive(now)
+		for _, b := range listed {
 			if r, ok := b.(reachability); ok && r.Unreachable() {
 				msg.down = append(msg.down, surfacePlace(b.Surface()))
 			}
 		}
 		return msg
 	}
+}
+
+// radarRemoteSeed is what the first frame shows of the surfaces elsewhere:
+// the remote cache and nothing asked. Fresh entries are the live answer;
+// older ones paint faint until the first pass replaces them.
+func radarRemoteSeed(now time.Time) radarRemoteMsg {
+	var msg radarRemoteMsg
+	msg.addCached(servedSurfaces(), loadRemoteCache(), now, true)
+	msg.derive(now)
+	return msg
+}
+
+// derive turns the collected agent panes into the board's agent rows.
+func (msg *radarRemoteMsg) derive(now time.Time) {
+	if msg.agents == nil {
+		msg.agents = map[sessionKey][]agentChild{}
+	}
+	maps.Copy(msg.agents, agentChildren(msg.panes, now.Unix()))
+	msg.panes = nil
 }
 
 // merged is the local scan with the latest remote pass folded in.
@@ -677,27 +692,15 @@ type cacheEntryJSON struct {
 	PRs []radarCachePR `json:"prs,omitempty"`
 }
 
-func radarCachePath() (string, error) {
-	dir, err := os.UserCacheDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "rig", "radar-prs.json"), nil
-}
+const radarPRCacheFile = "radar-prs.json"
+
+func radarCachePath() (string, error) { return cacheFilePath(radarPRCacheFile) }
 
 // loadRadarCache reads the PR cache, degrading to empty on any trouble — the
 // cache is purely an accelerator, never a source of errors.
 func loadRadarCache() map[string]radarCacheEntry {
-	path, err := radarCachePath()
-	if err != nil {
-		return nil
-	}
-	blob, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
 	var raw map[string]cacheEntryJSON
-	if err := json.Unmarshal(blob, &raw); err != nil {
+	if !readCacheFile(radarPRCacheFile, &raw) {
 		return nil
 	}
 	entries := make(map[string]radarCacheEntry, len(raw))
@@ -711,15 +714,10 @@ func loadRadarCache() map[string]radarCacheEntry {
 	return entries
 }
 
-// saveRadarCache writes the current PR answers back, atomically (write +
-// rename) so a radar killed mid-write can't leave a torn file. Entries older
-// than an hour are dropped: they'd be refetched anyway and this keeps the
-// file from accreting rigs long since torn down.
+// saveRadarCache writes the current PR answers back. Entries older than an
+// hour are dropped: they'd be refetched anyway and this keeps the file from
+// accreting rigs long since torn down.
 func saveRadarCache(prs map[string][]rigPR, fetchedAt map[string]time.Time) {
-	path, err := radarCachePath()
-	if err != nil {
-		return
-	}
 	entries := make(map[string]cacheEntryJSON)
 	for slug, at := range fetchedAt {
 		if time.Since(at) > time.Hour {
@@ -731,18 +729,7 @@ func saveRadarCache(prs map[string][]rigPR, fetchedAt map[string]time.Time) {
 		}
 		entries[slug] = cacheEntryJSON{At: at, PRs: cached}
 	}
-	blob, err := json.Marshal(entries)
-	if err != nil {
-		return
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, blob, 0o644); err != nil {
-		return
-	}
-	_ = os.Rename(tmp, path)
+	writeCacheFile(radarPRCacheFile, entries)
 }
 
 func (m radarModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -1154,6 +1141,8 @@ func (m *radarModel) apply(scan radarScanMsg) {
 				s.PRs = prs
 			}
 			s.peers = peersUnder(m.peers, s.Path)
+		} else {
+			s.stale = m.remote.stale[surfacePlace(s.remote.surface)]
 		}
 		switch {
 		case m.current != sessionKey{} && session == m.current:
@@ -1176,10 +1165,12 @@ func (m *radarModel) apply(scan radarScanMsg) {
 			continue
 		}
 		s := bareSession(ts, m.home)
+		place := surfacePlace(ts.Surface)
 		// A host that chose an icon is drawn by it rather than by name.
-		if place := surfacePlace(ts.Surface); m.remote.icons[place] != "" {
+		if m.remote.icons[place] != "" {
 			s.Title = placeLabel(place, m.remote.icons[place]) + " " + strings.TrimPrefix(s.Title, place+":")
 		}
+		s.stale = m.remote.stale[place]
 		if key == m.current {
 			currentRow = &s
 			continue
@@ -2588,8 +2579,12 @@ func (m radarModel) view() string {
 
 		// Bold the title runes the query matched; the title may be front- or
 		// middle-collapsed, so match against the string as displayed.
+		// A row painted from an old remote board is faint until its host answers.
 		titleCell := title
-		if m.filter != "" {
+		switch {
+		case s.stale:
+			titleCell = highlightRunesBase(title, fuzzyPositions(m.filter, title), &radarFaintStyle)
+		case m.filter != "":
 			titleCell = highlightRunes(title, fuzzyPositions(m.filter, title))
 		}
 		var b strings.Builder
