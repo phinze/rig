@@ -135,8 +135,8 @@ func renderRigInstructions(basedir string, m manifest) string {
 	// rig is spared a bullet about a command that would only tell it no.
 	if m.Tracker == "" || m.Tracker == "linear" {
 		b.WriteString("- If this work uncovers something that could change a sibling issue or the\n")
-		b.WriteString("  wider Linear project, run `rig relay <discovery>`. It sends a private local\n")
-		b.WriteString("  note to the project's overview rig; it does not post to Linear.\n")
+		b.WriteString("  wider Linear project, run `rig relay <discovery>`. It messages the project's\n")
+		b.WriteString("  overview rig agent directly; it does not post to Linear.\n")
 	}
 	b.WriteString("- Parking and tearing down are the human's moves, made from the radar's\n")
 	b.WriteString("  leave menu (ctrl+x). `rig park` and `rig down` refuse from inside this\n")
@@ -176,8 +176,9 @@ func renderProjectRigInstructions(basedir string, m manifest) string {
 		fmt.Fprintf(&b, "- Linear project: %s\n", m.TrackerURL)
 	}
 	b.WriteString("- Start each pass with `rig project status --format=json`. It joins Linear\n")
-	b.WriteString("  scope and issue state to live rig, agent, PR, review, and CI state, and\n")
-	b.WriteString("  includes private discoveries relayed from task rigs in its inbox.\n")
+	b.WriteString("  scope and issue state to live rig, agent, PR, review, and CI state.\n")
+	b.WriteString("- Task rigs report discoveries with `rig relay`, which arrives here as a\n")
+	b.WriteString("  message from that rig. Answer one with `rig reply`, or `rig send ISSUE`.\n")
 	b.WriteString("- Treat Linear as the durable shared record. Draft comments, issue changes,\n")
 	b.WriteString("  project updates, and other externally visible writing for approval before\n")
 	b.WriteString("  posting it.\n")

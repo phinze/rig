@@ -161,13 +161,17 @@ Project coordination stays explicit. `rig dispatch MIR-123 <prompt>` wakes a
 stopped or parked task rig in the background and supplies the resumed agent's
 next prompt; it refuses an already-running agent rather than guessing whether
 the process is at an input boundary. `rig relay <discovery>` travels the other
-way, posting a private local notification from a Linear issue rig to its
-project rig. The overview agent can then draft the durable Linear comment,
-relationship, issue, or project update. Sweep renders project rigs as quiet
-context but never offers them for collection; explicit `down` and tombstone
-resurrection still work.
+way, from a Linear issue rig to its project rig. It is addressing over `rig
+send`: the Linear lookup finds the project rig, and delivery, logging, and
+failing loudly are send's. It used to post to the notify store, where a
+discovery waited until the project agent next read `rig project status`; don't
+reintroduce that as a fallback for an unreachable project rig, since the task
+agent hearing "not running" is the point. The overview agent can then draft the
+durable Linear comment, relationship, issue, or project update. Sweep renders
+project rigs as quiet context but never offers them for collection; explicit
+`down` and tombstone resurrection still work.
 
-Agent-to-agent messaging lives beside these rather than under relay:
+Agent-to-agent messaging is the layer relay now sits on:
 `rig send <rig> <text>` delivers to the session at its next turn boundary,
 `rig reply` answers the latest inbound with a correlation id, and `rig
 messages` reads the thread. Rig owns addressing, the envelope, and the

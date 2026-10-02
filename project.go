@@ -102,7 +102,6 @@ type projectSnapshot struct {
 	GeneratedAt time.Time              `json:"generated_at"`
 	Project     linearProjectDetail    `json:"project"`
 	Issues      []projectIssueSnapshot `json:"issues"`
-	Inbox       []notification         `json:"inbox,omitempty"`
 }
 
 var uuidRe = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
@@ -401,13 +400,6 @@ func buildProjectSnapshot(client *linearClient, projectID string) (projectSnapsh
 		return projectSnapshot{}, err
 	}
 	allStatuses := rigStatuses(rigs, home, time.Now())
-	var overviewID string
-	for _, status := range allStatuses {
-		if status.Kind == "project" && status.Tracker == "linear" && status.TrackerID == projectID {
-			overviewID = status.ID
-			break
-		}
-	}
 	issueIDs := make(map[string]bool, len(issues))
 	for _, issue := range issues {
 		issueIDs[strings.ToUpper(issue.Identifier)] = true
@@ -434,9 +426,6 @@ func buildProjectSnapshot(client *linearClient, projectID string) (projectSnapsh
 	}
 
 	snapshot := projectSnapshot{GeneratedAt: time.Now(), Project: project}
-	if overviewID != "" {
-		snapshot.Inbox = notificationsForRig(activeNotifications(), overviewID)
-	}
 	for _, issue := range issues {
 		snapshot.Issues = append(snapshot.Issues, projectIssueSnapshot{
 			linearProjectIssue: issue,
@@ -465,9 +454,6 @@ func printProjectSnapshot(snapshot projectSnapshot) error {
 			missing = append(missing, "project update")
 		}
 		fmt.Fprintf(os.Stderr, "rig: no %s on record\n", strings.Join(missing, " or "))
-	}
-	for _, line := range notifyBanner(snapshot.Inbox) {
-		fmt.Fprintln(os.Stderr, line)
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
 	for _, issue := range snapshot.Issues {

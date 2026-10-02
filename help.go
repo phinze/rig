@@ -124,9 +124,11 @@ is already running. Use -- before a prompt that starts with a dash.`,
 		name:    "relay",
 		group:   "work",
 		usage:   []string{"relay MESSAGE..."},
-		summary: "send a note from a Linear issue rig to its project rig",
-		details: `Local only; nothing is posted to Linear. The current rig must track a Linear
-issue that belongs to a project.`,
+		summary: "message the project rig for this Linear issue rig's project",
+		details: `Resolves the current rig's Linear issue to its project's overview rig and
+delivers like send: at that agent's next turn boundary, attributed to this rig,
+and failing loudly when it isn't reachable. Nothing is posted to Linear. The
+current rig must track a Linear issue that belongs to a project.`,
 	},
 	{
 		name:    "send",

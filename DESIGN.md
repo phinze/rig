@@ -837,11 +837,17 @@ Two small commands close the orchestration loop. `rig dispatch` restores a
 stopped or parked task rig without navigating to it and includes the new
 assignment in the agent's resume command. It refuses a live agent process,
 because tmux cannot tell Rig whether that process is safely waiting for input.
-`rig relay` sends a project-relevant discovery in the other direction, through
-Rig's existing private notification store. It does not post to Linear. The
-project agent decides where the fact belongs and drafts the external write for
-approval, keeping Linear as the durable shared record without turning every
-half-formed observation into public activity.
+`rig relay` sends a project-relevant discovery in the other direction. It owns
+only the addressing (current rig, to its Linear issue, to that issue's project,
+to the local project rig) and delivers through `rig send`, so the discovery
+lands at the project agent's next turn boundary and a project rig that isn't
+running says so to the task agent. It first went through Rig's private
+notification store, which the project agent only read on its next `rig project
+status`; that was a slow inbox checked by hand, and send turned out to be
+strictly better. Relay still does not post to Linear. The project agent decides
+where the fact belongs and drafts the external write for approval, keeping
+Linear as the durable shared record without turning every half-formed
+observation into public activity.
 
 Project rigs have their own terminal condition too: explicit human teardown.
 Sweep keeps them in the quiet inventory but never checks them for collection.

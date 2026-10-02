@@ -3,9 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
-	"time"
 )
 
 type linearIssueProject struct {
@@ -17,10 +15,23 @@ type linearIssueProject struct {
 	} `json:"project"`
 }
 
-// runRelay sends a private, local discovery from a task rig to the overview
-// rig for its Linear project. It deliberately does not write to Linear: the
-// overview agent can connect the discovery to sibling issues and draft the
-// durable external update with a human in the loop.
+// relayDeliver is the send underneath relay, a seam so tests can stand in for
+// a live agent session.
+var relayDeliver = deliverRigMessage
+
+// runRelay sends a discovery from a task rig to the overview rig for its
+// Linear project. Relay owns only the addressing: a task agent knows its
+// issue, not which local rig coordinates that issue's project, so this
+// resolves one to the other and hands the text to the same delivery `rig send`
+// uses. It deliberately does not write to Linear: the overview agent can
+// connect the discovery to sibling issues and draft the durable external
+// update with a human in the loop.
+//
+// It used to post to the notify store, which reached the project agent only
+// when it next read `rig project status`, so a discovery could sit unread for
+// a day. Delivery now lands at the agent's next turn boundary and fails loudly
+// when the project rig isn't running, which is the answer the task agent
+// needs to hear rather than a note filed where nobody is looking.
 func runRelay(args []string) error {
 	message := strings.TrimSpace(strings.Join(args, " "))
 	if message == "" {
@@ -78,17 +89,10 @@ func runRelay(args []string) error {
 	if overview == nil {
 		return fmt.Errorf("no project rig for %s; run `rig project %s` first", issue.Project.Name, shellQuote(issue.Project.Name))
 	}
-	key := "relay-" + strconv.FormatInt(time.Now().UnixNano(), 10)
-	if err := runNotifyPost([]string{
-		"--source", "rig:" + strings.ToLower(issue.Identifier),
-		"--key", key,
-		"--title", "Discovery from " + issue.Identifier,
-		"--body", message,
-		"--rig", overview.ID,
-	}); err != nil {
-		return err
+	text := fmt.Sprintf("Discovery from %s (via rig relay):\n%s", issue.Identifier, message)
+	if err := relayDeliver(*overview, text, "", currentSender()); err != nil {
+		return fmt.Errorf("relaying to %s: %w", overview.ID, err)
 	}
-	fmt.Fprintf(os.Stderr, "rig: relayed %s discovery to %s\n", issue.Identifier, overview.ID)
 	return nil
 }
 
