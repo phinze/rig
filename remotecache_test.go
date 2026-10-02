@@ -95,7 +95,7 @@ func TestPollServedRecords(t *testing.T) {
 	other := "http://elsewhere:1"
 	recordRemote(map[string]remoteCacheEntry{other: {At: time.Now(), Doc: &doc}}, time.Now())
 
-	pollServed([]boardSource{b}, time.Now())
+	pollServed([]boardSource{b}, time.Now(), false)
 	cache := loadRemoteCache()
 	if e := cache[b.URL]; e.Doc == nil || len(e.Doc.Rigs) != 1 || e.Down {
 		t.Fatalf("entry = %+v, want the board", e)
@@ -105,7 +105,7 @@ func TestPollServedRecords(t *testing.T) {
 	}
 
 	srv.Close()
-	pollServed([]boardSource{b}, time.Now())
+	pollServed([]boardSource{b}, time.Now(), false)
 	if e := loadRemoteCache()[b.URL]; e.Doc != nil || !e.Down {
 		t.Errorf("entry after the host went away = %+v, want no board and down", e)
 	}
@@ -196,5 +196,52 @@ func TestServePollCadence(t *testing.T) {
 	}
 	if servePollDue(now, now.Add(-time.Minute), time.Time{}) {
 		t.Error("never looked: want the ceiling, not a poll a minute on")
+	}
+}
+
+// A peer's GET says it's watching only when its fetch was a person's, and
+// only that wakes this host's PR refresher.
+func TestServedWatchedMarksPeerLook(t *testing.T) {
+	peerLooked.Store(0)
+	t.Cleanup(func() { peerLooked.Store(0) })
+	srv := httptest.NewServer(serveHandler(newServeGate([]string{"nobody"}, nil, true), func() serveDoc { return serveDoc{} }))
+	defer srv.Close()
+	b := fixtureServed(t, "fx", srv.URL)
+
+	if _, err := b.fetch(false); err != nil {
+		t.Fatal(err)
+	}
+	if peerLooked.Load() != 0 {
+		t.Error("an unwatched poll counted as a peer looking")
+	}
+	before := time.Now()
+	if _, err := b.fetch(true); err != nil {
+		t.Fatal(err)
+	}
+	if got := time.Unix(0, peerLooked.Load()); got.Before(before) {
+		t.Errorf("peer look = %v, want the watched fetch recorded", got)
+	}
+}
+
+// A PR answer is trusted for as long as its state tends to hold still.
+func TestPRTTL(t *testing.T) {
+	now := time.Now()
+	busy, quiet := now.Add(-time.Minute), now.Add(-time.Hour)
+	pr := func(state, checks string) rigPR { return rigPR{prInfo: prInfo{State: state, Checks: checks}} }
+	for _, c := range []struct {
+		name string
+		s    rigStatus
+		want time.Duration
+	}{
+		{"checks pending beats a quiet rig", rigStatus{LastActive: &quiet, PRs: []rigPR{pr("MERGED", ""), pr("OPEN", "pending")}}, 2 * time.Minute},
+		{"working rig, no PR", rigStatus{LastActive: &busy}, 5 * time.Minute},
+		{"working rig, open PR", rigStatus{LastActive: &busy, PRs: []rigPR{pr("OPEN", "passing")}}, 5 * time.Minute},
+		{"quiet rig, open PR", rigStatus{LastActive: &quiet, PRs: []rigPR{pr("OPEN", "passing")}}, 15 * time.Minute},
+		{"quiet rig, merged", rigStatus{LastActive: &quiet, PRs: []rigPR{pr("MERGED", "passing")}}, prTTLMax},
+		{"never active, no PR", rigStatus{}, prTTLMax},
+	} {
+		if got := prTTL(c.s, now); got != c.want {
+			t.Errorf("%s: prTTL = %v, want %v", c.name, got, c.want)
+		}
 	}
 }

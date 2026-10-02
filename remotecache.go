@@ -36,6 +36,10 @@ const servePollEvery = radarTickEvery
 // spends, and so the oldest board the next open's faint first frame can show.
 const servePollCeiling = 30 * time.Minute
 
+// radarWatchedFor is how long after a heartbeat a radar still counts as
+// open: a few ticks, so one slow render doesn't read as the popup closing.
+const radarWatchedFor = 5 * radarTickEvery
+
 // radarHeartbeatFile is touched on every radar tick, so serve can tell a
 // board someone is watching from one nobody is. Its mtime is the whole
 // message.
@@ -94,8 +98,8 @@ func recordRemote(answers map[string]remoteCacheEntry, now time.Time) {
 }
 
 // poll asks the surface now, in cache form.
-func (b servedBackend) poll(now time.Time) remoteCacheEntry {
-	doc, err := b.fetch()
+func (b servedBackend) poll(now time.Time, watched bool) remoteCacheEntry {
+	doc, err := b.fetch(watched)
 	if err != nil {
 		return remoteCacheEntry{At: now, Down: b.Unreachable()}
 	}
@@ -161,13 +165,14 @@ func servedSurfaces() []boardSource {
 }
 
 // pollServed asks every served surface at once and records the answers.
-func pollServed(served []boardSource, now time.Time) map[string]remoteCacheEntry {
+// watched is whether a person is looking right now; see fetch.
+func pollServed(served []boardSource, now time.Time, watched bool) map[string]remoteCacheEntry {
 	backends := make([]mux.Backend, len(served))
 	for i, b := range served {
 		backends[i] = b
 	}
 	polled := eachBackend(backends, func(b mux.Backend) remoteCacheEntry {
-		return b.(boardSource).poll(now)
+		return b.(boardSource).poll(now, watched)
 	})
 	answers := make(map[string]remoteCacheEntry, len(served))
 	for i, b := range served {
@@ -234,8 +239,9 @@ func pollServedSurfaces(ctx context.Context, tick time.Duration) {
 	for {
 		// Wall time, not monotonic: a Mac's monotonic clock stops while it
 		// sleeps, so a night away would otherwise read as a moment.
-		if now := time.Now().Round(0); servePollDue(now, last, lastRadarHeartbeat()) {
-			pollServed(servedSurfaces(), now)
+		now := time.Now().Round(0)
+		if looked := lastRadarHeartbeat(); servePollDue(now, last, looked) {
+			pollServed(servedSurfaces(), now, now.Sub(looked) < radarWatchedFor)
 			last = now
 		}
 		select {

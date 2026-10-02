@@ -392,7 +392,7 @@ func radarRemoteCmd() tea.Cmd {
 		touchRadarHeartbeat(now)
 		msg := radarRemoteMsg{sessions: allSessions(listed), agents: liveAgentChildren(listed)}
 		ask := msg.addCached(served, loadRemoteCache(), now, false)
-		answers := pollServed(ask, now)
+		answers := pollServed(ask, now, true) // a radar is open: this one
 		for _, b := range ask {
 			msg.add(b, answers[b.Endpoint()], false)
 		}
@@ -615,10 +615,43 @@ func (m *radarModel) remoteScan() tea.Cmd {
 	return radarRemoteCmd()
 }
 
-// radarPRTTL is how long a cached PR answer is trusted before the radar
-// refetches it in the background. `r` is the backstop for anything staler
-// than you can stand.
-const radarPRTTL = 5 * time.Minute
+// prTTL is how long a rig's cached PR answer is trusted before the radar or
+// serve asks GitHub again, set by how fast that answer actually moves. Checks
+// in flight change by the minute. A rig whose agent is working can open or
+// push a PR at any moment, so it keeps the old flat five minutes. Past that,
+// an open PR waits on reviews, which come in on a human clock, and a rig with
+// no open PR at all mostly changes when you do something there, which makes it
+// a working rig again. `r` is the backstop for anything staler than you can
+// stand. `ls --full` keeps its own shorter boardPRTTL, since a sweep acts on
+// what it reads.
+func prTTL(s rigStatus, now time.Time) time.Duration {
+	open := false
+	for _, pr := range s.PRs {
+		if pr.State != "OPEN" {
+			continue
+		}
+		if pr.Checks == "pending" {
+			return 2 * time.Minute
+		}
+		open = true
+	}
+	switch {
+	case s.LastActive != nil && now.Sub(*s.LastActive) < prBusyFor:
+		return 5 * time.Minute
+	case open:
+		return 15 * time.Minute
+	default:
+		return prTTLMax
+	}
+}
+
+// prBusyFor is how recently a rig's agent must have worked for its PRs to
+// count as liable to change.
+const prBusyFor = 30 * time.Minute
+
+// prTTLMax is the longest prTTL hands out, and so how long the cache file
+// keeps an entry: anything older would be refetched anyway.
+const prTTLMax = time.Hour
 
 // fetchMissing fires a PR fetch for every rig whose answer is missing or past
 // the TTL and isn't already in flight. pending is a shared map, so marking
@@ -630,7 +663,7 @@ func (m radarModel) fetchMissing() []tea.Cmd {
 		if s.remote != nil || m.pending[s.Slug] {
 			continue
 		}
-		if at, ok := m.fetchedAt[s.Slug]; ok && now.Sub(at) < radarPRTTL {
+		if at, ok := m.fetchedAt[s.Slug]; ok && now.Sub(at) < prTTL(s, now) {
 			continue
 		}
 		m.pending[s.Slug] = true
@@ -714,13 +747,13 @@ func loadRadarCache() map[string]radarCacheEntry {
 	return entries
 }
 
-// saveRadarCache writes the current PR answers back. Entries older than an
-// hour are dropped: they'd be refetched anyway and this keeps the file from
-// accreting rigs long since torn down.
+// saveRadarCache writes the current PR answers back. Entries older than
+// prTTLMax are dropped: they'd be refetched anyway and this keeps the file
+// from accreting rigs long since torn down.
 func saveRadarCache(prs map[string][]rigPR, fetchedAt map[string]time.Time) {
 	entries := make(map[string]cacheEntryJSON)
 	for slug, at := range fetchedAt {
-		if time.Since(at) > time.Hour {
+		if time.Since(at) > prTTLMax {
 			continue
 		}
 		cached := make([]radarCachePR, len(prs[slug]))

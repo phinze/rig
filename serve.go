@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/phinze/rig/internal/mux"
@@ -133,7 +134,7 @@ func runServe(args []string) error {
 	g := newServeGate(allow, tailscaleWhois, isLoopbackAddr(ln.Addr()))
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
-	go refreshServedPRs(ctx, home, time.Minute)
+	go refreshServedPRs(ctx, home, servePRCheckEvery)
 	go pollServedSurfaces(ctx, servePollEvery)
 
 	fmt.Fprintf(os.Stderr, "rig serve: listening on %s for %s\n", ln.Addr(), strings.Join(allow, ", "))
@@ -172,6 +173,9 @@ func serveHandler(g *serveGate, build func() serveDoc) http.Handler {
 		if err := g.check(r.Context(), r.RemoteAddr); err != nil {
 			http.Error(w, err.Error(), http.StatusForbidden)
 			return
+		}
+		if r.URL.Query().Get("watched") == "1" {
+			peerLooked.Store(time.Now().UnixNano())
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(build())
@@ -275,13 +279,27 @@ func surfaceKind(surface string) string {
 	return kind
 }
 
-// refreshServedPRs keeps the radar cache warm for the rigs serve describes,
-// on the radar's own TTL. It's the fetch a radar running on this host would
-// make, and it writes the same file, so a local radar and serve share one
-// answer instead of each paying gh for it.
+// peerLooked is when another host's radar last said it was watching this
+// board, in UnixNano; zero if none has.
+var peerLooked atomic.Int64
+
+// servePRCheckEvery is how often serve's PR refresher asks whether anyone is
+// watching. It's an atomic load until somebody is.
+const servePRCheckEvery = 5 * time.Second
+
+// refreshServedPRs refreshes this host's PR answers while another host's
+// radar is watching them, and does nothing otherwise. Nobody else needs it to:
+// a radar here fetches its own rigs' PRs while it's open, and `ls --full` asks
+// for itself, but a radar elsewhere draws remote rigs from this host's answer
+// and can't fetch them. So the only viewer serve stands in for is a peer, and
+// a peer only says it's watching while a person is (served.go fetch), never on
+// serve's own backoff, which is what keeps two hosts from keeping each other's
+// GitHub traffic awake. With nobody looking anywhere, rig asks GitHub nothing.
 func refreshServedPRs(ctx context.Context, home string, every time.Duration) {
 	for {
-		refreshStalePRs(home, time.Now())
+		if now := time.Now(); now.Sub(time.Unix(0, peerLooked.Load())) < radarWatchedFor {
+			refreshStalePRs(home, now)
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -298,8 +316,11 @@ func refreshStalePRs(home string, now time.Time) {
 	cache := loadRadarCache()
 	var stale []rigStatus
 	for _, s := range rigStatuses(rigs, home, now) {
-		if e, ok := cache[s.Slug]; ok && now.Sub(e.At) < radarPRTTL {
-			continue
+		if e, ok := cache[s.Slug]; ok {
+			s.PRs = e.PRs
+			if now.Sub(e.At) < prTTL(s, now) {
+				continue
+			}
 		}
 		stale = append(stale, s)
 	}

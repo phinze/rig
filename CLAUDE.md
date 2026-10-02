@@ -659,7 +659,7 @@ single quotes because that's the one place sh and fish disagree.
 `rig serve` is the non-ssh way to list a host, and the only way to see its
 rigs as rigs. It answers one read-only `GET /v1/board`: the rows that host's
 own radar scan builds (`rig ls`'s row shape, PRs from the shared radar cache,
-which serve's background loop keeps warm on the radar's TTL), its sessions,
+which serve refreshes while a peer is watching), its sessions,
 and its agent panes. It's the radar's tier and not `ls --full`, because a
 reader polls every couple of seconds and the jj WIP pass costs a process per
 repo. Every request's peer goes through `tailscale whois` against an explicit
@@ -708,6 +708,21 @@ radar writes the same file when it has to ask, so a machine without serve
 still paints its last answer, faint, on the next open. What
 serve polls never feeds `/v1/board`, which keeps describing one host; folding
 it back in would have two hosts re-exporting each other's boards forever.
+
+GitHub gets the same treatment, more strictly: with nobody looking anywhere,
+rig asks it nothing. A radar fetches its own rigs' stale PRs while it's open
+and `ls --full` asks for itself, so the only viewer serve stands in for is a
+radar on another host, which draws remote rigs from this host's answer and
+can't fetch them. Serve therefore refreshes PRs only while a peer's GET says
+`watched=1`, and a peer says that only while a person's radar is open there,
+never on serve's own backoff, so two serves can't keep each other's GitHub
+traffic awake. The cost is that the first open after a quiet spell paints PR
+cells from an old answer and refetches behind it, which is what the radar did
+before serve existed. How old is too old is `prTTL`, by state rather than one
+flat number: two minutes with checks in flight, five while the rig's agent has
+worked in the last half hour (that's when a PR appears or moves), fifteen for
+an open PR waiting on reviews, an hour otherwise. `ls --full` keeps its own
+one-minute `boardPRTTL`, because a sweep acts on what it reads.
 
 Serve has exactly one action, `POST /v1/show`, and it exists because of where
 the screen is. The Mac radar entering a foxtrotbase row opens its own portal,

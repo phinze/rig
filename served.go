@@ -100,23 +100,30 @@ type boardSource interface {
 	mux.Backend
 	Endpoint() string
 	Board() (remoteBoard, error)
-	poll(now time.Time) remoteCacheEntry
+	poll(now time.Time, watched bool) remoteCacheEntry
 	lift(serveDoc) remoteBoard
 }
 
 func (b servedBackend) Board() (remoteBoard, error) {
-	doc, err := b.fetch()
+	doc, err := b.fetch(false)
 	if err != nil {
 		return remoteBoard{}, err
 	}
 	return b.lift(doc), nil
 }
 
-func (b servedBackend) fetch() (serveDoc, error) {
+// fetch asks for the board. watched says a person is looking at the answer,
+// which is what tells the far host its PRs are worth refreshing (see
+// refreshServedPRs); a poll serve makes on its own backoff never says so.
+func (b servedBackend) fetch(watched bool) (serveDoc, error) {
 	if servedBreaker.Down(b.URL) {
 		return serveDoc{}, errors.New("host unreachable (retrying shortly)")
 	}
-	resp, err := servedClient.Get(b.URL + "/v1/board")
+	endpoint := b.URL + "/v1/board"
+	if watched {
+		endpoint += "?watched=1"
+	}
+	resp, err := servedClient.Get(endpoint)
 	if err != nil {
 		servedBreaker.Note(b.URL, true)
 		return serveDoc{}, err
