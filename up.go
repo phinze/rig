@@ -206,26 +206,26 @@ func pickupPrompt(tk task, hasContext bool) string {
 }
 
 // resolveUpContext gathers the color a pickup can carry beyond the ticket: a
-// --context flag, piped stdin, or both (flag first). It exists for a project
-// rig's agent starting a task rig on your behalf, which knows things the ticket
-// doesn't and has no other channel to the task agent until it's running. A
-// terminal on stdin means nothing was piped, so only the flag counts.
+// --context flag or piped stdin. It exists for a project rig's agent starting a
+// task rig on your behalf, which knows things the ticket doesn't and has no
+// other channel to the task agent until it's running. A terminal on stdin means
+// nothing was piped.
+//
+// The flag wins outright and stdin is never read when it's given. It used to
+// read both, and an agent's shell tool can hand rig a stdin that isn't a
+// terminal but is a pipe nobody ever closes, so `rig up X --context ...` from
+// one hung forever in ReadAll before creating anything. Not-a-tty can't tell a
+// pipe that's coming from one that never will; the flag is the caller saying
+// which it meant.
 func resolveUpContext(flag string) (string, error) {
-	parts := []string{strings.TrimSpace(flag)}
-	if !stdinIsTTY() {
-		blob, err := io.ReadAll(os.Stdin)
-		if err != nil {
-			return "", fmt.Errorf("reading pickup context from stdin: %w", err)
-		}
-		parts = append(parts, strings.TrimSpace(string(blob)))
+	if flag = strings.TrimSpace(flag); flag != "" || stdinIsTTY() {
+		return flag, nil
 	}
-	var kept []string
-	for _, p := range parts {
-		if p != "" {
-			kept = append(kept, p)
-		}
+	blob, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return "", fmt.Errorf("reading pickup context from stdin: %w", err)
 	}
-	return strings.Join(kept, "\n\n"), nil
+	return strings.TrimSpace(string(blob)), nil
 }
 
 // extractRepoFlag pulls a --repo owner/repo (or --repo=owner/repo) out of args,

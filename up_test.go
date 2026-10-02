@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPRRigIdentity(t *testing.T) {
@@ -188,8 +189,31 @@ func TestResolveUpContextJoinsFlagAndStdin(t *testing.T) {
 		t.Fatalf("stdin only = %q", got)
 	}
 	withStdin(t, "piped\nblob\n")
-	if got, _ := resolveUpContext("from flag"); got != "from flag\n\npiped\nblob" {
-		t.Fatalf("both = %q", got)
+	if got, _ := resolveUpContext("from flag"); got != "from flag" {
+		t.Fatalf("flag should win over stdin = %q", got)
+	}
+
+	// An agent's shell can hand rig a pipe nobody closes. With the flag given,
+	// that pipe must never be read, or `rig up --context` hangs forever.
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stdin
+	os.Stdin = r
+	t.Cleanup(func() { os.Stdin = old; _ = r.Close(); _ = w.Close() })
+	done := make(chan string, 1)
+	go func() {
+		got, _ := resolveUpContext("from flag")
+		done <- got
+	}()
+	select {
+	case got := <-done:
+		if got != "from flag" {
+			t.Fatalf("held-open stdin = %q", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("resolveUpContext read an open stdin pipe despite --context")
 	}
 }
 

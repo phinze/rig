@@ -41,7 +41,8 @@ Idempotent: an existing rig is switched to, not rebuilt.
   --repo     skip the repo picker. A GitHub issue already names its repo.
   --agent    see "rig help new".
   --context  text written to the new rig's KICKOFF.md. Piped stdin does the
-             same. Ignored with a warning if the rig exists; use dispatch.`,
+             same when --context is absent; with it, stdin is never read.
+             Ignored with a warning if the rig exists; use dispatch.`,
 	},
 	{
 		name:    "new",
