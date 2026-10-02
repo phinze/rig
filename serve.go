@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -14,14 +15,21 @@ import (
 	"time"
 
 	"github.com/phinze/rig/internal/mux"
+	"github.com/phinze/rig/internal/mux/rex"
 )
 
 // `rig serve` is how another machine's radar learns about this one without
-// ssh. It answers one read-only question, "what's on this host", with the
+// ssh. It answers one question, "what's on this host", with the
 // rows this host's own radar would draw: rigs with their PR state, sessions,
 // and agent panes. The radar on the Mac asks it through a rig+http surface
 // (served.go) and gets real rig rows back instead of bare sessions, and ssh
 // is left for the one thing that needs a terminal, entering a session.
+//
+// It does one thing besides answer: show a session on this host's screen,
+// for a radar on a host that can't reach this one's client. That's the
+// foxtrotbase radar, seen through the Mac's Rex, entering a Mac rig: the
+// screen is the Mac's, so the Mac moves it. It changes what's displayed and
+// nothing else, and only for a session or agent pane the board lists.
 //
 // Identity is the tailnet's. Every request's peer address goes through
 // `tailscale whois`, and only a caller on the --allow list gets an answer.
@@ -139,6 +147,26 @@ func runServe(args []string) error {
 
 func serveHandler(g *serveGate, build func() serveDoc) http.Handler {
 	h := http.NewServeMux()
+	h.HandleFunc("POST /v1/show", func(w http.ResponseWriter, r *http.Request) {
+		if err := g.check(r.Context(), r.RemoteAddr); err != nil {
+			http.Error(w, err.Error(), http.StatusForbidden)
+			return
+		}
+		var req showRequest
+		if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req); err != nil {
+			http.Error(w, "unreadable request", http.StatusBadRequest)
+			return
+		}
+		if err := show(req); err != nil {
+			code := http.StatusConflict // this host couldn't, which isn't the caller's mistake
+			if errors.Is(err, errNotListed) {
+				code = http.StatusNotFound
+			}
+			http.Error(w, err.Error(), code)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 	h.HandleFunc("GET /v1/board", func(w http.ResponseWriter, r *http.Request) {
 		if err := g.check(r.Context(), r.RemoteAddr); err != nil {
 			http.Error(w, err.Error(), http.StatusForbidden)
@@ -187,6 +215,57 @@ func buildServeDoc(home string, backends []mux.Backend) serveDoc {
 		}
 	}
 	return doc
+}
+
+// showRequest asks for a session or agent pane to be put on this host's
+// screen. Kind is the backend kind the board listed it under.
+type showRequest struct {
+	Kind   string `json:"kind"`
+	Target string `json:"target"`
+}
+
+var errNotListed = errors.New("not on this host's board")
+
+// show is the handler's half that does something, behind a variable so a
+// test can stand in for a screen it doesn't have.
+var show = func(req showRequest) error {
+	b, err := backendByName(req.Kind)
+	if err != nil {
+		return err
+	}
+	if !listsTarget(b, req.Target) {
+		return fmt.Errorf("%q: %w", req.Target, errNotListed)
+	}
+	switch b := b.(type) {
+	case portalBackend:
+		return b.Show(req.Target)
+	case rex.Backend:
+		b.Viewer = true
+		return b.Attach(req.Target)
+	default:
+		return fmt.Errorf("%s can't show a session: %w", b.Name(), mux.ErrNoClientSwitch)
+	}
+}
+
+// listsTarget is whether a target is one the board would have offered: a
+// live session, or an agent pane's target. Anything else is refused before it
+// reaches a multiplexer, so a caller can only ever ask for what it was shown.
+func listsTarget(b mux.Backend, target string) bool {
+	if target == "" {
+		return false
+	}
+	for _, s := range b.Sessions() {
+		if s.Name == target {
+			return true
+		}
+	}
+	panes, _ := b.AllPanes()
+	for _, p := range panes {
+		if isAgentPane(p) && p.Target == target {
+			return true
+		}
+	}
+	return false
 }
 
 // surfaceKind is the kind half of a surface.

@@ -27,10 +27,17 @@ import (
 // board and in its Surface. MarksDir is where per-session mark sidecars live;
 // empty disables marks, which a remote instance and a test both want, since a
 // remote session's marks belong to the rig on that host.
+//
+// Viewer makes Attach drive the app even from a process that isn't inside
+// Rex. Attach normally decides by REX_SESSION: inside Rex the app is told to
+// switch, outside it a text-mode attach takes over the terminal. A background
+// process (rig serve, asked by another host to show a session) has neither a
+// Rex session nor a terminal, and the app is the only screen there is.
 type Backend struct {
 	Server   string
 	Place    string
 	MarksDir string
+	Viewer   bool
 }
 
 var _ mux.Backend = Backend{}
@@ -338,7 +345,7 @@ func (b Backend) CurrentPane() string {
 // with that block focused. A block in the session already on screen needs
 // only the focus.
 func (b Backend) Attach(target string) error {
-	if os.Getenv("REX_SESSION") == "" {
+	if os.Getenv("REX_SESSION") == "" && !b.Viewer {
 		cmd := b.command("attach", target)
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 		return cmd.Run()

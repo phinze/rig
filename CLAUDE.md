@@ -679,7 +679,23 @@ what the radar joins on instead. They draw led by their host's icon (`rig serve 
 so every viewer draws it the same, falling back to the place name), skip the local
 PR fan-out (their answer came with the row), and refuse park and wake with a
 note to do it where they live. Changing a rig across hosts is a write path
-serve deliberately doesn't have yet.
+serve deliberately doesn't have.
+
+Serve has exactly one action, `POST /v1/show`, and it exists because of where
+the screen is. The Mac radar entering a foxtrotbase row opens its own portal,
+since the client is on the Mac. foxtrotbase's radar entering a Mac row can't:
+it's being viewed through the Mac's Rex, has no Rex of its own to host a
+portal, and the client it would need to move is the Mac's. So
+`servedBackend.Attach` uses the local portal when this machine is on screen in
+Rex, and otherwise asks the owning host to show the target, which runs the same
+portal upsert through `portalBackend.Show` and tells Rex.app to display it. A
+background serve is neither inside a Rex session nor on a terminal, which is
+what `rex.Backend.Viewer` is for: Attach otherwise picks between "tell the app"
+and "text-mode attach" by `REX_SESSION`, and from launchd that answer is always
+the wrong one. Show only accepts a session or agent pane the board lists, so a
+caller can only ask for what it was shown, and it only changes what's
+displayed. It needs Rex.app as the viewer with Remote Control on; anywhere else
+it comes back as the host's reason beside "switch by hand".
 
 This machine's own tmux is a portal too: `localTmux()` wraps the plain tmux
 backend, and every place that means "the local tmux" (a manifest's empty or

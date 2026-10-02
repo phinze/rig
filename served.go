@@ -1,12 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/phinze/rig/internal/mux"
@@ -47,6 +51,37 @@ func newServedBackend(place, endpoint string) (servedBackend, error) {
 }
 
 func (b servedBackend) Endpoint() string { return b.URL }
+
+// Attach enters a row from this host. When this machine can host a portal
+// (it's on screen in Rex) it does, exactly as tmux+ssh would. When it can't,
+// the screen you're looking at isn't this machine's: from foxtrotbase's
+// radar, seen through the Mac's Rex, the client to move is the Mac's. So the
+// host that owns the session is asked to show it, and its own rig moves its
+// own screen.
+func (b servedBackend) Attach(target string) error {
+	adoptLocalPortal()
+	if os.Getenv("REX_SESSION") != "" && localRex() != nil {
+		return b.portalBackend.Attach(target)
+	}
+	return b.show(target)
+}
+
+func (b servedBackend) show(target string) error {
+	body, err := json.Marshal(showRequest{Kind: "tmux", Target: target})
+	if err != nil {
+		return err
+	}
+	resp, err := servedClient.Post(b.URL+"/v1/show", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("asking %s to show it: %v: %w", surfacePlace(b.Surface()), err, mux.ErrNoClientSwitch)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNoContent {
+		return nil
+	}
+	msg, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+	return fmt.Errorf("%s couldn't show it: %s: %w", surfacePlace(b.Surface()), strings.TrimSpace(string(msg)), mux.ErrNoClientSwitch)
+}
 
 func (b servedBackend) Unreachable() bool { return servedBreaker.Down(b.URL) }
 

@@ -1,9 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/phinze/rig/internal/mux"
+	"github.com/phinze/rig/internal/mux/rex"
 	"github.com/phinze/rig/internal/mux/tmux"
 )
 
@@ -59,6 +61,24 @@ func (p portalBackend) Attach(target string) error {
 	if rx == nil {
 		return mux.ErrNoClientSwitch
 	}
+	return p.enter(rx, target)
+}
+
+// Show puts the target on this machine's screen for a caller that isn't on
+// it: `rig serve`, asked by another host's radar. There's no client of ours
+// to move and no Rex session we're inside, so it always goes through the
+// portal and tells the app to show it.
+func (p portalBackend) Show(target string) error {
+	rx := viewerRex()
+	if rx == nil {
+		return fmt.Errorf("no Rex here to show it in: %w", mux.ErrNoClientSwitch)
+	}
+	return p.enter(rx, target)
+}
+
+// enter is the portal upsert: move the portal's existing client to the target
+// when it has one, else (re)create the portal attached to it, then show it.
+func (p portalBackend) enter(rx portalHost, target string) error {
 	label := p.portalLabel()
 	if rx.HasSession(label) {
 		if tty, err := p.PortalTTY(); err == nil {
@@ -131,6 +151,18 @@ func portalSessions() map[sessionKey]bool {
 
 // localRex is this machine's own Rex backend, or nil where there isn't one.
 // A var so a test can hand the portal a fake instead of the real app.
+// viewerRex is localRex set to drive the app from outside Rex; see
+// rex.Backend.Viewer.
+var viewerRex = func() portalHost {
+	for _, b := range localBackends() {
+		if rb, ok := b.(rex.Backend); ok {
+			rb.Viewer = true
+			return rb
+		}
+	}
+	return nil
+}
+
 var localRex = func() portalHost {
 	for _, b := range localBackends() {
 		if h, ok := b.(portalHost); ok && b.Name() == "rex" {

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -246,5 +247,63 @@ func TestRadarDrawsHostIcons(t *testing.T) {
 	m.setFilter("fx")
 	if rows := m.rows(); len(rows) != 1 {
 		t.Errorf("filtering by place found %d rows, want the fx session", len(rows))
+	}
+}
+
+// Show is answered only for the allow list, and its failures say whose they
+// are: a target the board never listed is the caller's, anything else is the
+// host's, and neither is an outage.
+func TestServeShow(t *testing.T) {
+	var got []showRequest
+	failWith := error(nil)
+	orig := show
+	show = func(req showRequest) error { got = append(got, req); return failWith }
+	t.Cleanup(func() { show = orig })
+
+	gate := newServeGate([]string{"nobody"}, nil, true)
+	srv := httptest.NewServer(serveHandler(gate, func() serveDoc { return serveDoc{} }))
+	defer srv.Close()
+	b, err := newServedBackend("mac", srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Outside Rex: this machine can't host a portal, so it asks.
+	t.Setenv("REX_SESSION", "")
+	t.Setenv("TMUX", "")
+
+	if err := b.Attach("~/workspaces/pers-20"); err != nil {
+		t.Fatalf("attach = %v, want the host to show it", err)
+	}
+	if len(got) != 1 || got[0] != (showRequest{Kind: "tmux", Target: "~/workspaces/pers-20"}) {
+		t.Errorf("requests = %+v, want one tmux show for the session", got)
+	}
+
+	failWith = fmt.Errorf("%q: %w", "x", errNotListed)
+	if err := b.Attach("x"); !errors.Is(err, mux.ErrNoClientSwitch) || !strings.Contains(err.Error(), "not on this host's board") {
+		t.Errorf("unlisted = %v, want a switch-by-hand naming the refusal", err)
+	}
+	failWith = fmt.Errorf("0 Rex apps are connected, want exactly one: %w", mux.ErrNoClientSwitch)
+	if err := b.Attach("~/workspaces/pers-20"); !errors.Is(err, mux.ErrNoClientSwitch) || !strings.Contains(err.Error(), "Rex apps") {
+		t.Errorf("no viewer = %v, want a switch-by-hand carrying the host's reason", err)
+	}
+	if b.Unreachable() {
+		t.Error("a host that answered reads as unreachable")
+	}
+}
+
+// Only what a board would have offered can be shown: a live session or an
+// agent pane, never another pane or an arbitrary string.
+func TestListsTarget(t *testing.T) {
+	b := &fakeBackend{name: "tmux",
+		sessions: []mux.Session{{Name: "~/workspaces/a"}},
+		panes: []mux.Pane{
+			{Session: "~/workspaces/a", Target: "%1", Command: "claude"},
+			{Session: "~/workspaces/a", Target: "%2", Command: "fish"},
+		},
+	}
+	for target, want := range map[string]bool{"~/workspaces/a": true, "%1": true, "%2": false, "": false, "; rm -rf ~": false} {
+		if got := listsTarget(b, target); got != want {
+			t.Errorf("listsTarget(%q) = %v, want %v", target, got, want)
+		}
 	}
 }

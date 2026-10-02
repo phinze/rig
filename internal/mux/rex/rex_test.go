@@ -366,3 +366,23 @@ func calls(t *testing.T, log string) int {
 	}
 	return len(strings.Split(strings.TrimSpace(string(raw)), "\n"))
 }
+
+// A viewer has no Rex session of its own and no terminal, so it tells the app
+// to show the target rather than falling through to a text-mode attach.
+func TestViewerAttachSelectsFromOutsideRex(t *testing.T) {
+	log := fakeRex(t)
+	t.Setenv("REX_SESSION", "")
+	t.Setenv("REX_FAKE_SECOND", "1")
+
+	if err := (Backend{Viewer: true}).Attach("~-workspaces-beta"); err != nil {
+		t.Fatal(err)
+	}
+	got := selects(t, log)
+	if len(got) != 1 || !strings.Contains(got[0], `{"session_id":"session:2"}`) {
+		t.Errorf("selects = %q, want the app told to show session:2", got)
+	}
+	raw, _ := os.ReadFile(log)
+	if strings.Contains(string(raw), "attach ") {
+		t.Errorf("viewer fell through to a text-mode attach:\n%s", raw)
+	}
+}
