@@ -604,8 +604,9 @@ alone lets a remote session hide a local rig's row or lend it its agents. The
 radar, switch, and sweep therefore key sessions by `sessionKey{surface, name}`
 and route a listed row with `surfaceNamed`. A rig itself is always local (its
 basedir, manifest, and agent live where its multiplexer runs), so `rigKey`
-derives its surface from the manifest's kind; remote surfaces contribute plain
-session rows, never rigs.
+derives its surface from the manifest's kind. Rex and tmux+ssh surfaces
+contribute plain session rows; a rig surface contributes rigs its own host
+described (below), which this machine views but never changes.
 
 Surfaces elsewhere come from a hand-edited `[surfaces]` table in the config,
 keyed by place and valued `kind+endpoint` (`devbox =
@@ -654,6 +655,30 @@ of the host's clients is the one on this screen, and `PortalTTY` checks
 Remote arguments are quoted for the far side's login shell, which on
 foxtrotbase is fish; `shellQuote` spells backslashes and quotes outside the
 single quotes because that's the one place sh and fish disagree.
+
+`rig serve` is the non-ssh way to list a host, and the only way to see its
+rigs as rigs. It answers one read-only `GET /v1/board`: the rows that host's
+own radar scan builds (`rig ls`'s row shape, PRs from the shared radar cache,
+which serve's background loop keeps warm on the radar's TTL), its sessions,
+and its agent panes. It's the radar's tier and not `ls --full`, because a
+reader polls every couple of seconds and the jj WIP pass costs a process per
+repo. Every request's peer goes through `tailscale whois` against an explicit
+`--allow` list, never "whoever owns this node": foxtrotbase is a tagged
+device, so its owner is `tagged-devices`, a placeholder that names nobody and
+never matches. It binds the tailnet IP by default because foxtrotbase has no
+firewall at all.
+
+A `rig+http://host[:port]` surface reads it. `servedBackend` is the tmux+ssh
+portal backend with its listing swapped out, so Attach, the portal upsert,
+and kill are unchanged, and ssh opens only when Enter goes somewhere. Rows
+from another kind of multiplexer on that host are dropped, since a tmux
+portal can't enter them. Remote rigs carry `remote`, which holds the session
+name their host sent: a session name is derived from the path relative to
+that host's home, so `rigKey` can't compute it from here, and `muxKey` is
+what the radar joins on instead. They draw led by their place, skip the local
+PR fan-out (their answer came with the row), and refuse park and wake with a
+note to do it where they live. Changing a rig across hosts is a write path
+serve deliberately doesn't have yet.
 
 This machine's own tmux is a portal too: `localTmux()` wraps the plain tmux
 backend, and every place that means "the local tmux" (a manifest's empty or

@@ -197,6 +197,18 @@ func radarPrepare(s rigStatus) (rigStatus, error) {
 	if s.bare {
 		return s, nil
 	}
+	// A remote rig is viewed from here, never changed: there's no manifest on
+	// this machine to stamp or unpark. A live one is entered through its
+	// surface's portal; a parked one has to be woken where it lives.
+	if s.remote != nil {
+		if s.Parked {
+			return rigStatus{}, fmt.Errorf("%s is parked on %s — wake it there", s.ID, surfacePlace(s.remote.surface))
+		}
+		if !s.child {
+			s.session = rigSession{name: s.remote.session, b: surfaceNamed(s.remote.surface)}
+		}
+		return s, nil
+	}
 	if s.child {
 		if err := touchRigMode(s.Path, true); err != nil {
 			if errors.Is(err, errRigBusy) {
@@ -346,7 +358,8 @@ type radarScanMsg struct {
 type radarRemoteMsg struct {
 	sessions []mux.Session
 	agents   map[sessionKey][]agentChild
-	down     []string // places that couldn't be reached on this pass
+	rigs     []rigStatus // rigs a rig surface described; see served.go
+	down     []string    // places that couldn't be reached on this pass
 }
 
 // reachability is what a backend implements when it can tell "down" from
@@ -361,9 +374,28 @@ type reachability interface{ Unreachable() bool }
 // whole timeout.
 func radarRemoteCmd() tea.Cmd {
 	return func() tea.Msg {
-		surfaces := surfaceBackends()
-		msg := radarRemoteMsg{sessions: allSessions(surfaces), agents: liveAgentChildren(surfaces)}
-		for _, b := range surfaces {
+		var listed, served []mux.Backend
+		for _, b := range surfaceBackends() {
+			if _, ok := b.(boardSource); ok {
+				served = append(served, b)
+			} else {
+				listed = append(listed, b)
+			}
+		}
+		msg := radarRemoteMsg{sessions: allSessions(listed), agents: liveAgentChildren(listed)}
+		// A rig surface answers sessions, panes, and rigs in one fetch, so it's
+		// asked once rather than once per listing.
+		var panes []mux.Pane
+		for _, board := range eachBackend(served, func(b mux.Backend) remoteBoard {
+			board, _ := b.(boardSource).Board()
+			return board
+		}) {
+			msg.sessions = append(msg.sessions, board.sessions...)
+			msg.rigs = append(msg.rigs, board.rigs...)
+			panes = append(panes, board.panes...)
+		}
+		maps.Copy(msg.agents, agentChildren(panes, time.Now().Unix()))
+		for _, b := range slices.Concat(listed, served) {
 			if r, ok := b.(reachability); ok && r.Unreachable() {
 				msg.down = append(msg.down, surfacePlace(b.Surface()))
 			}
@@ -374,9 +406,10 @@ func radarRemoteCmd() tea.Cmd {
 
 // merged is the local scan with the latest remote pass folded in.
 func (scan radarScanMsg) merged(remote radarRemoteMsg) radarScanMsg {
-	if len(remote.sessions) == 0 && len(remote.agents) == 0 {
+	if len(remote.sessions) == 0 && len(remote.agents) == 0 && len(remote.rigs) == 0 {
 		return scan
 	}
+	scan.statuses = slices.Concat(scan.statuses, remote.rigs)
 	scan.sessions = slices.Concat(scan.sessions, remote.sessions)
 	attached := maps.Clone(scan.attached)
 	if attached == nil {
@@ -573,7 +606,7 @@ func (m radarModel) fetchMissing() []tea.Cmd {
 	now := time.Now()
 	var cmds []tea.Cmd
 	for _, s := range m.rigRows() {
-		if m.pending[s.Slug] {
+		if s.remote != nil || m.pending[s.Slug] {
 			continue
 		}
 		if at, ok := m.fetchedAt[s.Slug]; ok && now.Sub(at) < radarPRTTL {
@@ -1035,6 +1068,10 @@ func (m radarModel) handleBoardKey(key string) (radarModel, tea.Cmd) {
 			m.actionErr = fmt.Errorf("plain tmux sessions cannot be parked")
 			return m, nil
 		}
+		if s.remote != nil {
+			m.actionErr = fmt.Errorf("%s lives on %s — park it there", s.ID, surfacePlace(s.remote.surface))
+			return m, nil
+		}
 		if m.parkPending == nil {
 			m.parkPending = map[string]bool{}
 		}
@@ -1049,7 +1086,7 @@ func (m radarModel) handleBoardKey(key string) (radarModel, tea.Cmd) {
 		// answer lands rather than flashing back to "…".
 		var cmds []tea.Cmd
 		for _, s := range m.rigRows() {
-			if m.pending[s.Slug] {
+			if s.remote != nil || m.pending[s.Slug] {
 				continue
 			}
 			m.pending[s.Slug] = true
@@ -1102,12 +1139,16 @@ func (m *radarModel) apply(scan radarScanMsg) {
 	var currentRow *rigStatus
 	var inflight, parked []rigStatus
 	for _, s := range scan.statuses {
-		session := rigKey(s.Path, s.Backend)
+		session := s.muxKey()
 		rigSessions[session] = true
-		if prs, ok := m.prs[s.Slug]; ok {
-			s.PRs = prs
+		// A remote rig arrives with its host's PR answer and its host's paths;
+		// this machine's PR cache and peers know nothing about either.
+		if s.remote == nil {
+			if prs, ok := m.prs[s.Slug]; ok {
+				s.PRs = prs
+			}
+			s.peers = peersUnder(m.peers, s.Path)
 		}
-		s.peers = peersUnder(m.peers, s.Path)
 		switch {
 		case m.current != sessionKey{} && session == m.current:
 			current := s
@@ -1144,7 +1185,7 @@ func (m *radarModel) apply(scan radarScanMsg) {
 			rows[i].agents = scan.agents[sessionOf(rows[i])]
 		}
 	}
-	rigSession := func(s rigStatus) sessionKey { return rigKey(s.Path, s.Backend) }
+	rigSession := func(s rigStatus) sessionKey { return s.muxKey() }
 	attachAgents(inflight, rigSession)
 	attachAgents(parked, rigSession)
 	attachAgents(sessions, func(s rigStatus) sessionKey { return s.session.key() })
@@ -1240,9 +1281,40 @@ func rowKey(s rigStatus) string {
 		return "child:" + s.session.name // session holds the window target
 	case s.bare:
 		return "sess:" + s.session.name
+	case s.remote != nil:
+		return "slug:" + s.remote.surface + "/" + s.Slug
 	default:
 		return "slug:" + s.Slug
 	}
+}
+
+// muxKey is the key a rig's own session has on the board. A local rig derives
+// it from its path; a remote one was told it by its host, because the name
+// comes from the path relative to that host's home, which this one can't know.
+func (s rigStatus) muxKey() sessionKey {
+	if s.remote != nil {
+		return sessionKey{s.remote.surface, s.remote.session}
+	}
+	return rigKey(s.Path, s.Backend)
+}
+
+// prsFetched is whether a row's PR answer is in, which decides between the
+// tail and its "…". A remote row's answer came with the row.
+func (m radarModel) prsFetched(s rigStatus) bool {
+	if s.remote != nil {
+		return s.remote.prsLooked
+	}
+	return prsFetched(m.prs, s.Slug)
+}
+
+// radarRowTitle is the title a row draws. A remote rig leads with its place,
+// the way a remote bare session does, since otherwise it reads exactly like a
+// rig on this machine.
+func radarRowTitle(s rigStatus) string {
+	if s.remote != nil {
+		return surfacePlace(s.remote.surface) + ": " + s.Title
+	}
+	return s.Title
 }
 
 // selectedKey is the identity of the row under the cursor, or "" when there's
@@ -1474,7 +1546,7 @@ func (m radarModel) recency(s rigStatus) int64 {
 	if s.bare {
 		r = m.attached[s.session.key()]
 	} else {
-		r = m.attached[rigKey(s.Path, s.Backend)]
+		r = m.attached[s.muxKey()]
 	}
 	if t := s.LastTouched.Unix(); t > r {
 		r = t
@@ -1653,6 +1725,9 @@ func radarHayFields(s rigStatus) []hayField {
 		fields = []hayField{{text: s.Title, field: "title"}, {text: s.session.name}}
 	} else {
 		fields = []hayField{{text: s.ID, field: "id"}, {text: s.Title, field: "title"}}
+		if s.remote != nil {
+			fields = append(fields, hayField{text: surfacePlace(s.remote.surface)})
+		}
 	}
 	for _, repo := range s.Repos {
 		fields = append(fields, hayField{text: repo.Name})
@@ -2369,7 +2444,7 @@ func (m radarModel) view() string {
 		switch {
 		case s.stone != nil:
 			onStone = true
-		case !s.bare && s.Path != "":
+		case !s.bare && s.Path != "" && s.remote == nil:
 			if s.Parked {
 				toggle = "wake"
 			} else {
@@ -2428,7 +2503,7 @@ func (m radarModel) view() string {
 	cols := m.columns(items)
 
 	renderRow := func(selected bool, s rigStatus) string {
-		fetched := prsFetched(m.prs, s.Slug)
+		fetched := m.prsFetched(s)
 		glyph, gstyle := radarGlyph(s, fetched)
 
 		// Right-margin detail for this row: the ticket id then the PR tail, each
@@ -2470,7 +2545,7 @@ func (m radarModel) view() string {
 			}
 			budget = max(8, budget)
 		}
-		title := radarTruncateTitle(s.Title, budget)
+		title := radarTruncateTitle(radarRowTitle(s), budget)
 
 		if selected {
 			// One style over the whole line: inner color resets would chew

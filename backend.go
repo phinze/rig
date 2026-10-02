@@ -314,8 +314,8 @@ func agentChildren(panes []mux.Pane, now int64) map[sessionKey][]agentChild {
 	children := map[sessionKey][]agentChild{}
 	seen := map[string]bool{} // surface\tsession\twindow\tcontext — collapse exact dups
 	for _, p := range panes {
-		if !isAgentCommand(p.Command) && stripAgentGlyph(p.Title) == p.Title {
-			continue // not an agent pane: no known command or state glyph
+		if !isAgentPane(p) {
+			continue
 		}
 		ctx := stripAgentGlyph(p.Title)
 		if isAgentPlaceholder(ctx) || (p.Path != "" && ctx == filepath.Base(p.Path)) {
@@ -337,6 +337,13 @@ func agentChildren(panes []mux.Pane, now int64) map[sessionKey][]agentChild {
 		})
 	}
 	return children
+}
+
+// isAgentPane is agentChildren's test for whether a pane holds an agent: a
+// recognized command, or a title still wearing Claude Code's state glyph (so a
+// wrapped agent is still caught).
+func isAgentPane(p mux.Pane) bool {
+	return isAgentCommand(p.Command) || stripAgentGlyph(p.Title) != p.Title
 }
 
 // isAgentCommand recognises an agent by its foreground process name. Nix

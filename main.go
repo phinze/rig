@@ -108,6 +108,8 @@ func main() {
 		err = runDown(args)
 	case "reap":
 		err = runReap(args)
+	case "serve":
+		err = runServe(args)
 	case "history":
 		err = runHistory(args)
 	case "resurrect":

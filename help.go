@@ -311,6 +311,18 @@ a week with resurrect.`,
 		summary: "retry stranded teardowns and stop orphaned scopes",
 		details: `Never decides which rigs to tear down; that's sweep.`,
 	},
+	{
+		name:    "serve",
+		group:   "plumbing",
+		usage:   []string{"serve --allow WHO [--allow WHO...] [--listen ADDR]"},
+		summary: "answer other hosts' radars over the tailnet",
+		details: `Serves this host's rigs, sessions, and agent panes read-only at
+GET /v1/board, for a radar elsewhere with a rig+http surface pointing here.
+
+WHO is a tailnet login (you@github), a node's short name, or tag:NAME; each
+request's peer is checked with tailscale whois. A tagged node never matches
+by login. --listen defaults to this host's tailnet IPv4 on port 7744.`,
+	},
 }
 
 func findCommand(name string) (command, bool) {

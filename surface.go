@@ -22,15 +22,18 @@ import (
 //	[surfaces]
 //	devbox = "rex+https://devbox.tail1234.ts.net"
 //
-// A remote surface only ever contributes plain session rows. Rigs are local by
-// construction (the basedir, manifest, and agent all live where the multiplexer
-// runs), so the devbox's rigs are rigs to the rig binary on the devbox and
-// sessions to everyone else. Listing them as rigs would mean reading another
-// host's manifests, which is the `ssh rig ls` design PERS-17 set aside.
+// Rigs are local by construction (the basedir, manifest, and agent all live
+// where the multiplexer runs), so this machine never reads another host's
+// manifests. A rex or tmux+ssh surface contributes plain session rows. A rig
+// surface (rig+http://host) asks the far host's own rig, through `rig serve`,
+// to describe its rigs, and those come back as real rig rows that this
+// machine only views (serve.go, served.go).
 //
-// Both kinds have a remote form. rex dials the far server's API directly;
-// tmux goes over ssh (tmux+ssh://host), listed with one list-panes per scan
-// and entered through a portal session in this machine's Rex (portal.go).
+// rex dials the far server's API directly; tmux goes over ssh
+// (tmux+ssh://host), listed with one list-panes per scan and entered through
+// a portal session in this machine's Rex (portal.go). A rig surface lists over
+// HTTP and enters through the same tmux portal, so ssh is only ever opened to
+// go somewhere.
 
 // placePattern keeps a place name to something that reads cleanly after an @
 // in a surface and as a label on a board row.
@@ -61,8 +64,10 @@ func parseSurface(place, spec string) (mux.Backend, error) {
 			return nil, fmt.Errorf("surface %s: rex endpoint %q should be http(s):// or unix:// (tailnet:// is listen-only)", place, endpoint)
 		}
 		return rex.Backend{Server: endpoint, Place: place}, nil
+	case "rig":
+		return newServedBackend(place, endpoint)
 	default:
-		return nil, fmt.Errorf("surface %s: no remote form for %q (want rex or tmux)", place, kind)
+		return nil, fmt.Errorf("surface %s: no remote form for %q (want rex, tmux, or rig)", place, kind)
 	}
 }
 

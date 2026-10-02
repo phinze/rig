@@ -285,6 +285,9 @@ type rigStatus struct {
 	// session to attach, and no PRs to fetch, so the pipelines that do those
 	// things skip them.
 	stone *tombstone
+	// remote is set on a rig another host's `rig serve` described (served.go).
+	// Nil on every rig of this machine's own.
+	remote *remoteRig
 	// peers is every iso peer container under the rig's repos, from the
 	// radar's own peers pass (radarPeersCmd). The board's JSON carries the
 	// same facts per repo instead, on rigRepo.
