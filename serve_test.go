@@ -76,6 +76,7 @@ func TestServedRoundTrip(t *testing.T) {
 	rexRig := rigStatus{ID: "PERS-22", Slug: "pers-22", Path: "/home/phinze/workspaces/pers-22", Backend: "rex"}
 	doc := serveDoc{
 		Version: serveVersion,
+		Icon:    "\uf233",
 		Rigs: []serveRig{
 			{rigsForJSON([]rigStatus{looked}, true)[0], "~/workspaces/pers-20"},
 			{rigsForJSON([]rigStatus{unlooked}, false)[0], "~/workspaces/pers-21"},
@@ -122,6 +123,9 @@ func TestServedRoundTrip(t *testing.T) {
 	if len(board.panes) != 1 || board.panes[0].Surface != "tmux@fx" || board.panes[0].Target != "%3" {
 		t.Errorf("panes = %+v, want the tmux agent, tagged", board.panes)
 	}
+	if board.icon != "\uf233" || got.remote.icon != "\uf233" {
+		t.Errorf("icon = %q / %q, want the host's on the board and its rigs", board.icon, got.remote.icon)
+	}
 	if b.Unreachable() {
 		t.Error("a surface that answered reads as unreachable")
 	}
@@ -130,7 +134,9 @@ func TestServedRoundTrip(t *testing.T) {
 // A refused request is an answer, not an outage: it shouldn't trip the
 // breaker, and nothing it carried should land on the board.
 func TestServedRefusalIsNotUnreachable(t *testing.T) {
-	stranger := func(context.Context, string) (whoisIdentity, error) { return whoisIdentity{}, errors.New("not on the tailnet") }
+	stranger := func(context.Context, string) (whoisIdentity, error) {
+		return whoisIdentity{}, errors.New("not on the tailnet")
+	}
 	gate := newServeGate([]string{"me@github"}, stranger, false) // tailnet gate, loopback peer
 	srv := httptest.NewServer(serveHandler(gate, func() serveDoc { t.Fatal("built a doc for a refused peer"); return serveDoc{} }))
 	defer srv.Close()
@@ -215,5 +221,30 @@ func TestRadarDrawsRemoteRigs(t *testing.T) {
 	}
 	if _, err := radarPrepare(m.parked[0]); err == nil || !strings.Contains(err.Error(), "wake it there") {
 		t.Errorf("enter on a parked remote rig = %v, want a refusal", err)
+	}
+}
+
+// A host that chose an icon is drawn by it, on its rigs and its plain
+// sessions alike, and still found by its name.
+func TestRadarDrawsHostIcons(t *testing.T) {
+	registerFakeBackend(t, &fakeBackend{name: "tmux", surface: "tmux@fx"})
+	r := rigStatus{ID: "PERS-20", Slug: "pers-20", Title: "cross-host link",
+		remote: &remoteRig{surface: "tmux@fx", session: "~/workspaces/pers-20", icon: ""}}
+	if got := radarRowTitle(r); got != " cross-host link" {
+		t.Errorf("rig title = %q, want the icon in front", got)
+	}
+
+	m := radarModel{home: "/home/me", prs: map[string][]rigPR{}}
+	m.remote = radarRemoteMsg{
+		sessions: []mux.Session{{Surface: "tmux@fx", Name: "notes", Path: "/home/p/notes"}},
+		icons:    map[string]string{"fx": ""},
+	}
+	m.apply(radarScanMsg{attached: map[sessionKey]int64{}})
+	if len(m.sessions) != 1 || m.sessions[0].Title != " ~/notes" {
+		t.Fatalf("bare rows = %+v, want the icon in place of fx:", m.sessions)
+	}
+	m.setFilter("fx")
+	if rows := m.rows(); len(rows) != 1 {
+		t.Errorf("filtering by place found %d rows, want the fx session", len(rows))
 	}
 }

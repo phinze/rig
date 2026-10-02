@@ -53,6 +53,7 @@ func (b servedBackend) Unreachable() bool { return servedBreaker.Down(b.URL) }
 // remoteBoard is one fetch's worth of a served host, with the place already
 // applied: what radarRemoteCmd folds into the board.
 type remoteBoard struct {
+	icon     string // the host's chosen glyph, "" if it named none
 	sessions []mux.Session
 	panes    []mux.Pane
 	rigs     []rigStatus
@@ -98,7 +99,7 @@ func (b servedBackend) fetch() (serveDoc, error) {
 // since this surface has no way into them.
 func (b servedBackend) lift(doc serveDoc) remoteBoard {
 	surface := b.Surface()
-	var out remoteBoard
+	out := remoteBoard{icon: doc.Icon}
 	for _, s := range doc.Sessions {
 		if s.Kind != "tmux" {
 			continue
@@ -130,7 +131,7 @@ func (b servedBackend) lift(doc serveDoc) remoteBoard {
 			}
 		}
 		s.Location = surfacePlace(surface)
-		s.remote = &remoteRig{surface: surface, session: r.Session, prsLooked: looked}
+		s.remote = &remoteRig{surface: surface, session: r.Session, prsLooked: looked, icon: doc.Icon}
 		out.rigs = append(out.rigs, s)
 	}
 	return out
@@ -164,4 +165,15 @@ type remoteRig struct {
 	surface   string // the surface whose portal enters it
 	session   string // its session name on that host
 	prsLooked bool   // the host had PR answers for it, possibly none
+	icon      string // the host's glyph; see serveDoc.Icon
+}
+
+// placeLabel is how a row from another host says where it lives: the host's
+// icon when it chose one, else its name. The name is never lost, since
+// filtering still matches on it.
+func placeLabel(place, icon string) string {
+	if icon != "" {
+		return icon
+	}
+	return place + ":"
 }

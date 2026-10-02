@@ -675,7 +675,8 @@ from another kind of multiplexer on that host are dropped, since a tmux
 portal can't enter them. Remote rigs carry `remote`, which holds the session
 name their host sent: a session name is derived from the path relative to
 that host's home, so `rigKey` can't compute it from here, and `muxKey` is
-what the radar joins on instead. They draw led by their place, skip the local
+what the radar joins on instead. They draw led by their host's icon (`rig serve --icon`, chosen by the host
+so every viewer draws it the same, falling back to the place name), skip the local
 PR fan-out (their answer came with the row), and refuse park and wake with a
 note to do it where they live. Changing a rig across hosts is a write path
 serve deliberately doesn't have yet.

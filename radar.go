@@ -358,8 +358,9 @@ type radarScanMsg struct {
 type radarRemoteMsg struct {
 	sessions []mux.Session
 	agents   map[sessionKey][]agentChild
-	rigs     []rigStatus // rigs a rig surface described; see served.go
-	down     []string    // places that couldn't be reached on this pass
+	rigs     []rigStatus       // rigs a rig surface described; see served.go
+	icons    map[string]string // place → the glyph its serve chose
+	down     []string          // places that couldn't be reached on this pass
 }
 
 // reachability is what a backend implements when it can tell "down" from
@@ -386,10 +387,15 @@ func radarRemoteCmd() tea.Cmd {
 		// A rig surface answers sessions, panes, and rigs in one fetch, so it's
 		// asked once rather than once per listing.
 		var panes []mux.Pane
-		for _, board := range eachBackend(served, func(b mux.Backend) remoteBoard {
+		msg.icons = map[string]string{}
+		boards := eachBackend(served, func(b mux.Backend) remoteBoard {
 			board, _ := b.(boardSource).Board()
 			return board
-		}) {
+		})
+		for i, board := range boards {
+			if board.icon != "" {
+				msg.icons[surfacePlace(served[i].Surface())] = board.icon
+			}
 			msg.sessions = append(msg.sessions, board.sessions...)
 			msg.rigs = append(msg.rigs, board.rigs...)
 			panes = append(panes, board.panes...)
@@ -1170,6 +1176,10 @@ func (m *radarModel) apply(scan radarScanMsg) {
 			continue
 		}
 		s := bareSession(ts, m.home)
+		// A host that chose an icon is drawn by it rather than by name.
+		if place := surfacePlace(ts.Surface); m.remote.icons[place] != "" {
+			s.Title = placeLabel(place, m.remote.icons[place]) + " " + strings.TrimPrefix(s.Title, place+":")
+		}
 		if key == m.current {
 			currentRow = &s
 			continue
@@ -1312,7 +1322,7 @@ func (m radarModel) prsFetched(s rigStatus) bool {
 // rig on this machine.
 func radarRowTitle(s rigStatus) string {
 	if s.remote != nil {
-		return surfacePlace(s.remote.surface) + ": " + s.Title
+		return placeLabel(surfacePlace(s.remote.surface), s.remote.icon) + " " + s.Title
 	}
 	return s.Title
 }
@@ -1723,6 +1733,13 @@ func radarHayFields(s rigStatus) []hayField {
 	var fields []hayField
 	if s.bare {
 		fields = []hayField{{text: s.Title, field: "title"}, {text: s.session.name}}
+		// An icon stands in for a remote session's place in its title, so the
+		// place is matched here instead.
+		if s.session.b != nil {
+			if place := surfacePlace(s.session.b.Surface()); place != "" {
+				fields = append(fields, hayField{text: place})
+			}
+		}
 	} else {
 		fields = []hayField{{text: s.ID, field: "id"}, {text: s.Title, field: "title"}}
 		if s.remote != nil {

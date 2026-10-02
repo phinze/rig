@@ -314,14 +314,15 @@ a week with resurrect.`,
 	{
 		name:    "serve",
 		group:   "plumbing",
-		usage:   []string{"serve --allow WHO [--allow WHO...] [--listen ADDR]"},
+		usage:   []string{"serve --allow WHO [--allow WHO...] [--listen ADDR] [--icon GLYPH]"},
 		summary: "answer other hosts' radars over the tailnet",
 		details: `Serves this host's rigs, sessions, and agent panes read-only at
 GET /v1/board, for a radar elsewhere with a rig+http surface pointing here.
 
 WHO is a tailnet login (you@github), a node's short name, or tag:NAME; each
 request's peer is checked with tailscale whois. A tagged node never matches
-by login. --listen defaults to this host's tailnet IPv4 on port 7744.`,
+by login. --listen defaults to this host's tailnet IPv4 on port 7744. --icon is
+the glyph other radars draw in front of this host's rows instead of its name.`,
 	},
 }
 

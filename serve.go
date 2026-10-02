@@ -41,10 +41,14 @@ const servePort = "7744"
 // a session name is derived from the path relative to *this* host's home and
 // the reader can't recompute it.
 type serveDoc struct {
-	Version     int            `json:"version"`
-	GeneratedAt time.Time      `json:"generatedAt"`
-	Rigs        []serveRig     `json:"rigs"`
-	Sessions    []serveSession `json:"sessions"`
+	Version     int       `json:"version"`
+	GeneratedAt time.Time `json:"generatedAt"`
+	// Icon is the glyph this host chose to stand for it on other machines'
+	// boards (--icon). The host picks it rather than each viewer, so every
+	// radar that can see a machine draws it the same way.
+	Icon     string         `json:"icon,omitempty"`
+	Rigs     []serveRig     `json:"rigs"`
+	Sessions []serveSession `json:"sessions"`
 	// Panes are agent panes only. Every other pane is noise to a board, and
 	// a busy host has hundreds.
 	Panes []servePane `json:"panes"`
@@ -77,11 +81,11 @@ type servePane struct {
 }
 
 func runServe(args []string) error {
-	listen := ""
+	listen, icon := "", ""
 	var allow []string
 	for i := 0; i < len(args); i++ {
 		name, val, hasVal := strings.Cut(args[i], "=")
-		if !hasVal && (name == "--listen" || name == "--allow") {
+		if !hasVal && (name == "--listen" || name == "--allow" || name == "--icon") {
 			if i+1 >= len(args) {
 				return fmt.Errorf("rig serve: %s needs a value", name)
 			}
@@ -93,8 +97,10 @@ func runServe(args []string) error {
 			listen = val
 		case "--allow":
 			allow = append(allow, val)
+		case "--icon":
+			icon = val
 		default:
-			return fmt.Errorf("usage: rig serve --allow LOGIN|NODE|tag:TAG [--allow ...] [--listen ADDR]")
+			return fmt.Errorf("usage: rig serve --allow LOGIN|NODE|tag:TAG [--allow ...] [--listen ADDR] [--icon GLYPH]")
 		}
 	}
 	if len(allow) == 0 {
@@ -122,7 +128,12 @@ func runServe(args []string) error {
 	go refreshServedPRs(ctx, home, time.Minute)
 
 	fmt.Fprintf(os.Stderr, "rig serve: listening on %s for %s\n", ln.Addr(), strings.Join(allow, ", "))
-	srv := &http.Server{Handler: serveHandler(g, func() serveDoc { return buildServeDoc(home, localBackends()) }), ReadHeaderTimeout: 5 * time.Second}
+	build := func() serveDoc {
+		doc := buildServeDoc(home, localBackends())
+		doc.Icon = icon
+		return doc
+	}
+	srv := &http.Server{Handler: serveHandler(g, build), ReadHeaderTimeout: 5 * time.Second}
 	return srv.Serve(ln)
 }
 
