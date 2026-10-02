@@ -1582,6 +1582,7 @@ func TestRadarKindMarksTheLeftEdge(t *testing.T) {
 		"ticket":  {rigStatus{ID: "mir-1689", Title: "Expose coordinator startup", Tracker: "linear", TrackerID: "MIR-1689"}, rigKindTicket},
 		"review":  {rigStatus{ID: "pr-1153", Title: "Add miren top", Kind: "review"}, rigKindReview},
 		"project": {rigStatus{ID: "project-boot-dependency-graph", Title: "Boot dependency graph", Kind: "project", Tracker: "linear"}, rigKindProject},
+		"cos":     {rigStatus{ID: "cos-2026-10-02", Title: "chief of staff 2026-10-02", Kind: "cos"}, rigKindCoS},
 	} {
 		if got := rigKindOf(tc.row); got != tc.want {
 			t.Errorf("%s: rigKindOf = %v, want %v", name, got, tc.want)
@@ -1595,7 +1596,7 @@ func TestRadarKindMarksTheLeftEdge(t *testing.T) {
 	// Every kind that draws a glyph draws a distinct one, or the marker tells
 	// you nothing it didn't already.
 	seen := map[string]rigKind{}
-	for _, k := range []rigKind{rigKindTicket, rigKindReview, rigKindProject} {
+	for _, k := range []rigKind{rigKindTicket, rigKindReview, rigKindProject, rigKindCoS} {
 		g := rigKindGlyph(k)
 		if g == "" {
 			t.Errorf("kind %v has no glyph", k)

@@ -854,6 +854,41 @@ Sweep keeps them in the quiet inventory but never checks them for collection.
 The ordinary tombstone captures their tracker identity and agent session, and
 resurrection rebuilds the repositoryless shape directly.
 
+## Chief-of-staff rigs (`rig cos`)
+
+The chief of staff is the agent that reads the whole board and steers rigs
+across work and personal, driven by the chief-of-staff skill. It ran for a while
+as an ordinary `rig new` rig started each morning, and what that lacked turned
+out to be an address rather than any capability. Its id changed daily
+(`be-my-chief-of-staff-for-today` one day, `chief-of-staff-2026-10-02` the
+next), so a rig told to report back with `rig send <that id>` would, if it
+answered after the evening teardown, send to a rig that no longer existed. A
+rig could not be taught "tell the chief of staff" because the phrase didn't
+resolve to anything.
+
+`rig cos` makes it a kind. The id is `cos-YYYY-MM-DD`, because the lifecycle is
+one workday and the date is the whole identity: running it again the same day
+re-enters the same rig. Like a project rig it is repositoryless (the old
+`rig new` shape carried a checkout it never used), and the two share the
+coordinator plumbing for launch, repair, and resurrection. `cos` is an address
+in `resolveRig`, meaning the newest chief-of-staff rig, consulted only after
+nothing matched by name. Newest rather than live, because a send to a rig that
+isn't running already fails with the reason. Every task and project rig's
+generated instructions name `rig send cos`, and the cos rig's own instructions
+tell it to hand out that address rather than its id.
+
+A cos rig from an earlier day that is still up when `rig cos` runs is the
+likeliest sign that its day never ended cleanly, so the plan file's last section
+may be stale while that agent's conversation is not. Today's kickoff names it
+and asks for a handover by its dated id, the one place a dated id is right,
+because `cos` now means today. The old agent's `rig reply` routes back on its
+own, and an unreachable predecessor falls back to the plan file.
+
+Where a project rig is durable, a cos rig is disposable on purpose. Continuity
+lives in the skill's plan file, not the conversation, so sweep offers a cos rig
+whose day is over for teardown, pre-checked unless its agent is mid-turn, and
+never the one sweep is running inside.
+
 ## Agent messaging (`rig send` / `rig reply`)
 
 `rig send <rig> <text>` delivers to a rig's agent session at its next turn

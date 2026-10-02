@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestWriteRigClaudeMD(t *testing.T) {
@@ -128,5 +129,47 @@ func TestProjectRigInstructionsUseProjectTemplate(t *testing.T) {
 	}
 	if !strings.Contains(got, m.TrackerURL) {
 		t.Errorf("project instructions lack the tracker URL:\n%s", got)
+	}
+}
+
+// Every working rig learns the cos address, because a report-back line naming
+// this morning's rig id would stop resolving once that rig is torn down. The
+// cos rig gets its own instructions instead of a task-rig shape with no repos.
+func TestRigInstructionsNameTheCoSAddress(t *testing.T) {
+	dir := t.TempDir()
+	for name, m := range map[string]manifest{
+		"task":    {ID: "mir-75", Tracker: "linear", TrackerID: "MIR-75", Repos: map[string]string{"rig": "phinze/rig"}},
+		"loose":   {ID: "local-thing", Repos: map[string]string{"rig": "phinze/rig"}},
+		"project": {ID: "project-byoi", Kind: "project", Tracker: "linear"},
+	} {
+		if got := renderRigInstructions(dir, m); !strings.Contains(got, "rig send cos") {
+			t.Errorf("%s rig should be told about rig send cos:\n%s", name, got)
+		}
+	}
+	got := renderRigInstructions(dir, manifest{ID: "cos-2026-10-02", Title: "chief of staff 2026-10-02", Kind: "cos"})
+	for _, want := range []string{"# Chief-of-staff rig: chief of staff 2026-10-02", "chief-of-staff skill", "rig send cos"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("cos instructions missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "rig relay") {
+		t.Errorf("cos rig has no project to relay to:\n%s", got)
+	}
+}
+
+func TestCoSRigIDIsTheWorkday(t *testing.T) {
+	day := time.Date(2026, 10, 2, 23, 59, 0, 0, time.Local)
+	if got := cosRigID(day); got != "cos-2026-10-02" {
+		t.Errorf("cosRigID = %q", got)
+	}
+}
+
+func TestCoSKickoffAsksAStillRunningPredecessorForAHandover(t *testing.T) {
+	if got := cosKickoff("2026-10-03", ""); strings.Contains(got, "handover") {
+		t.Errorf("no predecessor, no handover ask: %s", got)
+	}
+	got := cosKickoff("2026-10-03", "cos-2026-10-02")
+	if !strings.Contains(got, "rig send cos-2026-10-02") {
+		t.Errorf("the handover ask must use the dated id, since cos now means today: %s", got)
 	}
 }

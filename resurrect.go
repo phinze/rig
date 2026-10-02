@@ -85,7 +85,7 @@ func prepareResurrect(id string, nonblocking bool, report io.Writer) (rigSession
 	if err := createBasedir(t.Basedir, m); err != nil {
 		return rigSession{}, err
 	}
-	if m.isProject() {
+	if m.isCoordinator() {
 		if err := writeRigAgentInstructions(t.Basedir, m); err != nil {
 			return rigSession{}, err
 		}
@@ -101,7 +101,7 @@ func prepareResurrect(id string, nonblocking bool, report io.Writer) (rigSession
 			sess.prompt = fmt.Sprintf("This project overview rig (%s) was rebuilt from a tombstone. Start with `rig project status --format=json` and ask me for any missing context.", t.ID)
 		}
 		rs := sessionFor(t.Basedir, m)
-		if err := spawnProjectSession(rs, t.Basedir, sess); err != nil {
+		if err := spawnCoordinatorSession(rs, t.Basedir, sess); err != nil {
 			return rigSession{}, err
 		}
 		fmt.Fprintf(report, "rig: resurrected %s — %s\n", t.ID, t.Basedir)

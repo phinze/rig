@@ -159,7 +159,8 @@ func currentSender() rigSender {
 // resolveRig answers "which rig is <query>": id, slug, or tracker id, what
 // dispatch generalized from. Unlike dispatch's resolver it doesn't exclude
 // project rigs — a project rig's agent is exactly who a CoS coordinates
-// through.
+// through. `cos` resolves to the newest chief-of-staff rig, but only after
+// nothing matched by name, so a rig that is literally called cos still wins.
 func resolveRig(query string) (rigInfo, error) {
 	rigs, err := listRigs()
 	if err != nil {
@@ -174,6 +175,12 @@ func resolveRig(query string) (rigInfo, error) {
 	}
 	switch len(matches) {
 	case 0:
+		if strings.EqualFold(query, cosAddress) {
+			if r, ok := resolveCoS(rigs); ok {
+				return r, nil
+			}
+			return rigInfo{}, fmt.Errorf("no chief-of-staff rig is up (start one with `rig cos`)")
+		}
 		return rigInfo{}, fmt.Errorf("no rig matches %q", query)
 	case 1:
 		return matches[0], nil

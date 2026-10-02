@@ -74,6 +74,15 @@ rigs. A URL for your own PR routes to "rig up".
 and CI state. Run from inside a project rig.`,
 	},
 	{
+		name:    "cos",
+		group:   "start",
+		usage:   []string{"cos [--agent AGENT]"},
+		summary: "enter today's chief-of-staff rig (no repos)",
+		details: `One per workday, named cos-YYYY-MM-DD; run again the same day to re-enter
+it. Any rig can message it with "rig send cos MESSAGE...", which reaches the
+newest one.`,
+	},
+	{
 		name:    "adopt",
 		group:   "start",
 		usage:   []string{"adopt ISSUE"},
@@ -135,7 +144,8 @@ current rig must track a Linear issue that belongs to a project.`,
 		group:   "work",
 		usage:   []string{"send RIG MESSAGE..."},
 		summary: "message another rig's agent, delivered at its next turn boundary",
-		details: `Claude, codex, and pi rigs. Reachability is checked first and failure is loud:
+		details: `RIG is an id, slug, or tracker id; "cos" means today's chief-of-staff rig.
+Claude, codex, and pi rigs. Reachability is checked first and failure is loud:
 no live session, no agent process, no claude inbox socket, no codex
 app-server daemon, or no rig-peer presence (pi sessions load the rig-peer
 extension at startup; an older session reports itself and asks for a

@@ -195,6 +195,25 @@ func TestResolveRig(t *testing.T) {
 	if _, err := resolveRig("nope"); err == nil || !strings.Contains(err.Error(), "no rig matches") {
 		t.Errorf("unknown: %v", err)
 	}
+
+	// cos is an address, not an id: with no chief of staff up it says how to
+	// start one, and with several it means the newest workday.
+	if _, err := resolveRig("cos"); err == nil || !strings.Contains(err.Error(), "rig cos") {
+		t.Errorf("cos with none up: %v", err)
+	}
+	mk(manifest{ID: "cos-2026-10-01", Kind: "cos", Created: time.Now()})
+	mk(manifest{ID: "cos-2026-10-02", Kind: "cos", Created: time.Now()})
+	if r, err := resolveRig("cos"); err != nil || r.ID != "cos-2026-10-02" {
+		t.Errorf("cos: %v %v", r, err)
+	}
+	if r, err := resolveRig("cos-2026-10-01"); err != nil || r.ID != "cos-2026-10-01" {
+		t.Errorf("an old cos by id: %v %v", r, err)
+	}
+	// A rig literally named cos keeps its name; the alias only fills a miss.
+	mk(manifest{ID: "cos", Title: "cosine similarity spike", Created: time.Now()})
+	if r, err := resolveRig("cos"); err != nil || r.Kind == "cos" {
+		t.Errorf("a rig named cos should win over the alias: %v %v", r, err)
+	}
 }
 
 func TestCurrentSenderRig(t *testing.T) {

@@ -171,6 +171,19 @@ durable Linear comment, relationship, issue, or project update. Sweep renders
 project rigs as quiet context but never offers them for collection; explicit
 `down` and tombstone resurrection still work.
 
+`rig cos` creates or enters today's chief-of-staff rig, `cos-YYYY-MM-DD`: the
+same repositoryless shape as a project rig (the two share the coordinator
+launch, repair, and resurrection paths behind `isCoordinator`), but it
+coordinates across every rig and lives for one workday. The kind exists for
+addressing. `rig send cos` resolves to the newest cos rig, so a rig told to
+report back can do it after the rig that asked has been torn down, which a
+literal id can't survive. The alias is checked only after nothing matched by
+name, and `co` stays pinned to config because it abbreviated config first.
+When an earlier cos rig is still up, today's kickoff names it and asks for a
+handover by its dated id, since `cos` would resolve to today's rig itself.
+Sweep offers a cos rig for teardown once its date has passed, unlike a project
+rig, which it never collects.
+
 Agent-to-agent messaging is the layer relay now sits on:
 `rig send <rig> <text>` delivers to the session at its next turn boundary,
 `rig reply` answers the latest inbound with a correlation id, and `rig

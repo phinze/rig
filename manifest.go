@@ -74,8 +74,10 @@ type manifest struct {
 	// else's PR: the workspace holds the author's commits fetched read-only, so
 	// there's nothing of yours to merge and the rig is done once you've posted a
 	// review, never gated on the PR itself merging. "project" is a persistent,
-	// repositoryless control rig over a tracker project. Absent on rigs
-	// predating this field, which read as authoring — the safe default.
+	// repositoryless control rig over a tracker project. "cos" is the chief of
+	// staff: repositoryless too, coordinating every rig rather than one
+	// project's, and done at the end of its workday. Absent on rigs predating
+	// this field, which read as authoring — the safe default.
 	Kind string
 	// ReviewPRs maps a repo's subdir to the durable GitHub locator a review rig
 	// is reviewing there. The workspace branch says which code was fetched, but
@@ -128,10 +130,19 @@ func (m manifest) isReview() bool { return m.Kind == "review" }
 // rather than work on one issue or a review of one pull request.
 func (m manifest) isProject() bool { return m.Kind == "project" }
 
+// isCoS reports whether this is a chief-of-staff rig: one per workday,
+// coordinating across every rig, and addressable as `cos` by `rig send`.
+func (m manifest) isCoS() bool { return m.Kind == "cos" }
+
+// isCoordinator reports whether this rig coordinates other rigs rather than
+// owning work of its own. Coordinators are repositoryless: their agent runs
+// from the rig root, with no checkout, no Recto, and nothing to merge.
+func (m manifest) isCoordinator() bool { return m.isProject() || m.isCoS() }
+
 // isAuthoring makes the legacy default explicit. Code that branches on a
 // terminal condition should use these predicates rather than assuming every
-// non-review rig owns commits; project rigs deliberately own no workspace.
-func (m manifest) isAuthoring() bool { return !m.isReview() && !m.isProject() }
+// non-review rig owns commits; coordinator rigs deliberately own no workspace.
+func (m manifest) isAuthoring() bool { return !m.isReview() && !m.isCoordinator() }
 
 func writeManifest(basedir string, m manifest) error {
 	var b strings.Builder

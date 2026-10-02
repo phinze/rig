@@ -153,7 +153,7 @@ func runProject(args []string) error {
 		return fmt.Errorf("writing project rig instructions: %w", err)
 	}
 	rs := sessionFor(basedir, m)
-	err = spawnProjectSession(rs, basedir, sessionSpec{
+	err = spawnCoordinatorSession(rs, basedir, sessionSpec{
 		agent:   pick.kind,
 		prompt:  projectKickoff(project.Name),
 		rigID:   m.ID,

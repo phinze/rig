@@ -53,6 +53,9 @@ func runAdopt(args []string) error {
 	if m.isProject() {
 		return fmt.Errorf("a project rig already tracks a Linear project; adopt promotes a task rig")
 	}
+	if m.isCoS() {
+		return fmt.Errorf("a chief-of-staff rig coordinates every rig; adopt promotes a task rig")
+	}
 	if m.TrackerID != "" {
 		if strings.EqualFold(m.TrackerID, ref.id) {
 			fmt.Fprintf(os.Stderr, "rig: %s already tracks %s\n", m.ID, m.TrackerID)

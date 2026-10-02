@@ -62,6 +62,8 @@ func main() {
 		err = runNew(args)
 	case "project":
 		err = runProject(args)
+	case "cos":
+		err = runCoS(args)
 	case "dispatch":
 		err = runDispatch(args)
 	case "relay":

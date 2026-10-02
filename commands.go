@@ -41,8 +41,8 @@ func runAdd(args []string) error {
 	if err != nil {
 		return fmt.Errorf("reading manifest: %w", err)
 	}
-	if m.isProject() {
-		return fmt.Errorf("project rigs do not own repository workspaces")
+	if m.isCoordinator() {
+		return fmt.Errorf("%s rigs do not own repository workspaces", m.Kind)
 	}
 
 	repoPath, err := ensureGhqClone(owner, repo)

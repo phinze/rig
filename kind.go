@@ -15,6 +15,7 @@ const (
 	rigKindTicket
 	rigKindReview
 	rigKindProject
+	rigKindCoS
 )
 
 func rigKindOf(s rigStatus) rigKind {
@@ -23,6 +24,8 @@ func rigKindOf(s rigStatus) rigKind {
 		return rigKindReview
 	case "project":
 		return rigKindProject
+	case "cos":
+		return rigKindCoS
 	}
 	if s.Tracker != "" {
 		return rigKindTicket
@@ -43,8 +46,8 @@ func rigKindOf(s rigStatus) rigKind {
 // rigKindGlyph marks the id cell with its kind. The shapes come from families
 // the state glyphs don't use — a tag for a ticket, octicon's pull-request for a
 // review (its git-merge sibling already means merged), a sitemap for a
-// project's umbrella of issues — so kind and state never trade places at a
-// glance. A loose rig draws nothing: absence is its marker, and a glyph on
+// project's umbrella of issues, a briefcase for the chief of staff — so kind
+// and state never trade places at a glance. A loose rig draws nothing: absence is its marker, and a glyph on
 // every row buys less than the two columns it would cost in a popup.
 func rigKindGlyph(k rigKind) string {
 	switch k {
@@ -54,6 +57,8 @@ func rigKindGlyph(k rigKind) string {
 		return "\uf407"
 	case rigKindProject:
 		return "\uf0e8"
+	case rigKindCoS:
+		return "\uf0b1"
 	}
 	return ""
 }

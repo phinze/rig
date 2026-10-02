@@ -494,6 +494,27 @@ func planSweep(rigs []rigInfo, statuses []rigStatus, home string, fetched map[st
 			plans = append(plans, sweepPlan{rig: r, status: s, action: actionNone, detail: "project overview"})
 			continue
 		}
+		// A chief-of-staff rig is the opposite case: it lives for one workday and
+		// carries its continuity in the plan file, not the conversation, so once
+		// its day is over it's offered for teardown like finished work. Pre-checked
+		// unless its agent is mid-turn, the same courtesy park gets.
+		if m.isCoS() {
+			// Never the rig sweep is streaming into, though: tearing that down
+			// would end the pass, which is why Current exists at all.
+			here := current != (sessionKey{}) && rigKey(s.Path, m.Backend) == current
+			switch {
+			case m.ID >= cosRigID(now):
+				plans = append(plans, sweepPlan{rig: r, status: s, action: actionNone, detail: "today's chief of staff"})
+			case here:
+				plans = append(plans, sweepPlan{rig: r, status: s, action: actionNone, detail: "chief of staff, day over (sweep is running here)"})
+			default:
+				plans = append(plans, sweepPlan{
+					rig: r, status: s, action: actionDown, detail: "chief of staff, day over",
+					collect: s.Agent != "working",
+				})
+			}
+			continue
+		}
 		// Note any PR we can see right now, so this rig stays recognisable as one
 		// that shipped after GitHub deletes the branch. Best-effort: a failure
 		// here costs nothing but a repeat next sweep, and must never fail a scan.

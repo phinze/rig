@@ -193,8 +193,8 @@ func TestAgentLaunchCommand(t *testing.T) {
 }
 
 func TestProjectAgentLaunchCommandUsesRootInstructions(t *testing.T) {
-	got := agentCodex.launchProjectCommand("assess the project")
-	want := "codex --dangerously-bypass-approvals-and-sandbox 'Read the project rig instructions in ./AGENTS.md first. assess the project'"
+	got := agentCodex.launchCoordinatorCommand("assess the project")
+	want := "codex --dangerously-bypass-approvals-and-sandbox 'Read the rig instructions in ./AGENTS.md first. assess the project'"
 	if got != want {
 		t.Errorf("project launch = %q, want %q", got, want)
 	}

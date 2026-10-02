@@ -840,6 +840,39 @@ func TestPlanSweepKeepsProjectRigsAsPersistentContext(t *testing.T) {
 	}
 }
 
+func TestPlanSweepOffersFinishedCoSDays(t *testing.T) {
+	today := cosRigID(time.Now())
+	yesterday := cosRigID(time.Now().AddDate(0, 0, -1))
+	var rigs []rigInfo
+	var statuses []rigStatus
+	for _, tc := range []struct{ id, agent string }{
+		{today, "idle"},
+		{yesterday, "idle"},
+		{"cos-2026-01-05", "working"},
+	} {
+		dir := t.TempDir()
+		if err := writeManifest(dir, manifest{ID: tc.id, Kind: "cos"}); err != nil {
+			t.Fatal(err)
+		}
+		rigs = append(rigs, rigInfo{ID: tc.id, Kind: "cos", Path: dir})
+		statuses = append(statuses, rigStatus{ID: tc.id, Kind: "cos", Path: dir, Agent: tc.agent})
+	}
+	plans := planSweep(rigs, statuses, t.TempDir(), map[string]bool{}, nil)
+	got := map[string]sweepPlan{}
+	for _, p := range plans {
+		got[p.status.ID] = p
+	}
+	if p := got[today]; p.action != actionNone || p.collect {
+		t.Errorf("today's cos should be left alone: %+v", p)
+	}
+	if p := got[yesterday]; p.action != actionDown || !p.collect {
+		t.Errorf("yesterday's idle cos should be a pre-checked teardown: %+v", p)
+	}
+	if p := got["cos-2026-01-05"]; p.action != actionDown || p.collect {
+		t.Errorf("a mid-turn old cos should be offered but not pre-checked: %+v", p)
+	}
+}
+
 // runeIndex is strings.Index counted in runes, which is what a column position
 // means on a board that draws glyphs.
 func runeIndex(s, sub string) int {

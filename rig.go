@@ -248,10 +248,11 @@ func spawnSession(rs rigSession, paneCwd string, sess sessionSpec) error {
 	return nil
 }
 
-// spawnProjectSession creates the repositoryless control-plane variant of a
-// rig session. Its agent starts at the basedir root and there is deliberately
-// no Recto split: a project rig observes task rigs rather than owning a diff.
-func spawnProjectSession(rs rigSession, basedir string, sess sessionSpec) error {
+// spawnCoordinatorSession creates the repositoryless control-plane variant of
+// a rig session. Its agent starts at the basedir root and there is deliberately
+// no Recto split: a project or cos rig observes task rigs rather than owning a
+// diff.
+func spawnCoordinatorSession(rs rigSession, basedir string, sess sessionSpec) error {
 	if rs.live() {
 		return nil
 	}
@@ -267,7 +268,7 @@ func spawnProjectSession(rs rigSession, basedir string, sess sessionSpec) error 
 	}
 	agentLine := sess.command
 	if agentLine == "" {
-		agentLine = sess.agent.launchProjectCommand(sess.prompt)
+		agentLine = sess.agent.launchCoordinatorCommand(sess.prompt)
 	}
 	agentLine = claudeLaunchLine(basedir, sess.rigID, sess.agent, agentLine)
 	if err := rs.b.SendKeys(agentPane, agentLine); err != nil {

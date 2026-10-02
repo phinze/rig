@@ -35,9 +35,13 @@ var commandNames = func() []string {
 // abbreviated add until adopt arrived, and a new command must never steal a
 // spelling that already worked. Adopt is the newcomer, so it pays the cost and
 // starts at `ado`.
+//
+// `co` is the same story a third time: it abbreviated config until cos
+// arrived, so it stays config's and cos is reached by its full name.
 var commandAliases = map[string]string{
 	"cd": "switch", "c": "switch",
 	"a": "add", "ad": "add",
+	"co": "config",
 }
 
 // hiddenCommands are the internals other processes invoke: the per-rig gh shim,

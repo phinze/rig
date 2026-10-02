@@ -152,8 +152,8 @@ func rigResumeCommand(m manifest, prompt ...string) string {
 		return m.agentKind().resumeCommandWithPrompt(m.SessionID, next)
 	}
 	if next != "" {
-		if m.isProject() {
-			return m.agentKind().launchProjectCommand(next)
+		if m.isCoordinator() {
+			return m.agentKind().launchCoordinatorCommand(next)
 		}
 		return m.agentKind().launchCommand(next)
 	}
@@ -162,8 +162,8 @@ func rigResumeCommand(m manifest, prompt ...string) string {
 		label += " (" + m.Title + ")"
 	}
 	promptText := "Resume work on this rig: " + label + ". Read the rig instructions and existing workspace state, then continue from where the previous session left off."
-	if m.isProject() {
-		return m.agentKind().launchProjectCommand(promptText)
+	if m.isCoordinator() {
+		return m.agentKind().launchCoordinatorCommand(promptText)
 	}
 	return m.agentKind().launchCommand(promptText)
 }
@@ -176,8 +176,8 @@ func ensureRigRuntime(basedir string, m manifest) (rigSession, error) {
 }
 
 func ensureRigRuntimeWithPrompt(basedir string, m manifest, prompt string) (rigSession, error) {
-	if m.isProject() {
-		return ensureProjectRuntime(basedir, m, prompt)
+	if m.isCoordinator() {
+		return ensureCoordinatorRuntime(basedir, m, prompt)
 	}
 	repo := m.MainRepo
 	if m.Repos[repo] == "" || !dirExists(filepath.Join(basedir, repo)) {
@@ -299,14 +299,15 @@ func ensureRigRuntimeWithPrompt(basedir string, m manifest, prompt string) (rigS
 	return rs, nil
 }
 
-// ensureProjectRuntime repairs the agent-only session used by a project rig.
+// ensureCoordinatorRuntime repairs the agent-only session used by a project or
+// cos rig.
 // It mirrors the agent half of ensureRigRuntime without inventing a fake repo
 // or starting Recto in a directory that has no jj workspace.
-func ensureProjectRuntime(basedir string, m manifest, prompt string) (rigSession, error) {
+func ensureCoordinatorRuntime(basedir string, m manifest, prompt string) (rigSession, error) {
 	rs := sessionFor(basedir, m)
 	command := rigResumeCommand(m, prompt)
 	if !rs.live() {
-		return rs, spawnProjectSession(rs, basedir, sessionSpec{agent: m.agentKind(), command: command, rigID: m.ID, basedir: basedir})
+		return rs, spawnCoordinatorSession(rs, basedir, sessionSpec{agent: m.agentKind(), command: command, rigID: m.ID, basedir: basedir})
 	}
 
 	command = claudeLaunchLine(basedir, m.ID, m.agentKind(), command)
@@ -325,7 +326,7 @@ func ensureProjectRuntime(basedir string, m manifest, prompt string) (rigSession
 		}
 	}
 	if mainWindow.WindowID == "" {
-		return rigSession{}, fmt.Errorf("project rig session %s has no main window", rs.name)
+		return rigSession{}, fmt.Errorf("coordinator rig session %s has no main window", rs.name)
 	}
 	if agentPane.PaneID == "" {
 		for _, p := range panes {
@@ -338,7 +339,7 @@ func ensureProjectRuntime(basedir string, m manifest, prompt string) (rigSession
 	if agentPane.PaneID == "" {
 		pane, err := rs.b.SplitShell(mainWindow.WindowID, basedir)
 		if err != nil {
-			return rigSession{}, fmt.Errorf("restoring project agent pane: %w", err)
+			return rigSession{}, fmt.Errorf("restoring coordinator agent pane: %w", err)
 		}
 		agentPane = mux.Pane{PaneID: pane, WindowID: mainWindow.WindowID, Command: filepath.Base(os.Getenv("SHELL"))}
 	}

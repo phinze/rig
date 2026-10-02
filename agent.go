@@ -167,12 +167,12 @@ func (a agentKind) launchCommand(prompt string) string {
 	return a.launchPromptCommand(prompt)
 }
 
-// launchProjectCommand is the repositoryless sibling of launchCommand. Task
-// agents start one directory below their rig instructions; project agents
-// start at the rig root, so their explicit breadcrumb is ./AGENTS.md.
-func (a agentKind) launchProjectCommand(prompt string) string {
+// launchCoordinatorCommand is the repositoryless sibling of launchCommand. Task
+// agents start one directory below their rig instructions; coordinator agents
+// (project and cos) start at the rig root, so their explicit breadcrumb is ./AGENTS.md.
+func (a agentKind) launchCoordinatorCommand(prompt string) string {
 	if !a.findsRigInstructions() {
-		prompt = "Read the project rig instructions in ./AGENTS.md first. " + prompt
+		prompt = "Read the rig instructions in ./AGENTS.md first. " + prompt
 	}
 	return a.launchPromptCommand(prompt)
 }
