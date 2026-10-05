@@ -172,4 +172,7 @@ func TestCoSKickoffAsksAStillRunningPredecessorForAHandover(t *testing.T) {
 	if !strings.Contains(got, "rig send cos-2026-10-02") {
 		t.Errorf("the handover ask must use the dated id, since cos now means today: %s", got)
 	}
+	if !strings.Contains(got, "rig down") {
+		t.Errorf("the handover ends with tearing the predecessor down: %s", got)
+	}
 }

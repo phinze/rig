@@ -42,10 +42,10 @@ func runCoS(args []string) error {
 			return activateRig(r)
 		}
 	}
-	// Yesterday's rig still standing isn't an error, but it is the one thing
-	// worth saying on the way in: sends to `cos` go to the newest rig, so the
-	// old one has stopped hearing from anybody. It's also the likeliest sign
-	// that yesterday never wrote its end-of-day handoff, which is why the newest
+	// Yesterday's rig still standing is the normal case: the day ends with the
+	// next morning's handover, not a teardown at night. Sends to `cos` now
+	// reach the newest rig, so the old one hears only from its successor, which
+	// takes the handover and then tears it down. That's why the newest
 	// predecessor is named in today's kickoff and not just printed here.
 	var predecessor string
 	for _, r := range rigs {
@@ -96,7 +96,7 @@ func runCoS(args []string) error {
 func cosKickoff(day, predecessor string) string {
 	prompt := fmt.Sprintf("You are the chief of staff for %s. Use the chief-of-staff skill.", day)
 	if predecessor != "" {
-		prompt += fmt.Sprintf(" The previous chief of staff, %s, is still up: before anything else, ask it for a handover with `rig send %s <message>` and wait for its reply. If it can't be reached, fall back to the plan file.", predecessor, predecessor)
+		prompt += fmt.Sprintf(" The previous chief of staff, %s, is still up: before anything else, ask it for a handover with `rig send %s <message>` and wait for its reply. Once its plan-file section is in, tear it down with `rig down` from its basedir. If it can't be reached, fall back to the plan file and leave the teardown to me.", predecessor, predecessor)
 	}
 	return prompt + " Pick up any threads carried over from the last workday, read the board, and brief me. Propose before acting on another rig, and draft anything with my name on it for approval."
 }
