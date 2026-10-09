@@ -57,12 +57,28 @@ func (b Backend) Surface() string {
 func (b Backend) remote() bool { return b.Server != "" }
 
 // binary is where Rex.app ships its CLI. PATH is consulted first so a
-// standalone install or a test shim wins.
+// standalone install or a test shim wins, then REX_BIN_DIR, which Rex
+// terminals carry for exactly the case of a shell that rebuilt PATH. The
+// bundle paths come last, newest layout first: preview.12 moved the CLI from
+// Helpers/rex into the Rex Server helper app, and an install still on the
+// old layout keeps working.
 func binary() string {
 	if p, err := exec.LookPath("rex"); err == nil {
 		return p
 	}
-	return "/Applications/Rex.app/Contents/Helpers/rex"
+	candidates := []string{
+		"/Applications/Rex.app/Contents/Helpers/Rex Server.app/Contents/MacOS/rex",
+		"/Applications/Rex.app/Contents/Helpers/rex",
+	}
+	if dir := os.Getenv("REX_BIN_DIR"); dir != "" {
+		candidates = append([]string{filepath.Join(dir, "rex")}, candidates...)
+	}
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err == nil {
+			return c
+		}
+	}
+	return candidates[len(candidates)-1]
 }
 
 // remoteTimeout bounds each call to another server. The board lists every
@@ -429,6 +445,7 @@ func (b Backend) appClient() (string, error) {
 			Info struct {
 				Kind string `json:"kind"`
 			} `json:"info"`
+			State string `json:"connection_state"`
 		} `json:"clients"`
 	}
 	if err := json.Unmarshal(raw, &out); err != nil {
@@ -436,7 +453,11 @@ func (b Backend) appClient() (string, error) {
 	}
 	var apps []string
 	for _, c := range out.Clients {
-		if c.Info.Kind == "app" {
+		// The server keeps a client it lost (the app relaunching, a Mac
+		// waking) listed as "lost" beside its replacement, so only a
+		// connected app counts. An empty state is a server that predates
+		// the field.
+		if c.Info.Kind == "app" && (c.State == "" || c.State == "connected") {
 			apps = append(apps, c.ID)
 		}
 	}

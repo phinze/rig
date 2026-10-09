@@ -23,7 +23,8 @@ printf '%s\n' "$*" >> "` + log + `"
 if [ -n "$REX_FAKE_DOWN" ]; then echo 'Error: connecting to the server timed out after 3s: context deadline exceeded' >&2; exit 1; fi
 case "$*" in
 *"client ls --json"*)
-  echo '{"clients":[{"client_id":"client:app","info":{"kind":"app"}},{"client_id":"client:cli","info":{"kind":"cli"}}]}'
+  # A relaunched app leaves its old client listed as lost, as preview.12 does.
+  echo '{"clients":[{"client_id":"client:gone","info":{"kind":"app"},"connection_state":"lost"},{"client_id":"client:app","info":{"kind":"app"},"connection_state":"connected"},{"client_id":"client:cli","info":{"kind":"cli"},"connection_state":"connected"}]}'
   exit 0 ;;
 *" do session.select "*)
   if [ -n "$REX_FAKE_NO_REMOTE_CONTROL" ]; then
@@ -416,5 +417,18 @@ func TestViewerAttachSelectsFromOutsideRex(t *testing.T) {
 	raw, _ := os.ReadFile(log)
 	if strings.Contains(string(raw), "attach ") {
 		t.Errorf("viewer fell through to a text-mode attach:\n%s", raw)
+	}
+}
+
+// With nothing on PATH, REX_BIN_DIR is where a Rex terminal says the CLI is.
+func TestBinaryFollowsRexBinDir(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "rex"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("REX_BIN_DIR", dir)
+	if got, want := binary(), filepath.Join(dir, "rex"); got != want {
+		t.Errorf("binary() = %q, want %q", got, want)
 	}
 }
