@@ -58,8 +58,8 @@ The manifest is flat TOML: scalar identity and lifecycle fields, plus
 `main_repo` / `session_id` hints for reconstructing a killed runtime. A `[repos]`
 table maps each subdir to its `owner/repo`,
 and a `[branches]` table mapping each subdir to the branches its work rides
-(primary first, `rig track` secondaries after). `GH_REPO`, `RIG_WORKSPACE`,
-and a stable per-workspace `RIG_PORT` are projected by `rig env` rather than
+(primary first, `rig track` secondaries after). `RIG_WORKSPACE` and a stable
+per-workspace `RIG_PORT` are projected by `rig env` rather than
 written into per-repo .envrc files: direnv loads only the nearest .envrc, so
 a repo shipping its own (nix devshells) would shadow them (see §Naming).
 
@@ -159,8 +159,8 @@ before the field existed, and resurrect one into an agent it never ran.
 `RIG_AGENT` is read, never written. It used to be both: `rig env` projected each
 rig's manifest agent into its environment, on the general principle that the
 manifest is the source of truth and downstream tools shouldn't rediscover it.
-But nothing downstream ever read it — unlike `RIG_PORT`, `GH_REPO`, and
-`ISO_SESSION`, each of which exists for a specific consumer — and sharing a name
+But nothing downstream ever read it — unlike `RIG_PORT` and `ISO_SESSION`,
+each of which exists for a specific consumer — and sharing a name
 with the input side meant a rig made its own agent the starting position for the
 next rig you created from inside it. Dropping the export leaves the name to mean
 one thing: the agent you'd like new rigs to start on.
@@ -308,10 +308,16 @@ cascade), so a repo shipping its own — nix devshells — would shadow the
 basedir's exports. Tools should consume the env vars first
 (`RIG_WORKSPACE` is the per-working-tree key, same shape as the jj
 workspace name), falling back to enough-path-to-be-unique rather than
-basename. Rig also prepends a rig-local shim directory to `PATH`. Its `gh`
-shim resolves `GH_REPO` from the invocation cwd, rather than the agent's
-startup environment, so one agent can safely ship several repos from the same
-rig.
+basename.
+
+`GH_REPO` is the one key `rig env` takes away rather than adds. Workspaces
+are created colocated (`jj workspace add --colocate`, jj 0.46+), so each has
+its own git worktree and gh reads the repo from cwd's remote like it would in
+any checkout. Before that, a workspace had no `.git`, so rig exported
+`GH_REPO` and fronted `PATH` with a per-rig `gh` shim that re-resolved it from
+the invocation cwd; an agent's startup value went stale the moment it ran gh
+from a second repo. The shim is no longer written, and `rig __gh` survives
+only to strip the stale value for rigs that still carry one.
 
 tmux sessions are named with the full basedir path in session-wizard's
 full-path convention (`~/workspaces/...`, lowercased, `. :` → `-`), so a
@@ -1004,9 +1010,9 @@ and leaves the choice where it belongs.
   `--allowed-paths`, or something else? Decide before locking in the
   basedir-as-boundary assumption.
 - ~~**direnvrc stdlib migration.**~~ Answered: `rig env` owns all layout
-  and manifest knowledge (including the legacy
-  `~/workspaces/github.com/...` → `GH_REPO` path-parse, which ages out
-  with those sessions); the host stdlib is a one-line eval. Repo-owned
+  and manifest knowledge (the legacy `~/workspaces/github.com/...` →
+  `GH_REPO` path-parse has since aged out); the host stdlib is a one-line
+  eval. Repo-owned
   `.envrc` files and the parent basedir `.envrc` provide the direnv
   entrypoints; the stdlib projects the right environment from either one.
 - ~~**Interactive picker source mixing.**~~ Answered: neither merged nor

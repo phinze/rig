@@ -191,7 +191,7 @@ func rankReposByFrecency(repos []repoRef, dirs []string) {
 
 // ownerFromPath pulls the owner segment out of a ghq-style checkout path
 // (~/src/<host>/<owner>/<repo>). Returns "" if the path isn't under ~/src or
-// doesn't have the expected depth, so GH_REPO derivation degrades gracefully.
+// doesn't have the expected depth, so callers degrade gracefully.
 func ownerFromPath(repoPath string) string {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -293,8 +293,13 @@ func jjWorkspaceName(rigID, repoName string) string {
 }
 
 func jjWorkspaceAdd(repoPath, wsName, startRev, dest string) error {
+	// --colocate gives the workspace its own git worktree, so git and gh find
+	// the repo from cwd like they would in any checkout. jj would do this by
+	// default for a colocated source, but only while the user's git.colocate
+	// says so; rig depends on it, so ask rather than inherit.
 	cmd := exec.Command("jj", "-R", repoPath,
 		"workspace", "add",
+		"--colocate",
 		"--revision", startRev,
 		"--name", wsName,
 		dest,

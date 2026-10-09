@@ -402,7 +402,7 @@ func TestUpDown(t *testing.T) {
 	home := canonicalTempDir(t)
 	bin := filepath.Join(home, "bin")
 	// Lives under ~/src/<host>/<owner>/<repo> so owner derivation (and thus
-	// the manifest's [repos] table / GH_REPO wiring) has something to chew on.
+	// the manifest's [repos] table) has something to chew on.
 	repoDir := filepath.Join(home, "src", "github.com", "fakeowner", "fakerepo")
 	rigBin := filepath.Join(home, "rig")
 
@@ -486,12 +486,13 @@ func TestUpDown(t *testing.T) {
 		basedir,
 		filepath.Join(basedir, manifestName),
 		filepath.Join(basedir, ".envrc"),
-		filepath.Join(basedir, ".rig", "bin", "gh"),
 		// Agent-facing breadcrumbs, rendered from the manifest.
 		filepath.Join(basedir, "CLAUDE.md"),
 		filepath.Join(basedir, "AGENTS.md"),
 		filepath.Join(basedir, ".agents", "rules", "rig.md"),
 		filepath.Join(basedir, "fakerepo", ".jj"),
+		// Colocated, so git and gh find the repo from inside the workspace.
+		filepath.Join(basedir, "fakerepo", ".git"),
 	}
 	for _, p := range wantFiles {
 		if _, err := os.Stat(p); err != nil {
@@ -518,7 +519,6 @@ func TestUpDown(t *testing.T) {
 	if !strings.Contains(string(manifest), `created = "`) {
 		t.Errorf("manifest missing created timestamp:\n%s", manifest)
 	}
-	// The [repos] table is what the global direnvrc reads to set GH_REPO.
 	if !strings.Contains(string(manifest), `fakerepo = "fakeowner/fakerepo"`) {
 		t.Errorf("manifest missing repos mapping:\n%s", manifest)
 	}

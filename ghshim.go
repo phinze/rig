@@ -8,41 +8,25 @@ import (
 	"strings"
 )
 
-// TODO: Revisit this shim if jj's first-class colocated workspaces land. They
-// may give gh correct per-workspace Git context and make this indirection moot:
-// https://github.com/jj-vcs/jj/issues/8052
+// ghShim is the body rig used to write to <basedir>/.rig/bin/gh. It no longer
+// writes one, but rigs made before jj's colocated workspaces still have it on
+// disk, and agents started in them still have it at the front of PATH.
+const ghShim = "#!/bin/sh\nexec rig __gh \"$@\"\n"
 
-// runGHShim invokes the real gh with repository context derived from cwd.
-// Agents inherit their environment when the rig starts, then commonly execute
-// commands with a different cwd without passing through a shell hook. Resolving
-// here keeps a runtime-started agent from opening cloud's PR against runtime.
+// runGHShim keeps those older shims working until their rigs are gone. The
+// shim existed to set GH_REPO from the invocation cwd, because a workspace with
+// no .git gave gh nothing to infer from and an agent's startup GH_REPO went
+// stale as soon as it ran gh from another repo. Colocated workspaces have a
+// git remote, so all that's left to do is drop the stale value and step out of
+// the way. Once no rig predates colocation, this, ghShim, and the __gh command
+// can go.
 func runGHShim(args []string) error {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-
-	env := os.Environ()
 	path := withoutRigShims(os.Getenv("PATH"))
-	if basedir, err := findBasedir(cwd); err == nil {
-		m, readErr := readManifest(basedir)
-		if readErr != nil {
-			return fmt.Errorf("reading manifest: %w", readErr)
-		}
-		if subdir, repoErr := repoSubdirForCwd(basedir, cwd, m); repoErr == nil {
-			env = setEnv(env, "GH_REPO", m.Repos[subdir])
-		} else {
-			env = unsetEnv(env, "GH_REPO")
-		}
-	} else if os.Getenv("RIG_BASEDIR") != "" {
-		// The agent left its rig. Don't let the repo it started in override gh's
-		// normal discovery in the new cwd.
-		env = unsetEnv(env, "GH_REPO")
-	}
 	realGH, err := findExecutable("gh", path)
 	if err != nil {
 		return err
 	}
+	env := unsetEnv(os.Environ(), "GH_REPO")
 	env = setEnv(env, "PATH", path)
 
 	cmd := exec.Command(realGH, args...)

@@ -30,11 +30,6 @@ func TestEnvExports(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	legacy := filepath.Join(home, "workspaces", "github-com", "mirendev", "runtime", "mir-1224-some-slug")
-	if err := os.MkdirAll(legacy, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
 	cases := []struct {
 		name string
 		cwd  string
@@ -45,7 +40,7 @@ func TestEnvExports(t *testing.T) {
 			[]string{
 				"export RIG_BASEDIR='" + basedir + "'",
 				"PATH_rm '" + filepath.Join(basedir, ".rig", "bin") + "'",
-				"PATH_add '" + filepath.Join(basedir, ".rig", "bin") + "'",
+				"unset GH_REPO",
 				"export RIG_ID='mir-75'",
 			},
 		},
@@ -54,11 +49,10 @@ func TestEnvExports(t *testing.T) {
 			[]string{
 				"export RIG_BASEDIR='" + basedir + "'",
 				"PATH_rm '" + filepath.Join(basedir, ".rig", "bin") + "'",
-				"PATH_add '" + filepath.Join(basedir, ".rig", "bin") + "'",
+				"unset GH_REPO",
 				"export RIG_ID='mir-75'",
 				"export RIG_WORKSPACE='mir-75-runtime'",
 				"export RIG_PORT=17527",
-				"export GH_REPO='mirendev/runtime'",
 			},
 		},
 		{
@@ -66,11 +60,10 @@ func TestEnvExports(t *testing.T) {
 			[]string{
 				"export RIG_BASEDIR='" + basedir + "'",
 				"PATH_rm '" + filepath.Join(basedir, ".rig", "bin") + "'",
-				"PATH_add '" + filepath.Join(basedir, ".rig", "bin") + "'",
+				"unset GH_REPO",
 				"export RIG_ID='mir-75'",
 				"export RIG_WORKSPACE='mir-75-runtime'",
 				"export RIG_PORT=17527",
-				"export GH_REPO='mirendev/runtime'",
 			},
 		},
 		{
@@ -78,7 +71,7 @@ func TestEnvExports(t *testing.T) {
 			[]string{
 				"export RIG_BASEDIR='" + basedir + "'",
 				"PATH_rm '" + filepath.Join(basedir, ".rig", "bin") + "'",
-				"PATH_add '" + filepath.Join(basedir, ".rig", "bin") + "'",
+				"unset GH_REPO",
 				"export RIG_ID='mir-75'",
 			},
 		},
@@ -87,27 +80,18 @@ func TestEnvExports(t *testing.T) {
 			[]string{
 				"export RIG_BASEDIR='" + basedir + "'",
 				"PATH_rm '" + filepath.Join(basedir, ".rig", "bin") + "'",
-				"PATH_add '" + filepath.Join(basedir, ".rig", "bin") + "'",
+				"unset GH_REPO",
 				"export RIG_ID='mir-75'",
 				"export RIG_WORKSPACE='mir-75-cloud'",
 				"export RIG_PORT=17314",
 				"export ISO_SESSION='dev-mir-75-cloud'",
-				"export GH_REPO='mirendev/cloud'",
 			},
-		},
-		{
-			"legacy layout", legacy,
-			[]string{"export GH_REPO='mirendev/runtime'"},
-		},
-		{
-			"legacy layout too shallow", filepath.Join(home, "workspaces", "github-com", "mirendev"),
-			nil,
 		},
 		{"outside everything", home, nil},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := envExports(c.cwd, home); !reflect.DeepEqual(got, c.want) {
+			if got := envExports(c.cwd); !reflect.DeepEqual(got, c.want) {
 				t.Errorf("envExports(%q):\n got  %q\n want %q", c.cwd, got, c.want)
 			}
 		})

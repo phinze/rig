@@ -93,7 +93,7 @@ func runPRWithPicker(args []string, picker func([]string, string) (string, error
 
 	// Select by number after resolving by branch. This avoids asking gh to
 	// resolve the same branch a second time, and keeps the open pinned to the
-	// repo from the manifest instead of cwd's GH_REPO.
+	// repo from the manifest instead of whichever repo cwd is in.
 	cmd := exec.Command("gh", "pr", "view", strconv.Itoa(pr.Number), "-R", pr.Repo, "--web")
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {

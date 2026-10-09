@@ -513,8 +513,8 @@ new rigs call it.
 
 `rig env` deliberately does not export `RIG_AGENT`, though it once did. Every
 other key it projects has a downstream consumer (`RIG_PORT` a dev server,
-`GH_REPO` gh, `ISO_SESSION` iso); that one had none, and because the input side
-reads the same name, exporting it meant a rig silently seeded the picker for the
+`ISO_SESSION` iso); that one had none, and because the input side reads the same
+name, exporting it meant a rig silently seeded the picker for the
 next rig you made from inside it. The name belongs to you, not to whichever rig
 you're standing in. If you ever want a rig's agent readable from inside it, read
 `.rig/manifest.toml`, or pick a name that doesn't feed back into the picker.

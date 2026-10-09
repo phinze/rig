@@ -21,16 +21,7 @@ func runEnv(args []string) error {
 	if err != nil {
 		return err
 	}
-	// Generated shims are disposable rig metadata. Recreate them here so rigs
-	// that predate a newly-added shim pick it up on their next direnv load.
-	if basedir, err := findBasedir(cwd); err == nil {
-		_ = writeRigShims(basedir)
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return err
-	}
-	for _, line := range envExports(cwd, home) {
+	for _, line := range envExports(cwd) {
 		fmt.Println(line)
 	}
 	return nil
@@ -38,21 +29,27 @@ func runEnv(args []string) error {
 
 // envExports computes the shell setup lines for cwd. Kept pure (no Getwd/Getenv)
 // for testability.
-func envExports(cwd, home string) []string {
+func envExports(cwd string) []string {
 	if basedir, err := findBasedir(cwd); err == nil {
 		return rigExports(basedir, cwd)
 	}
-	return legacyExports(cwd, home)
+	return nil
 }
 
 // rigExports emits the rig's identity: basedir and id everywhere under the
-// rig, plus the working-tree id (same shape as the jj workspace name) and
-// GH_REPO when cwd is inside one of the rig's repo workspaces.
+// rig, plus the working-tree id (same shape as the jj workspace name) when
+// cwd is inside one of the rig's repo workspaces.
+//
+// GH_REPO is unset rather than exported. Workspaces are colocated, so gh reads
+// the repo from cwd's git remote like it would in any checkout. An exported
+// GH_REPO was worse than none: an agent keeps the value from the directory it
+// started in, so one that later ran gh from a second repo in the same rig
+// aimed at the first. The PATH_rm clears the gh shim that used to patch over
+// that, from shells that still carry it.
 //
 // Deliberately absent: the rig's agent. Every other key here exists because
-// something downstream reads it — a dev server wants RIG_PORT, gh wants
-// GH_REPO, iso wants ISO_SESSION — and nothing ever read RIG_AGENT. What it
-// did instead was collide with the input side: parseAgent reads that same name
+// something downstream reads it — a dev server wants RIG_PORT, iso wants
+// ISO_SESSION — and nothing ever read RIG_AGENT. What it did instead was collide with the input side: parseAgent reads that same name
 // to seed the picker, so a rig quietly made its own agent the starting position
 // for the next rig you created from inside it. RIG_AGENT is now yours alone,
 // a standing preference set in your shell, and rig only reads it.
@@ -64,7 +61,7 @@ func rigExports(basedir, cwd string) []string {
 	out := []string{
 		"export RIG_BASEDIR=" + shellQuote(basedir),
 		"PATH_rm " + shellQuote(filepath.Join(basedir, ".rig", "bin")),
-		"PATH_add " + shellQuote(filepath.Join(basedir, ".rig", "bin")),
+		"unset GH_REPO",
 	}
 	if m.ID != "" {
 		out = append(out, "export RIG_ID="+shellQuote(m.ID))
@@ -75,8 +72,7 @@ func rigExports(basedir, cwd string) []string {
 		return out
 	}
 	sub, _, _ := strings.Cut(rel, string(filepath.Separator))
-	nwo := m.Repos[sub]
-	if nwo == "" {
+	if m.Repos[sub] == "" {
 		return out // not inside a known repo workspace
 	}
 	if m.ID != "" {
@@ -97,7 +93,7 @@ func rigExports(basedir, cwd string) []string {
 			out = append(out, "export ISO_SESSION="+shellQuote(isoSessionName(m.ID, sub)))
 		}
 	}
-	return append(out, "export GH_REPO="+shellQuote(nwo))
+	return out
 }
 
 // hashPort maps an arbitrary key to a stable port in 10000-19999, matching
@@ -115,20 +111,4 @@ func hashPort(key string) int {
 // share one definition.
 func isoSessionName(rigID, sub string) string {
 	return "dev-" + rigID + "-" + sub
-}
-
-// legacyExports handles the pre-rig workspace layout,
-// ~/workspaces/<host>/<owner>/<repo>/..., where owner/repo is encoded in the
-// path itself. Ages out as those sessions finish.
-func legacyExports(cwd, home string) []string {
-	prefix := filepath.Join(home, "workspaces") + string(filepath.Separator)
-	rel, ok := strings.CutPrefix(cwd, prefix)
-	if !ok {
-		return nil
-	}
-	parts := strings.Split(rel, string(filepath.Separator))
-	if len(parts) < 3 || parts[1] == "" || parts[2] == "" {
-		return nil
-	}
-	return []string{"export GH_REPO=" + shellQuote(parts[1]+"/"+parts[2])}
 }

@@ -7,7 +7,10 @@ import (
 	"testing"
 )
 
-func TestGHShimResolvesRepoFromInvocationCwd(t *testing.T) {
+// Agents in rigs that predate colocated workspaces still run gh through the
+// shim, carrying whatever GH_REPO they started with. The shim has to drop it so
+// gh reads the repo from cwd, and must never find itself as the real gh.
+func TestGHShimDropsStaleRepoContext(t *testing.T) {
 	root := t.TempDir()
 	basedir := filepath.Join(root, "rig")
 	shimDir := filepath.Join(basedir, ".rig", "bin")
@@ -20,16 +23,13 @@ func TestGHShimResolvesRepoFromInvocationCwd(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for _, dir := range []string{basedir, staleBasedir} {
-		if err := writeRigShims(dir); err != nil {
+	for _, dir := range []string{shimDir, staleShimDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
-	}
-	if err := writeManifest(basedir, manifest{Repos: map[string]string{
-		"runtime": "mirendev/runtime",
-		"cloud":   "mirendev/cloud",
-	}}); err != nil {
-		t.Fatal(err)
+		if err := os.WriteFile(filepath.Join(dir, "gh"), []byte(ghShim), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 	marker := filepath.Join(root, "invocation")
 	realGH := "#!/bin/sh\nprintf '%s\\n%s\\n%s\\n' \"$GH_REPO\" \"$PATH\" \"$*\" > " + shellQuote(marker) + "\n"
@@ -49,9 +49,9 @@ func TestGHShimResolvesRepoFromInvocationCwd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	lines := strings.Split(strings.TrimSpace(string(blob)), "\n")
-	if got, want := lines[0], "mirendev/cloud"; got != want {
-		t.Errorf("GH_REPO = %q, want %q", got, want)
+	lines := strings.Split(strings.TrimSuffix(string(blob), "\n"), "\n")
+	if got := lines[0]; got != "" {
+		t.Errorf("GH_REPO = %q, want it unset", got)
 	}
 	if strings.Contains(lines[1], shimDir) {
 		t.Errorf("real gh PATH still contains current shim (would recurse): %q", lines[1])
@@ -64,28 +64,12 @@ func TestGHShimResolvesRepoFromInvocationCwd(t *testing.T) {
 	}
 }
 
-func TestCreateBasedirWritesGHShim(t *testing.T) {
+func TestCreateBasedirWritesNoGHShim(t *testing.T) {
 	basedir := filepath.Join(t.TempDir(), "rig")
 	if err := createBasedir(basedir, manifest{ID: "mir-1"}); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(basedir, ".rig", "bin", "gh")
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode()&0o111 == 0 {
-		t.Errorf("%s is not executable: %v", path, info.Mode())
-	}
-	if err := os.Chmod(path, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := writeRigShims(basedir); err != nil {
-		t.Fatal(err)
-	}
-	if info, err = os.Stat(path); err != nil {
-		t.Fatal(err)
-	} else if info.Mode()&0o111 == 0 {
-		t.Errorf("existing shim was not repaired: %v", info.Mode())
+	if _, err := os.Stat(filepath.Join(basedir, ".rig", "bin", "gh")); !os.IsNotExist(err) {
+		t.Errorf("createBasedir wrote a gh shim (stat err = %v); colocated workspaces don't need one", err)
 	}
 }

@@ -121,9 +121,9 @@ func main() {
 	case "config":
 		err = runConfigCmd(args)
 	case "__gh":
-		// Hidden: each rig prepends a tiny `gh` shim that delegates here. Resolve
-		// repository context from cwd on every invocation, including agent tool
-		// calls that change cwd without running a shell/direnv hook.
+		// Hidden: rigs that predate colocated workspaces carry a `gh` shim that
+		// delegates here. It drops their agents' stale GH_REPO so gh reads the
+		// repo from cwd. See runGHShim for when it can go.
 		err = runGHShim(args)
 	case "__agent":
 		// Hidden: the fzf pickers bind ctrl-o to a transform-header that shells out

@@ -92,9 +92,9 @@ type manifest struct {
 	// means an ordinary in-flight rig.
 	Parked time.Time
 	// Repos maps a repo's subdir name under the basedir to its
-	// "owner/repo" slug. The global direnvrc reads this to set GH_REPO,
-	// since the flat basedir path no longer encodes owner/repo the way
-	// the old ~/workspaces/<host>/<owner>/<repo> shape did.
+	// "owner/repo" slug, since the flat basedir path no longer encodes
+	// owner/repo the way the old ~/workspaces/<host>/<owner>/<repo> shape
+	// did.
 	Repos map[string]string
 	// Branches maps a repo's subdir to the branches its work rides on. The
 	// first is the primary, captured at workspace creation (up's Linear branch,
