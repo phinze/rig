@@ -195,32 +195,3 @@ func writeFileAtomic(path string, body []byte, mode os.FileMode) error {
 	}
 	return os.Rename(name, path)
 }
-
-// seedCodexTrustFor is the call site's form: resolve home, seed, and warn rather
-// than fail. Used by the paths that create rig directories.
-//
-// It seeds only directories under the rigs root, which is the whole of what rig
-// creates. Marking a directory trusted is granting authority, so it's bounded to
-// the tree rig owns rather than to whatever path a caller happens to pass —
-// otherwise a stray call (or a test that builds its fixture in /tmp) teaches
-// codex to trust somewhere nobody decided to trust.
-func seedCodexTrustFor(dirs ...string) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return
-	}
-	root := filepath.Join(home, "workspaces")
-	var scoped []string
-	for _, dir := range dirs {
-		if isUnder(dir, root) {
-			scoped = append(scoped, dir)
-		}
-	}
-	if len(scoped) == 0 {
-		return
-	}
-	if err := seedCodexTrust(home, scoped...); err != nil {
-		fmt.Fprintf(os.Stderr, "rig: warning: could not mark %s trusted for codex: %v\n",
-			strings.Join(scoped, ", "), err)
-	}
-}

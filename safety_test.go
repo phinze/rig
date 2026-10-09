@@ -21,6 +21,14 @@ func TestMain(m *testing.M) {
 		_ = os.RemoveAll(root)
 		os.Exit(1)
 	}
+	// CLAUDE_CONFIG_DIR outranks HOME when rig finds ~/.claude.json, so a
+	// developer who sets it would have every test that fakes HOME seeding and
+	// dropping trust in their real claude config instead.
+	if err := os.Unsetenv("CLAUDE_CONFIG_DIR"); err != nil {
+		fmt.Fprintf(os.Stderr, "rig tests: unset CLAUDE_CONFIG_DIR: %v\n", err)
+		_ = os.RemoveAll(root)
+		os.Exit(1)
+	}
 
 	code := m.Run()
 	_ = os.RemoveAll(root)

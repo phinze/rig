@@ -548,10 +548,20 @@ ignored because the gate reads the file rather than the merged config. Seeding
 is unconditional rather than codex-only, because trust belongs to the directory
 and not to whatever process opens it. See `codextrust.go` for why the append
 must check first (a duplicate TOML table breaks codex's config load outright)
-and why a missing `~/.codex` means skip rather than create. Claude and
-antigravity need none of this, and neither does pi, which only asks about
-directories holding `.pi/` or `.agents/skills/`; all three were verified to start
-clean in a directory they've never seen.
+and why a missing `~/.codex` means skip rather than create.
+
+Claude asks too, and `--dangerously-skip-permissions` doesn't cover it either.
+It was once on the "needs nothing" list, but only because the check ran on
+foxtrotbase, where `~/workspaces` had been trusted by hand long ago and claude
+(unlike codex) lets an ancestor's trust cover its children. A laptop without
+that entry asked on every rig. So rig seeds `hasTrustDialogAccepted` into
+`~/.claude.json` (or `$CLAUDE_CONFIG_DIR/.claude.json`) alongside the codex
+entries, and drops the rig's project entries at teardown. `claudetrust.go`
+holds the details: values stay raw so the rest of claude's state round-trips
+untouched, and nothing is written when nothing changed, because claude rewrites
+that file constantly. `seedTrustFor` and `dropTrustFor` in `trust.go` are the
+call sites for both agents. Antigravity needs none of this, and neither does
+pi, which only asks about directories holding `.pi/` or `.agents/skills/`.
 
 Codex's *hook* trust is a separate, global thing keyed on the hooks file's path
 and content hash, so it isn't rig's to fix. If it starts asking on every launch,

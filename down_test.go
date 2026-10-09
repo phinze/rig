@@ -504,4 +504,27 @@ func TestTeardownQuarantinesBeforeRemoval(t *testing.T) {
 			t.Errorf("codex config still trusts the torn-down rig:\n%s", got)
 		}
 	})
+
+	t.Run("claude directory trust is dropped with the rig", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		path := filepath.Join(home, ".claude.json")
+		if err := os.WriteFile(path, []byte(`{}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		basedir := filepath.Join(home, "workspaces", "mir-5-trust")
+		if err := os.MkdirAll(filepath.Join(basedir, "repo"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := seedClaudeTrust(home, basedir, filepath.Join(basedir, "repo")); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := teardownRig(basedir, manifest{ID: "mir-5"}); err != nil {
+			t.Fatal(err)
+		}
+		if projects := claudeProjects(t, path); len(projects) != 0 {
+			t.Errorf("claude config still trusts the torn-down rig: %v", projects)
+		}
+	})
 }

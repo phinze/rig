@@ -190,29 +190,6 @@ func TestCodexTrustRoundTrip(t *testing.T) {
 	}
 }
 
-// Trust is authority, so the seeding call site is bounded to the tree rig
-// creates. A fixture built somewhere else — which is every test that calls
-// createBasedir with a bare t.TempDir() — must leave the real config alone.
-func TestSeedCodexTrustForStaysInsideRigsRoot(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(home, ".codex", "config.toml")
-
-	seedCodexTrustFor(filepath.Join(t.TempDir(), "rig"), "/etc")
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Errorf("seeded a directory outside the rigs root: %s", readConfig(t, path))
-	}
-
-	inside := filepath.Join(home, "workspaces", "mir-9")
-	seedCodexTrustFor(inside)
-	if got := readConfig(t, path); !strings.Contains(got, inside) {
-		t.Errorf("config missing the rig it should have seeded:\n%s", got)
-	}
-}
-
 func TestCodexProjectHeader(t *testing.T) {
 	for _, tc := range []struct {
 		line string

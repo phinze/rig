@@ -106,7 +106,7 @@ func createBasedir(basedir string, m manifest) error {
 	if err := writeRootEnvrc(basedir, m); err != nil {
 		return err
 	}
-	seedCodexTrustFor(basedir)
+	seedTrustFor(basedir)
 	return direnvAllow(basedir)
 }
 
@@ -161,8 +161,8 @@ func addRepoWorkspace(basedir, rigID string, repo repoRef, startRev, branch stri
 	}
 
 	// The workspace dir is where the agent pane and every ad hoc split actually
-	// start, so it's the directory codex would stop to ask about.
-	seedCodexTrustFor(repoDest)
+	// start, so it's the directory an agent would stop to ask about.
+	seedTrustFor(repoDest)
 
 	// A repo-owned .envrc takes precedence; otherwise direnv finds the rig's
 	// basedir .envrc above it. Either entrypoint runs the global stdlib, which
