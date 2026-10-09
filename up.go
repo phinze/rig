@@ -170,7 +170,7 @@ func runUp(args []string) error {
 // pickupPrompt is the opening message for an issue pickup. Each source names
 // the tool the agent should read the issue with, since none of them is
 // discoverable from the rig alone: Linear by its MCP, a GitHub issue by the
-// rig's own gh shim (which already points at the repo), a personal task by the
+// gh (which finds the repo from the colocated workspace), a personal task by the
 // `personal-tasks` helper and skill. Extra context is handed over as a path
 // rather than inlined, for the same reasons kickoffPrompt gives: the prompt
 // reaches the agent as one shell argument, which is a poor courier for a

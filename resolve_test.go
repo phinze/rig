@@ -88,13 +88,13 @@ func TestResolveCommandUnknownWithNoNeighbour(t *testing.T) {
 
 func TestResolveCommandHiddenIsExactOnly(t *testing.T) {
 	// The internals have to keep working when invoked by name...
-	if got, err := resolveCommand("__gh"); err != nil || got != "__gh" {
-		t.Fatalf("resolveCommand(__gh) = %q, %v; want __gh", got, err)
+	if got, err := resolveCommand("__agent"); err != nil || got != "__agent" {
+		t.Fatalf("resolveCommand(__agent) = %q, %v; want __agent", got, err)
 	}
 	// ...but must not be reachable by abbreviation, and must never be offered
 	// as the fix for a typo.
-	if _, err := resolveCommand("__g"); err == nil {
-		t.Error("resolveCommand(__g) resolved; hidden commands must be exact")
+	if _, err := resolveCommand("__a"); err == nil {
+		t.Error("resolveCommand(__a) resolved; hidden commands must be exact")
 	}
 	for _, input := range []string{"__gg", "__agen"} {
 		if _, err := resolveCommand(input); err == nil {

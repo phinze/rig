@@ -45,7 +45,7 @@ func envExports(cwd string) []string {
 // GH_REPO was worse than none: an agent keeps the value from the directory it
 // started in, so one that later ran gh from a second repo in the same rig
 // aimed at the first. The PATH_rm clears the gh shim that used to patch over
-// that, from shells that still carry it.
+// that from shells in older rigs that still have it.
 //
 // Deliberately absent: the rig's agent. Every other key here exists because
 // something downstream reads it — a dev server wants RIG_PORT, iso wants

@@ -316,8 +316,9 @@ its own git worktree and gh reads the repo from cwd's remote like it would in
 any checkout. Before that, a workspace had no `.git`, so rig exported
 `GH_REPO` and fronted `PATH` with a per-rig `gh` shim that re-resolved it from
 the invocation cwd; an agent's startup value went stale the moment it ran gh
-from a second repo. The shim is no longer written, and `rig __gh` survives
-only to strip the stale value for rigs that still carry one.
+from a second repo. The shim and the `rig __gh` command behind it are gone;
+rigs that predated the change had their shim files rewritten as standalone
+scripts that drop the stale value, which go away with those rigs.
 
 tmux sessions are named with the full basedir path in session-wizard's
 full-path convention (`~/workspaces/...`, lowercased, `. :` → `-`), so a

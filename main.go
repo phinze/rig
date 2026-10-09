@@ -120,11 +120,6 @@ func main() {
 		err = runInfo(args)
 	case "config":
 		err = runConfigCmd(args)
-	case "__gh":
-		// Hidden: rigs that predate colocated workspaces carry a `gh` shim that
-		// delegates here. It drops their agents' stale GH_REPO so gh reads the
-		// repo from cwd. See runGHShim for when it can go.
-		err = runGHShim(args)
 	case "__agent":
 		// Hidden: the fzf pickers bind ctrl-o to a transform-header that shells out
 		// here, since fzf can only hand state back through a file. Not meant to be
@@ -155,7 +150,7 @@ func main() {
 	}
 
 	if err != nil {
-		if cmd == "__gh" || cmd == "recto" {
+		if cmd == "recto" {
 			if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 				os.Exit(exitErr.ExitCode())
 			}
