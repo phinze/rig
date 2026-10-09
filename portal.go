@@ -77,9 +77,11 @@ func (p portalBackend) Show(target string) error {
 }
 
 // enter is the portal upsert: move the portal's existing client to the target
-// when it has one, else (re)create the portal attached to it, then show it.
+// when it has one, else give the portal a fresh client attached to it, then
+// show it.
 func (p portalBackend) enter(rx portalHost, target string) error {
 	label := p.portalLabel()
+	home, _ := os.UserHomeDir()
 	if rx.HasSession(label) {
 		if tty, err := p.PortalTTY(); err == nil {
 			if err := p.SwitchClient(tty, target); err != nil {
@@ -87,13 +89,17 @@ func (p portalBackend) enter(rx portalHost, target string) error {
 			}
 			return rx.Attach(label)
 		}
-		// The session outlived its client: the ssh exited, or the host
-		// restarted. Replace it rather than hop to a dead terminal.
-		if err := rx.KillSession(label); err != nil {
+		// The session outlived its client: the ssh exited, the host
+		// restarted, or tmux detached it when the session it showed went
+		// away. Respawn the client inside the session rather than replace
+		// the session. The caller is often in it, as a radar popup opened
+		// over the dead portal, and destroying the session took rig down
+		// with it before the new portal existed.
+		if err := rx.RespawnCommandSession(label, p.place(), home, p.PortalCommand(target)); err != nil {
 			return err
 		}
+		return rx.Attach(label)
 	}
-	home, _ := os.UserHomeDir()
 	if _, _, err := rx.NewCommandSession(label, p.place(), home, p.PortalCommand(target)); err != nil {
 		return err
 	}
@@ -101,10 +107,12 @@ func (p portalBackend) enter(rx portalHost, target string) error {
 }
 
 // portalHost is what a portal needs from this machine's multiplexer: the
-// ordinary backend plus a session that runs one command. Only Rex is one.
+// ordinary backend plus a session that runs one command, and a way to put
+// that command back once it has ended. Only Rex is one.
 type portalHost interface {
 	mux.Backend
 	NewCommandSession(name, windowName, cwd, cmdline string) (pane, window string, err error)
+	RespawnCommandSession(name, windowName, cwd, cmdline string) error
 	SessionID(name string) (string, error)
 }
 

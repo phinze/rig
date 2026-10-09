@@ -14,14 +14,19 @@ import (
 // asked of it instead of driving the app.
 type fakePortalHost struct {
 	fakeBackend
-	created  []string // label + " :: " + cmdline
-	killed   []string
-	attached []string
+	created   []string // label + " :: " + cmdline
+	respawned []string // label + " :: " + cmdline
+	killed    []string
+	attached  []string
 }
 
 func (f *fakePortalHost) NewCommandSession(name, windowName, cwd, cmdline string) (string, string, error) {
 	f.created = append(f.created, name+" :: "+cmdline)
 	return "block:1", "window:1", nil
+}
+func (f *fakePortalHost) RespawnCommandSession(name, windowName, cwd, cmdline string) error {
+	f.respawned = append(f.respawned, name+" :: "+cmdline)
+	return nil
 }
 func (f *fakePortalHost) SessionID(name string) (string, error) {
 	if f.HasSession(name) {
@@ -110,15 +115,25 @@ func TestPortalUpsert(t *testing.T) {
 		}
 	})
 
-	t.Run("dead portal is replaced", func(t *testing.T) {
+	// Asked from a radar popup floating over the dead portal, the case where
+	// a kill took rig down with the session before it could make a new one.
+	t.Run("dead portal is respawned in place, not destroyed", func(t *testing.T) {
 		h := &fakePortalHost{fakeBackend: fakeBackend{sessions: sessionsNamed("tmux-fox")}}
 		withPortalHost(t, h)
+		t.Setenv("REX_SESSION", "session:fake-tmux-fox")
 		fakeSSH(t, "/dev/pts/7", "/dev/pts/1")
 		if err := p.Attach(target); err != nil {
 			t.Fatal(err)
 		}
-		if len(h.killed) != 1 || len(h.created) != 1 {
-			t.Errorf("killed %v created %v, want the dead portal replaced once", h.killed, h.created)
+		if len(h.killed) != 0 || len(h.created) != 0 {
+			t.Errorf("killed %v created %v, want the session kept", h.killed, h.created)
+		}
+		if len(h.respawned) != 1 || !strings.HasPrefix(h.respawned[0], "tmux-fox :: ssh -t 'fox' ") ||
+			!strings.Contains(h.respawned[0], target) || !strings.Contains(h.respawned[0], "@rig-portal-tty") {
+			t.Errorf("respawned %v, want one fresh client attaching to %s and stamping its tty", h.respawned, target)
+		}
+		if len(h.attached) != 1 || h.attached[0] != "tmux-fox" {
+			t.Errorf("hopped to %v, want the portal", h.attached)
 		}
 	})
 }

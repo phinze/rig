@@ -586,6 +586,46 @@ func (b Backend) NewCommandWindow(session, name, cwd, cmdline string) (string, s
 	return out.BlockIDs[0], out.WindowID, nil
 }
 
+// RespawnCommandSession puts cmdline back into a session whose command has
+// ended, without destroying the session. Rex keeps such a session around in
+// one of two shapes: a block that exited nonzero stays on screen with its
+// last_exit, while a clean exit takes the block (and its window, once empty)
+// with it, leaving an empty session or a window held open only by a floating
+// layer. A new window that takes focus covers both, and the tiled blocks
+// whose command has ended are closed after it, taking their windows along
+// once those are empty. Floating layers are left alone on purpose: the
+// caller may be one of them, a radar popup over the portal it's healing,
+// which a kill-and-recreate would take down before the new session existed.
+func (b Backend) RespawnCommandSession(name, windowName, cwd, cmdline string) error {
+	v, err := b.view(name)
+	if err != nil {
+		return err
+	}
+	params := obj{
+		"window_label": windowName,
+		"focus":        true,
+		"layout":       shellBlock(labelFor(cmdline), cwd, commandLine(cmdline)),
+	}
+	if err := b.call(name, "session.new_window", params, nil); err != nil {
+		return err
+	}
+	for _, w := range v.Windows {
+		for _, layer := range w.Layers {
+			if layer.Kind != "tiled" {
+				continue
+			}
+			for _, bl := range layer.Blocks {
+				// Best effort: the portal is already back, and a dead
+				// block left behind is clutter, not a failure.
+				if p, err := b.process(name, bl.BlockID); err == nil && p.LastExit != nil {
+					_ = b.call(name, "block.close", obj{"block_id": bl.BlockID}, nil)
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // labelFor is the block label a command gets: its first word, the way tmux
 // names a window after its command.
 func labelFor(cmdline string) string {
@@ -756,6 +796,11 @@ func (b Backend) view(session string) (sessionView, error) {
 
 type processInfo struct {
 	Foreground *foregroundProcess `json:"foreground"`
+	// LastExit is set once the block's command has ended and Rex kept the
+	// block anyway, as it does for a nonzero exit; null while it runs.
+	LastExit *struct {
+		ExitCode int `json:"exit_code"`
+	} `json:"last_exit"`
 }
 
 type foregroundProcess struct {

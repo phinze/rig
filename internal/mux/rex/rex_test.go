@@ -52,12 +52,16 @@ EOF
 session.list_blocks) echo '{"blocks":[{"block_id":"block:a"},{"block_id":"block:r"},{"block_id":"block:z"}]}' ;;
 com.superlogical.terminal.process)
   case "$*" in
+    *block:r*) if [ -n "$REX_FAKE_R_EXITED" ]; then echo '{"last_exit":{"exit_code":255,"error":"exit status 255"}}'; exit 0; fi
+      echo '{"foreground":{"name":"recto","cwd":"/w/x"}}' ;;
     *block:a*) echo '{"foreground":{"name":".claude-unwrapped","argv0":"/etc/profiles/per-user/phinze/bin/claude","cwd":"/w/alpha"}}' ;;
     *) echo '{"foreground":{"name":"recto","cwd":"/w/x"}}' ;;
   esac ;;
 com.superlogical.terminal.title) echo '{"title":"✳ Task A"}' ;;
 com.superlogical.terminal.size) echo '{"columns":300,"rows":100}' ;;
 session.new_layer) echo '{"layer_id":"layer:1","block_ids":["block:p"],"revision":3}' ;;
+session.new_window) echo '{"window_id":"window:n","block_ids":["block:n"],"revision":4}' ;;
+block.close) echo '{"block_id":"block:r","revision":5}' ;;
 session.set_window_label|session.focus_block|session.move_block) echo '{"revision":2}' ;;
 *) echo '{}' ;;
 esac
@@ -165,6 +169,34 @@ func TestKillSessionAtMissingSocket(t *testing.T) {
 // Popup opens one layer in the session running the command through a login
 // shell, sized from the focused block's grid (120 columns of 300 and 32 rows
 // of 100, centred) and told that size and its colour.
+// A respawn adds the command in a focused window of the same session and
+// closes only the tiled blocks whose command has ended: the live shell, the
+// other window, and the floating radar popup all stay.
+func TestRespawnCommandSessionKeepsTheSession(t *testing.T) {
+	log := fakeRex(t)
+	t.Setenv("REX_FAKE_R_EXITED", "1")
+	if err := (Backend{}).RespawnCommandSession("~-workspaces-alpha", "local", "/home", "tmux attach -t foo"); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(log)
+	calls := string(raw)
+	if strings.Contains(calls, "session.destroy") || strings.Contains(calls, " kill ") {
+		t.Errorf("calls:\n%s\nwant the session kept", calls)
+	}
+	var window string
+	for line := range strings.SplitSeq(calls, "\n") {
+		if strings.Contains(line, "session.new_window") {
+			window = line
+		}
+	}
+	if !strings.Contains(window, `"focus":true`) || !strings.Contains(window, "tmux attach -t foo") {
+		t.Errorf("new_window call = %q, want a focused window running the command", window)
+	}
+	if n := strings.Count(calls, "block.close"); n != 1 || !strings.Contains(calls, `block.close {"block_id":"block:r"}`) {
+		t.Errorf("calls:\n%s\nwant exactly the exited block:r closed", calls)
+	}
+}
+
 func TestPopupOpensASizedLayer(t *testing.T) {
 	log := fakeRex(t)
 	if err := (Backend{}).Popup("~-workspaces-alpha", "/usr/local/bin/rig radar"); err != nil {
