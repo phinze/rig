@@ -649,6 +649,15 @@ say so implements `Unreachable()`, and the radar names those places in a
 banner above the prompt, because a devbox off the tailnet otherwise draws
 exactly like one with nothing running.
 
+Those per-block probes run concurrently, capped at eight CLI calls at once by
+`callSlots` in `call` itself. The cap sits on the leaf call and never around a
+wait, which is what keeps the nested fan-out (sessions in `AllPanes`, blocks in
+`Panes`) from deadlocking on it. That matters once rigs live in Rex: a host
+with twenty-odd rigs is about 200 calls a scan, three seconds serially at
+~16ms each. A single `rex do -e` Lua script could gather everything in one
+process, but scoping its calls to each session isn't documented yet, so that
+waits.
+
 A tmux server on another host is a surface too (`tmux+ssh://host`), and it's
 the bridge for a host that keeps tmux while this machine lives in Rex. Listing
 is cheap by comparison: one `list-panes -a` over a shared ssh ControlMaster
@@ -680,9 +689,16 @@ firewall at all.
 
 A `rig+http://host[:port]` surface reads it. `servedBackend` is the tmux+ssh
 portal backend with its listing swapped out, so Attach, the portal upsert,
-and kill are unchanged, and ssh opens only when Enter goes somewhere. Rows
-from another kind of multiplexer on that host are dropped, since a tmux
-portal can't enter them. Remote rigs carry `remote`, which holds the session
+and kill are unchanged, and ssh opens only when Enter goes somewhere. The
+host's Rex rows ride the same board under a sibling surface, `servedRex`
+(`rex@place` beside `tmux@place`), because their way in is different: Rex.app
+already shows a host added under Remote Hosts, so Enter is a `/v1/show` with
+kind `rex`, and the host's rig runs `session.select` on its own server after
+focusing the agent's block, which is session state there and not the app's.
+`servedRex` is never in `knownBackends` (its parent's board already carries
+its rows, and listing it too would draw them twice), so `surfaceNamed` finds it
+through the parent, and each of the two lists only rows tagged with its own
+surface. Rows from any other kind are dropped. Remote rigs carry `remote`, which holds the session
 name their host sent: a session name is derived from the path relative to
 that host's home, so `rigKey` can't compute it from here, and `muxKey` is
 what the radar joins on instead. They draw led by their host's icon (`rig serve --icon`, chosen by the host
@@ -766,10 +782,17 @@ environment. `adoptLocalPortal` repairs that on the way into any portal
 `Attach`: when this process's own tmux client is the tty the local portal
 stamped, it is on screen in Rex, so rig takes `tmux-local`'s session as
 `REX_SESSION` and a remote row goes through the Rex portal. The tty match is the
-whole test, so a tmux in a plain terminal still reads as tmux and refuses. Enter on
-a remote Rex row is still `ErrNoClientSwitch`: the app that would be told to
-switch is a client of the local server, and pointing it at a session on a
-server it has added is untested until a second real Rex server exists.
+whole test, so a tmux in a plain terminal still reads as tmux and refuses.
+
+`session.select` is a client action: whichever server receives it only relays
+it to the app named by `-C`. So a session on another Rex server can be shown
+through either server, provided the app has that host under Remote Hosts;
+both were verified against a scratch server on 2026-10-09. A remote
+`rex.Backend` resolves the target on its own server and relays the select
+through the local one, which reaches the app on this screen whatever else is
+connected over there. Without the host added, the app answers with a Swift
+type name (`SessionNotFoundOnServerError`), which `selectSession` rewrites to
+say where to add it.
 
 `Attach` returns `mux.ErrNoClientSwitch` from a backend that can't move the
 client between sessions; radar prints a "switch by hand" line and waits for a

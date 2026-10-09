@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"text/tabwriter"
+
+	"github.com/phinze/rig/internal/mux/rex"
 )
 
 // Rig's persistent state — manifests, tombstones, the notify inbox — is all
@@ -433,6 +435,14 @@ func listConfig(out *os.File) error {
 	}
 	for _, s := range configSettings {
 		printNote(s)
+	}
+	// Where the Rex CLI was found, or everywhere it wasn't. A missing CLI
+	// takes the whole backend off every board without a word, since boards
+	// can't print, and this is where that gets said.
+	if path, looked, ok := rex.Lookup(); ok {
+		fmt.Fprintf(out, "\nrex cli: %s\n", path)
+	} else {
+		fmt.Fprintf(out, "\nrex cli: not found (looked in %s)\n", strings.Join(looked, ", "))
 	}
 	sw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 	listSurfaces(sw)

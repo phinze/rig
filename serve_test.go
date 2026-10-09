@@ -105,8 +105,11 @@ func TestServedRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(board.rigs) != 2 {
-		t.Fatalf("rigs = %+v, want the two tmux rigs", board.rigs)
+	if len(board.rigs) != 3 {
+		t.Fatalf("rigs = %+v, want all three", board.rigs)
+	}
+	if r := board.rigs[2].remote; r == nil || r.surface != "rex@fx" || r.session != "~/workspaces/pers-22" {
+		t.Errorf("rex rig remote = %+v, want rex@fx and its session", r)
 	}
 	got := board.rigs[0]
 	if got.remote == nil || got.remote.surface != "tmux@fx" || got.remote.session != "~/workspaces/pers-20" || !got.remote.prsLooked {
@@ -118,11 +121,19 @@ func TestServedRoundTrip(t *testing.T) {
 	if board.rigs[1].remote.prsLooked || board.rigs[1].PRs != nil {
 		t.Errorf("unlooked rig = %+v, want no PR answer", board.rigs[1])
 	}
-	if len(board.sessions) != 1 || board.sessions[0].Surface != "tmux@fx" || board.sessions[0].LastAttached != 42 {
-		t.Errorf("sessions = %+v, want the tmux one, tagged", board.sessions)
+	if len(board.sessions) != 2 || board.sessions[0].Surface != "tmux@fx" || board.sessions[0].LastAttached != 42 || board.sessions[1].Surface != "rex@fx" {
+		t.Errorf("sessions = %+v, want both, each tagged with its own surface", board.sessions)
 	}
-	if len(board.panes) != 1 || board.panes[0].Surface != "tmux@fx" || board.panes[0].Target != "%3" {
-		t.Errorf("panes = %+v, want the tmux agent, tagged", board.panes)
+	if len(board.panes) != 2 || board.panes[0].Surface != "tmux@fx" || board.panes[0].Target != "%3" || board.panes[1].Surface != "rex@fx" {
+		t.Errorf("panes = %+v, want both agents, each tagged with its own surface", board.panes)
+	}
+	// Each surface lists only its own rows, so a caller listing both never
+	// counts a session twice.
+	if ss := b.Sessions(); len(ss) != 1 || ss[0].Name != "~/workspaces/pers-21" {
+		t.Errorf("tmux sessions = %+v, want only the tmux one", ss)
+	}
+	if ss := b.rex().Sessions(); len(ss) != 1 || ss[0].Name != "elsewhere" {
+		t.Errorf("rex sessions = %+v, want only the rex one", ss)
 	}
 	if board.icon != "\uf233" || got.remote.icon != "\uf233" {
 		t.Errorf("icon = %q / %q, want the host's on the board and its rigs", board.icon, got.remote.icon)
@@ -288,6 +299,36 @@ func TestServeShow(t *testing.T) {
 	}
 	if b.Unreachable() {
 		t.Error("a host that answered reads as unreachable")
+	}
+}
+
+// A Rex row on a served host is shown by that host even from inside Rex
+// here, where a tmux row would go through a portal instead: Rex.app already
+// has the host, so there's nothing to bridge.
+func TestServedRexShows(t *testing.T) {
+	var got []showRequest
+	orig := show
+	show = func(req showRequest) error { got = append(got, req); return nil }
+	t.Cleanup(func() { show = orig })
+
+	gate := newServeGate([]string{"nobody"}, nil, true)
+	srv := httptest.NewServer(serveHandler(gate, func() serveDoc { return serveDoc{} }))
+	defer srv.Close()
+	b, err := newServedBackend("fx", srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("REX_SESSION", "session:here")
+
+	rx := b.rex()
+	if rx.Surface() != "rex@fx" || rx.Name() != "rex" {
+		t.Errorf("surface = %s (%s), want rex@fx (rex)", rx.Surface(), rx.Name())
+	}
+	if err := rx.Attach("block:agent"); err != nil {
+		t.Fatalf("attach = %v", err)
+	}
+	if len(got) != 1 || got[0] != (showRequest{Kind: "rex", Target: "block:agent"}) {
+		t.Errorf("requests = %+v, want one rex show for the block", got)
 	}
 }
 

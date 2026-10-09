@@ -113,6 +113,9 @@ func surfaceNamed(surface string) mux.Backend {
 		if b.Surface() == surface {
 			return b
 		}
+		if sb, ok := b.(servedBackend); ok && sb.rex().Surface() == surface {
+			return sb.rex()
+		}
 	}
 	kind, _, _ := strings.Cut(surface, "@")
 	return backendNamed(kind)

@@ -27,6 +27,9 @@ case "$*" in
   echo '{"clients":[{"client_id":"client:gone","info":{"kind":"app"},"connection_state":"lost"},{"client_id":"client:app","info":{"kind":"app"},"connection_state":"connected"},{"client_id":"client:cli","info":{"kind":"cli"},"connection_state":"connected"}]}'
   exit 0 ;;
 *" do session.select "*)
+  if [ -n "$REX_FAKE_UNKNOWN_HOST" ]; then
+    echo 'Error: The operation couldn'"'"'t be completed. (Rex.Workspace.(unknown context at $1057621e8).SessionNotFoundOnServerError error 1.)' >&2; exit 1
+  fi
   if [ -n "$REX_FAKE_NO_REMOTE_CONTROL" ]; then
     echo 'Error: Rex.app is not accepting actions. Turn on Remote Control in its Settings under Rex Server.' >&2; exit 1
   fi
@@ -335,13 +338,6 @@ func TestRemoteInstanceTargetsItsServer(t *testing.T) {
 	if ep := b.Endpoint(); ep != "https://devbox.example.ts.net" {
 		t.Errorf("endpoint = %q, want the instance's server", ep)
 	}
-	if err := b.Attach("~-workspaces-beta"); !errors.Is(err, mux.ErrNoClientSwitch) {
-		t.Errorf("remote attach = %v, want ErrNoClientSwitch", err)
-	}
-	if got := selects(t, log); len(got) != 0 {
-		t.Errorf("selected %v for a remote row", got)
-	}
-
 	raw, err := os.ReadFile(log)
 	if err != nil {
 		t.Fatal(err)
@@ -350,6 +346,48 @@ func TestRemoteInstanceTargetsItsServer(t *testing.T) {
 		if !strings.HasPrefix(line, "-S https://devbox.example.ts.net --autostart=false --timeout 3s ") {
 			t.Errorf("call went to the default server: %q", line)
 		}
+	}
+}
+
+// Entering a remote row resolves it on its own server and selects it through
+// this host's: session.select is a client action a server only relays, and
+// the local relay is the one that reaches the app on this screen.
+func TestRemoteAttachSelectsThroughTheLocalServer(t *testing.T) {
+	log := fakeRex(t)
+	t.Setenv("REX_SESSION", "session:1")
+	t.Setenv("REX_FAKE_SECOND", "1")
+
+	b := Backend{Server: "https://devbox.example.ts.net", Place: "devbox"}
+	if err := b.Attach("~-workspaces-beta"); err != nil {
+		t.Fatalf("remote attach = %v", err)
+	}
+	raw, _ := os.ReadFile(log)
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		remote := strings.HasPrefix(line, "-S https://devbox.example.ts.net ")
+		switch {
+		case strings.Contains(line, "session.list") && !remote:
+			t.Errorf("resolved the label on the local server: %q", line)
+		case (strings.Contains(line, "client ls") || strings.Contains(line, "session.select")) && remote:
+			t.Errorf("selected through the remote server: %q", line)
+		}
+	}
+	got := selects(t, log)
+	if len(got) != 1 || !strings.HasPrefix(got[0], `-C client:app do session.select --args {"session_id":"session:2"}`) {
+		t.Errorf("selects = %q, want the local app told to show session:2", got)
+	}
+}
+
+// A host the app hasn't added comes back as a Swift type name; the radar
+// should say how to fix it instead.
+func TestAttachExplainsAnUnknownHost(t *testing.T) {
+	fakeRex(t)
+	t.Setenv("REX_SESSION", "session:1")
+	t.Setenv("REX_FAKE_SECOND", "1")
+	t.Setenv("REX_FAKE_UNKNOWN_HOST", "1")
+
+	err := (Backend{Server: "https://devbox.example.ts.net", Place: "devbox"}).Attach("~-workspaces-beta")
+	if !errors.Is(err, mux.ErrNoClientSwitch) || !strings.Contains(err.Error(), "Remote Hosts") {
+		t.Errorf("attach = %v, want ErrNoClientSwitch naming Remote Hosts", err)
 	}
 }
 

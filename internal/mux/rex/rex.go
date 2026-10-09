@@ -9,12 +9,14 @@ package rex
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/phinze/rig/internal/mux"
@@ -56,29 +58,44 @@ func (b Backend) Surface() string {
 // environment points at.
 func (b Backend) remote() bool { return b.Server != "" }
 
-// binary is where Rex.app ships its CLI. PATH is consulted first so a
-// standalone install or a test shim wins, then REX_BIN_DIR, which Rex
+// binary is where Rex.app ships its CLI, or the last place looked when it's
+// nowhere, so a call fails naming a real path.
+func binary() string {
+	path, looked, _ := Lookup()
+	if path != "" {
+		return path
+	}
+	return looked[len(looked)-1]
+}
+
+// Lookup finds the CLI and reports every place it tried. PATH comes first so
+// a standalone install or a test shim wins, then REX_BIN_DIR, which Rex
 // terminals carry for exactly the case of a shell that rebuilt PATH. The
 // bundle paths come last, newest layout first: preview.12 moved the CLI from
-// Helpers/rex into the Rex Server helper app, and an install still on the
-// old layout keeps working.
-func binary() string {
+// Helpers/rex into the Rex Server helper app, and an install still on the old
+// layout keeps working. Those matter most where neither of the others
+// reaches, which is anything launchd or tmux started: rig serve, and every
+// rig inside tmux.
+func Lookup() (path string, looked []string, ok bool) {
 	if p, err := exec.LookPath("rex"); err == nil {
-		return p
+		return p, nil, true
 	}
-	candidates := []string{
+	looked = append(looked, "PATH")
+	var candidates []string
+	if dir := os.Getenv("REX_BIN_DIR"); dir != "" {
+		candidates = append(candidates, filepath.Join(dir, "rex"))
+	}
+	candidates = append(candidates,
 		"/Applications/Rex.app/Contents/Helpers/Rex Server.app/Contents/MacOS/rex",
 		"/Applications/Rex.app/Contents/Helpers/rex",
-	}
-	if dir := os.Getenv("REX_BIN_DIR"); dir != "" {
-		candidates = append([]string{filepath.Join(dir, "rex")}, candidates...)
-	}
+	)
 	for _, c := range candidates {
 		if _, err := os.Stat(c); err == nil {
-			return c
+			return c, nil, true
 		}
+		looked = append(looked, c)
 	}
-	return candidates[len(candidates)-1]
+	return "", looked, false
 }
 
 // remoteTimeout bounds each call to another server. The board lists every
@@ -140,6 +157,8 @@ func (b Backend) call(session, method string, params any, out any) error {
 	if b.remote() && breaker.Down(b.Server) {
 		return fmt.Errorf("rex %s: %s is unreachable (retrying within %s)", method, b.Server, remoteBackoff)
 	}
+	callSlots <- struct{}{}
+	defer func() { <-callSlots }()
 	args := []string{"api", "call"}
 	if session != "" {
 		args = append(args, "-s", session)
@@ -170,6 +189,23 @@ func (b Backend) call(session, method string, params any, out any) error {
 		return nil
 	}
 	return json.Unmarshal(raw, out)
+}
+
+// callSlots caps how many CLI calls run at once. A listing costs a view per
+// session and two probes per block, about 200 calls on a host with twenty-odd
+// rigs, and at roughly 16ms each that's a three-second scan done one at a
+// time. The cap lives on the leaf call, never around a wait, so the nested
+// fan-out in AllPanes can't deadlock on it.
+var callSlots = make(chan struct{}, 8)
+
+// each runs fn for every index in [0, n) concurrently and waits for all of
+// them. Callers write results by index, so order is kept without a lock.
+func each(n int, fn func(i int)) {
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Go(func() { fn(i) })
+	}
+	wg.Wait()
 }
 
 // obj is the loosest JSON shape, for params where a typed struct would only
@@ -235,10 +271,11 @@ func (b Backend) Sessions() []mux.Session {
 	if err != nil {
 		return nil
 	}
-	var out []mux.Session
-	for _, s := range sessions {
-		out = append(out, mux.Session{Surface: b.Surface(), Name: s.Label, Path: b.sessionPath(s.Label)})
-	}
+	out := make([]mux.Session, len(sessions))
+	each(len(sessions), func(i int) {
+		s := sessions[i]
+		out[i] = mux.Session{Surface: b.Surface(), Name: s.Label, Path: b.sessionPath(s.Label)}
+	})
 	return out
 }
 
@@ -360,17 +397,17 @@ func (b Backend) CurrentPane() string {
 // app is told to show the target: the session itself, or a block's window
 // with that block focused. A block in the session already on screen needs
 // only the focus.
+//
+// A remote instance resolves the target on its own server and then tells
+// this host's app through this host's server. session.select is a client
+// action that a server only relays, and the app accepts a session id from any
+// server it has under Remote Hosts, so the local relay always reaches the
+// screen the person pressing Enter is looking at.
 func (b Backend) Attach(target string) error {
 	if os.Getenv("REX_SESSION") == "" && !b.Viewer {
 		cmd := b.command("attach", target)
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 		return cmd.Run()
-	}
-	// The app that would be told to switch is a client of this host's
-	// server. Whether it can be pointed at a session on another server it
-	// has added is untested, so a remote row stays a switch by hand.
-	if b.remote() {
-		return mux.ErrNoClientSwitch
 	}
 	current := b.CurrentSession()
 	if target == current {
@@ -391,13 +428,22 @@ func (b Backend) Attach(target string) error {
 		if err != nil {
 			return err
 		}
-		return b.selectSession(id, b.windowOfBlock(owner, target))
+		return b.relay().selectSession(id, b.windowOfBlock(owner, target))
 	}
 	id, err := b.SessionID(target)
 	if err != nil {
 		return err
 	}
-	return b.selectSession(id, "")
+	return b.relay().selectSession(id, "")
+}
+
+// relay is the server a select goes through: this host's, whichever server
+// owns the session.
+func (b Backend) relay() Backend {
+	if b.remote() {
+		return Backend{MarksDir: b.MarksDir}
+	}
+	return b
 }
 
 // selectSession tells the app to show the session, and the window in it
@@ -424,6 +470,11 @@ func (b Backend) selectSession(sessionID, windowID string) error {
 		msg := strings.TrimPrefix(strings.TrimSpace(stderr.String()), "Error: ")
 		if msg == "" {
 			msg = err.Error()
+		}
+		// The app's own words for a host it hasn't added are a Swift type
+		// name, which says nothing about the fix.
+		if strings.Contains(msg, "SessionNotFoundOnServer") {
+			msg = "Rex.app doesn't know that session's server; add the host under Settings → Remote Hosts"
 		}
 		return fmt.Errorf("%s: %w", msg, mux.ErrNoClientSwitch)
 	}
@@ -461,7 +512,13 @@ func (b Backend) appClient() (string, error) {
 			apps = append(apps, c.ID)
 		}
 	}
-	if len(apps) != 1 {
+	switch len(apps) {
+	case 1:
+	case 0:
+		// From serve on a host the app only visits, this is the app not
+		// having the host under Remote Hosts.
+		return "", errors.New("no Rex.app is connected to this server (on another host, add it under Settings → Remote Hosts)")
+	default:
 		return "", fmt.Errorf("%d Rex apps are connected, want exactly one", len(apps))
 	}
 	return apps[0], nil
@@ -955,15 +1012,18 @@ func (b Backend) Panes(session string) ([]mux.Pane, error) {
 				if m, ok := marks[bl.BlockID]; ok {
 					p.Role, p.Repo = m.Role, m.Repo
 				}
-				if info, err := b.process(session, bl.BlockID); err == nil && info.Foreground != nil {
-					p.Command = commandName(info.Foreground)
-					p.Path = info.Foreground.Cwd
-				}
-				p.Title = b.title(session, bl.BlockID)
 				panes = append(panes, p)
 			}
 		}
 	}
+	each(len(panes), func(i int) {
+		p := &panes[i]
+		if info, err := b.process(session, p.PaneID); err == nil && info.Foreground != nil {
+			p.Command = commandName(info.Foreground)
+			p.Path = info.Foreground.Cwd
+		}
+		p.Title = b.title(session, p.PaneID)
+	})
 	return panes, nil
 }
 
@@ -974,12 +1034,12 @@ func (b Backend) AllPanes() ([]mux.Pane, error) {
 	if err != nil {
 		return nil, nil
 	}
+	per := make([][]mux.Pane, len(sessions))
+	each(len(sessions), func(i int) {
+		per[i], _ = b.Panes(sessions[i].Label)
+	})
 	var out []mux.Pane
-	for _, s := range sessions {
-		panes, err := b.Panes(s.Label)
-		if err != nil {
-			continue
-		}
+	for _, panes := range per {
 		out = append(out, panes...)
 	}
 	return out, nil
@@ -988,6 +1048,6 @@ func (b Backend) AllPanes() ([]mux.Pane, error) {
 // Installed reports whether the CLI can be run at all. The backend is
 // selectable on any machine but only useful where Rex.app is.
 func Installed() bool {
-	_, err := os.Stat(binary())
-	return err == nil
+	_, _, ok := Lookup()
+	return ok
 }

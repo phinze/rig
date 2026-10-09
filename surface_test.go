@@ -143,3 +143,27 @@ func TestManagedSurfacesStayManaged(t *testing.T) {
 		t.Error("a config write copied the managed foxtrotbase entry into config.toml")
 	}
 }
+
+// A served host's Rex rows are tagged rex@place, a surface no configured
+// entry names, so surfaceNamed has to find it through the served one. Falling
+// through to the local rex backend instead would select a session this
+// server has never heard of.
+func TestSurfaceNamedFindsServedRex(t *testing.T) {
+	isolateRigConfig(t)
+	dir, err := rigConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, configName), []byte("[surfaces]\nfx = \"rig+http://fx\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := surfaceNamed("rex@fx").(servedRex); !ok {
+		t.Errorf("rex@fx = %T, want the served host's Rex side", surfaceNamed("rex@fx"))
+	}
+	if _, ok := surfaceNamed("tmux@fx").(servedBackend); !ok {
+		t.Errorf("tmux@fx = %T, want the served host", surfaceNamed("tmux@fx"))
+	}
+}

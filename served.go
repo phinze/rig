@@ -22,9 +22,9 @@ import (
 // so everything that enters, switches, or kills still goes through the portal
 // exactly as it did, and the only thing that stops using ssh is the board.
 //
-// Only the host's tmux sessions come through. Enter on a row needs a way in,
-// and this surface's way in is a tmux portal; a Rex session on the same host
-// would need a rex surface of its own.
+// The host's tmux rows are this surface's own. Its Rex rows come through too,
+// under a sibling surface (servedRex) at the same place, because their way in
+// is different: no portal, just the host telling Rex.app to show them.
 type servedBackend struct {
 	portalBackend
 	URL string // the serve endpoint, http://host:port
@@ -67,7 +67,11 @@ func (b servedBackend) Attach(target string) error {
 }
 
 func (b servedBackend) show(target string) error {
-	body, err := json.Marshal(showRequest{Kind: "tmux", Target: target})
+	return b.showAs("tmux", target)
+}
+
+func (b servedBackend) showAs(kind, target string) error {
+	body, err := json.Marshal(showRequest{Kind: kind, Target: target})
 	if err != nil {
 		return err
 	}
@@ -140,20 +144,22 @@ func (b servedBackend) fetch(watched bool) (serveDoc, error) {
 	return doc, nil
 }
 
-// lift turns the wire document into this machine's types, tagged with this
-// surface. Rows from another kind of multiplexer on that host are dropped,
-// since this surface has no way into them.
+// lift turns the wire document into this machine's types, each row tagged
+// with the surface that enters it: this one for tmux, its Rex sibling for
+// Rex. Rows from any other kind of multiplexer are dropped, since neither has
+// a way into them.
 func (b servedBackend) lift(doc serveDoc) remoteBoard {
-	surface := b.Surface()
 	out := remoteBoard{icon: doc.Icon}
 	for _, s := range doc.Sessions {
-		if s.Kind != "tmux" {
+		surface, ok := b.surfaceFor(s.Kind)
+		if !ok {
 			continue
 		}
 		out.sessions = append(out.sessions, mux.Session{Surface: surface, Name: s.Name, Path: s.Path, LastAttached: s.LastAttached})
 	}
 	for _, p := range doc.Panes {
-		if p.Kind != "tmux" {
+		surface, ok := b.surfaceFor(p.Kind)
+		if !ok {
 			continue
 		}
 		out.panes = append(out.panes, mux.Pane{
@@ -163,7 +169,12 @@ func (b servedBackend) lift(doc serveDoc) remoteBoard {
 		})
 	}
 	for _, r := range doc.Rigs {
-		if r.Backend != "" && r.Backend != "tmux" {
+		kind := r.Backend
+		if kind == "" {
+			kind = "tmux"
+		}
+		surface, ok := b.surfaceFor(kind)
+		if !ok {
 			continue
 		}
 		s := r.rigStatus
@@ -183,16 +194,89 @@ func (b servedBackend) lift(doc serveDoc) remoteBoard {
 	return out
 }
 
+// surfaceFor is the surface that enters a row the host listed under kind.
+func (b servedBackend) surfaceFor(kind string) (string, bool) {
+	switch kind {
+	case "tmux":
+		return b.Surface(), true
+	case "rex":
+		return b.rex().Surface(), true
+	}
+	return "", false
+}
+
 // Sessions and AllPanes answer from serve rather than ssh, for every caller
-// that lists surfaces without asking for a board.
+// that lists surfaces without asking for a board. Each surface answers for
+// its own rows only, so a caller that lists both never counts one twice.
 func (b servedBackend) Sessions() []mux.Session {
 	board, _ := b.Board()
-	return board.sessions
+	return sessionsOn(board.sessions, b.Surface())
 }
 
 func (b servedBackend) AllPanes() ([]mux.Pane, error) {
 	board, err := b.Board()
-	return board.panes, err
+	return panesOn(board.panes, b.Surface()), err
+}
+
+func sessionsOn(all []mux.Session, surface string) []mux.Session {
+	var out []mux.Session
+	for _, s := range all {
+		if s.Surface == surface {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func panesOn(all []mux.Pane, surface string) []mux.Pane {
+	var out []mux.Pane
+	for _, p := range all {
+		if p.Surface == surface {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// servedRex is the Rex half of a served host: rex@place beside its
+// tmux@place. Rex.app already shows that host's sessions once it's added
+// under Remote Hosts, so entering one needs no portal and no ssh. The host
+// is asked to show it, and its rig runs session.select on its own server,
+// which relays the action to the app: the Mac's, since that's the only one.
+// Asking the host rather than selecting from here is what lets it focus the
+// agent's block first, which is session state on its server, not the app's.
+//
+// It is never one of knownBackends: its parent's board already carries its
+// rows, so listing it again would draw them twice. surfaceNamed finds it
+// through the parent instead.
+type servedRex struct {
+	servedBackend
+}
+
+func (b servedBackend) rex() servedRex { return servedRex{b} }
+
+func (b servedRex) Name() string    { return "rex" }
+func (b servedRex) Surface() string { return "rex@" + b.Place }
+
+func (b servedRex) Attach(target string) error { return b.showAs("rex", target) }
+
+func (b servedRex) Sessions() []mux.Session {
+	board, _ := b.Board()
+	return sessionsOn(board.sessions, b.Surface())
+}
+
+func (b servedRex) AllPanes() ([]mux.Pane, error) {
+	board, err := b.Board()
+	return panesOn(board.panes, b.Surface()), err
+}
+
+func (b servedRex) HasSession(name string) bool {
+	for _, s := range b.Sessions() {
+		if s.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func (b servedBackend) HasSession(name string) bool {
