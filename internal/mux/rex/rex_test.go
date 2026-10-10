@@ -58,7 +58,7 @@ com.superlogical.terminal.process)
   case "$*" in
     *block:r*) if [ -n "$REX_FAKE_R_EXITED" ]; then echo '{"last_exit":{"exit_code":255,"error":"exit status 255"}}'; exit 0; fi
       echo '{"foreground":{"name":"recto","cwd":"/w/x"}}' ;;
-    *block:a*) echo '{"foreground":{"name":".claude-unwrapped","argv0":"/etc/profiles/per-user/phinze/bin/claude","cwd":"/w/alpha"}}' ;;
+    *block:a*) echo '{"child":{"pid":4242,"name":"login"},"foreground":{"pid":4300,"name":".claude-unwrapped","argv0":"/etc/profiles/per-user/phinze/bin/claude","cwd":"/w/alpha"}}' ;;
     *) echo '{"foreground":{"name":"recto","cwd":"/w/x"}}' ;;
   esac ;;
 com.superlogical.terminal.title) echo '{"title":"✳ Task A"}' ;;
@@ -468,5 +468,22 @@ func TestBinaryFollowsRexBinDir(t *testing.T) {
 	t.Setenv("REX_BIN_DIR", dir)
 	if got, want := binary(), filepath.Join(dir, "rex"); got != want {
 		t.Errorf("binary() = %q, want %q", got, want)
+	}
+}
+
+// A block's root pid is the process it started, which messaging walks down
+// from to find the agent. A remote server's pids aren't this machine's, so it
+// refuses rather than hand back a number that names a stranger.
+func TestPaneRootPID(t *testing.T) {
+	fakeRex(t)
+	pid, err := Backend{}.PaneRootPID("block:a")
+	if err != nil || pid != 4242 {
+		t.Errorf("PaneRootPID = %d, %v; want 4242", pid, err)
+	}
+	if _, err := (Backend{}).PaneRootPID("block:r"); err == nil {
+		t.Error("a block with no child pid answered one")
+	}
+	if _, err := (Backend{Server: "https://devbox"}).PaneRootPID("block:a"); err == nil {
+		t.Error("a remote server's pid was taken as this machine's")
 	}
 }

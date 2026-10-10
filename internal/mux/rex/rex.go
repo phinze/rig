@@ -873,6 +873,11 @@ func (b Backend) view(session string) (sessionView, error) {
 }
 
 type processInfo struct {
+	// Child is the process the block started, the root of its process tree:
+	// what PaneRootPID answers, as tmux's pane_pid does.
+	Child *struct {
+		PID int `json:"pid"`
+	} `json:"child"`
 	Foreground *foregroundProcess `json:"foreground"`
 	// LastExit is set once the block's command has ended and Rex kept the
 	// block anyway, as it does for a nonzero exit; null while it runs.
@@ -904,6 +909,28 @@ func (b Backend) process(session, block string) (processInfo, error) {
 	var p processInfo
 	err := b.call(session, "com.superlogical.terminal.process", obj{"block_id": block, "args": obj{}}, &p)
 	return p, err
+}
+
+// PaneRootPID is the OS pid of the process a block started, which is where
+// rig's messaging walks down to find the agent holding its inbox. Like tmux's
+// it only means something on this machine, so a remote server refuses: its
+// pids name processes on a host this process can't see.
+func (b Backend) PaneRootPID(block string) (int, error) {
+	if b.remote() {
+		return 0, fmt.Errorf("rex block %s is on %s; its pids aren't this machine's", block, b.Server)
+	}
+	session, err := b.sessionOfBlock(block)
+	if err != nil {
+		return 0, err
+	}
+	p, err := b.process(session, block)
+	if err != nil {
+		return 0, err
+	}
+	if p.Child == nil || p.Child.PID == 0 {
+		return 0, fmt.Errorf("rex block %s has no running process", block)
+	}
+	return p.Child.PID, nil
 }
 
 func (b Backend) title(session, block string) string {
