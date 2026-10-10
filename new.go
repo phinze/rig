@@ -21,7 +21,11 @@ func runNew(args []string) error {
 		return err
 	}
 	defer pick.cleanup()
-	repoFlag, args := extractRepoFlag(args)
+	repoFlags, args := extractRepoFlags(args)
+	repoFlag, extraRepos, err := splitRepoFlags(repoFlags)
+	if err != nil {
+		return err
+	}
 
 	// A pipe is the scriptable shape: the positional kickoff and stdin context
 	// already answer every text prompt, and an explicit repo or cwd supplies the
@@ -44,7 +48,7 @@ func runNew(args []string) error {
 		if err != nil {
 			return err
 		}
-		result, err := createNewRig(target, context, repo, pick.kind)
+		result, err := createNewRig(target, context, repo, extraRepos, pick.kind)
 		if err != nil {
 			return err
 		}
@@ -57,6 +61,7 @@ func runNew(args []string) error {
 	if err != nil {
 		return err
 	}
+	m.extraRepos = extraRepos
 	final, err := runNewRigTUI(m)
 	if err != nil {
 		return err
@@ -110,8 +115,10 @@ func prepareNewRig(kickoff string) (newRigTarget, error) {
 // createNewRig is the non-UI transaction shared by the standalone wizard, the
 // radar-embedded wizard, and piped invocations. It deliberately stops at a
 // ready session; the caller owns the final attach or switch once its UI has
-// released the terminal.
-func createNewRig(target newRigTarget, context string, repo repoRef, agent agentKind) (newRigResult, error) {
+// released the terminal. extras are further owner/repo slugs (a repeated
+// --repo), each added on trunk() beside the primary repo the way `rig add`
+// does it.
+func createNewRig(target newRigTarget, context string, repo repoRef, extras []string, agent agentKind) (newRigResult, error) {
 	// Check again at commit time. The wizard may have sat open for minutes after
 	// its first preflight, and a second process could have claimed the slug.
 	fresh, err := prepareNewRig(target.Kickoff)
@@ -122,6 +129,22 @@ func createNewRig(target newRigTarget, context string, repo repoRef, agent agent
 
 	if err := ensureJJColocated(repo.Path); err != nil {
 		return newRigResult{}, fmt.Errorf("colocating jj on %s: %w", repo.Path, err)
+	}
+	// Clone every extra before the basedir exists, so a typo in the third
+	// --repo fails the command instead of leaving a rig with two of three.
+	var extraRefs []repoRef
+	for _, slug := range extras {
+		ref, err := resolveRepo(slug, nil)
+		if err != nil {
+			return newRigResult{}, err
+		}
+		if ref.Name == repo.Name {
+			return newRigResult{}, fmt.Errorf("--repo %s would share ./%s with %s", slug, ref.Name, repo.nameWithOwner())
+		}
+		if err := ensureJJColocated(ref.Path); err != nil {
+			return newRigResult{}, fmt.Errorf("colocating jj on %s: %w", ref.Path, err)
+		}
+		extraRefs = append(extraRefs, ref)
 	}
 
 	m := manifest{
@@ -145,6 +168,14 @@ func createNewRig(target newRigTarget, context string, repo repoRef, agent agent
 	if err != nil {
 		return newRigResult{}, err
 	}
+	// Before the session, so the agent's instructions list every repo when it
+	// first reads them.
+	extraDests := make([]string, len(extraRefs))
+	for i, ref := range extraRefs {
+		if extraDests[i], err = addRepoWorkspace(target.Basedir, target.ID, ref, "trunk()", ""); err != nil {
+			return newRigResult{}, err
+		}
+	}
 
 	sess := sessionSpec{
 		rectoCmd: rectoCommand(),
@@ -157,6 +188,9 @@ func createNewRig(target newRigTarget, context string, repo repoRef, agent agent
 	rs := sessionFor(target.Basedir, m)
 	if err := spawnSession(rs, repoDest, sess); err != nil {
 		return newRigResult{}, err
+	}
+	for i, ref := range extraRefs {
+		addRectoWindow(rs, ref.Name, extraDests[i])
 	}
 	return newRigResult{ID: target.ID, Basedir: target.Basedir, Session: rs}, nil
 }

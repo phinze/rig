@@ -17,7 +17,14 @@ func runUp(args []string) error {
 		return err
 	}
 	defer pick.cleanup()
-	repoFlag, args := extractRepoFlag(args)
+	repoFlags, args := extractRepoFlags(args)
+	if len(repoFlags) > 1 {
+		return fmt.Errorf("rig up takes one --repo, got %s; add the rest with `rig add` once it's up", strings.Join(repoFlags, ", "))
+	}
+	repoFlag := ""
+	if len(repoFlags) == 1 {
+		repoFlag = repoFlags[0]
+	}
 	contextFlag, args := extractContextFlag(args)
 	source, args, err := extractSourceFlag(args)
 	if err != nil {
@@ -237,8 +244,34 @@ func resolveUpContext(flag string) (string, error) {
 // what's left. A repeated flag keeps the last; a trailing bare --repo with no
 // value is left in rest, where resolveRepo's empty-override path treats it as
 // "no override" and falls through to the picker.
-func extractRepoFlag(args []string) (repo string, rest []string) {
-	return extractValueFlag(args, "--repo")
+func extractRepoFlags(args []string) (repos []string, rest []string) {
+	return extractValueFlags(args, "--repo")
+}
+
+// splitRepoFlags checks every --repo before anything is created and splits
+// off the first, which is the rig's primary repo: the one its agent starts in.
+// The rest are added beside it as `rig add` would. Each repo becomes a subdir
+// named for the repo alone, so two that share a name can't both have one, and
+// that is said here rather than by jj halfway through the create.
+func splitRepoFlags(repos []string) (primary string, extras []string, err error) {
+	seen := map[string]string{}
+	for _, r := range repos {
+		owner, name, ok := strings.Cut(r, "/")
+		if !ok || owner == "" || name == "" {
+			return "", nil, fmt.Errorf("--repo wants owner/repo, got %q", r)
+		}
+		if prev, dup := seen[strings.ToLower(name)]; dup {
+			if strings.EqualFold(prev, r) {
+				return "", nil, fmt.Errorf("--repo %s given twice", r)
+			}
+			return "", nil, fmt.Errorf("--repo %s and --repo %s would both live in ./%s", prev, r, name)
+		}
+		seen[strings.ToLower(name)] = r
+	}
+	if len(repos) == 0 {
+		return "", nil, nil
+	}
+	return repos[0], repos[1:], nil
 }
 
 // extractContextFlag pulls --context <text> (or --context=text) out of args.
@@ -259,6 +292,26 @@ func extractSourceFlag(args []string) (taskSource, []string, error) {
 		return "", nil, err
 	}
 	return source, rest, nil
+}
+
+// extractValueFlags strips every occurrence of a valued flag from a
+// positional-heavy arg list, in order, for a flag that may repeat. A trailing
+// bare flag is left in rest, as extractValueFlag does.
+func extractValueFlags(args []string, name string) (values []string, rest []string) {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == name && i+1 < len(args) {
+			values = append(values, args[i+1])
+			i++
+			continue
+		}
+		if v, ok := strings.CutPrefix(a, name+"="); ok {
+			values = append(values, v)
+			continue
+		}
+		rest = append(rest, a)
+	}
+	return values, rest
 }
 
 // extractValueFlag strips one valued flag from a positional-heavy arg list. A

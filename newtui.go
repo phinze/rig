@@ -26,6 +26,7 @@ type newRigModel struct {
 	target      newRigTarget
 	context     string
 	repoFlag    string
+	extraRepos  []string
 	repos       []repoRef
 	reposLoaded bool
 	cursor      int
@@ -255,7 +256,7 @@ func (m newRigModel) beginRepo() (newRigModel, tea.Cmd) {
 	m.err = nil
 	if m.repoFlag != "" {
 		m.phase = newRigCreating
-		return m, createNewRigCmd(m.target, m.context, repoRef{}, m.repoFlag, m.agent)
+		return m, createNewRigCmd(m.target, m.context, repoRef{}, m.repoFlag, m.extraRepos, m.agent)
 	}
 	m.phase = newRigRepo
 	m.repoInput.Focus()
@@ -267,7 +268,7 @@ func (m newRigModel) beginCreate(repo repoRef) (newRigModel, tea.Cmd) {
 	m.phase = newRigCreating
 	m.repoInput.Blur()
 	m.err = nil
-	return m, createNewRigCmd(m.target, m.context, repo, "", m.agent)
+	return m, createNewRigCmd(m.target, m.context, repo, "", m.extraRepos, m.agent)
 }
 
 func discoverNewReposCmd() tea.Cmd {
@@ -289,7 +290,7 @@ func discoverNewReposCmd() tea.Cmd {
 	}
 }
 
-func createNewRigCmd(target newRigTarget, context string, repo repoRef, repoFlag string, agent agentKind) tea.Cmd {
+func createNewRigCmd(target newRigTarget, context string, repo repoRef, repoFlag string, extras []string, agent agentKind) tea.Cmd {
 	return func() tea.Msg {
 		if repoFlag != "" {
 			resolved, err := resolveRepo(repoFlag, nil)
@@ -298,7 +299,7 @@ func createNewRigCmd(target newRigTarget, context string, repo repoRef, repoFlag
 			}
 			repo = resolved
 		}
-		result, err := createNewRig(target, context, repo, agent)
+		result, err := createNewRig(target, context, repo, extras, agent)
 		return newRigCreatedMsg{result: result, err: err}
 	}
 }

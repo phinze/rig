@@ -51,7 +51,7 @@ Idempotent: an existing rig is switched to, not rebuilt.
 	{
 		name:    "new",
 		group:   "start",
-		usage:   []string{"new [KICKOFF] [--repo OWNER/REPO] [--agent AGENT] [--on PLACE]"},
+		usage:   []string{"new [KICKOFF] [--repo OWNER/REPO]... [--agent AGENT] [--on PLACE]"},
 		summary: "start a rig for work with no ticket",
 		details: `Prompts for the kickoff, then optional pasted context, then the repo. Piped
 stdin supplies the context without prompting. The rig starts at trunk with no

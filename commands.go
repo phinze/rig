@@ -62,21 +62,26 @@ func runAdd(args []string) error {
 		return err
 	}
 
-	// Best-effort: give the new repo a persistent Recto in its own background
-	// window. `rig recto <repo>` pulls that pane beside the main agent; until
-	// then the window is also a useful full-screen diff. A shell is deliberately
-	// absent: tmux's normal split bindings can grow one from the Recto's repo cwd
-	// for the occasional poke without making empty shells permanent furniture.
-	rs := sessionFor(basedir, m)
-	if rs.live() {
-		if pane, window, err := rs.b.NewCommandWindow(rs.name, repo, repoDest, rectoCommand()); err == nil {
-			_ = rs.markPane(pane, rigPaneRecto, repo)
-			_ = rs.markRepoWindow(window, repo)
-		}
-	}
+	addRectoWindow(sessionFor(basedir, m), repo, repoDest)
 
 	fmt.Fprintf(os.Stderr, "rig: added %s → %s\n", ref.nameWithOwner(), repoDest)
 	return nil
+}
+
+// addRectoWindow gives an added repo a persistent Recto in its own background
+// window, best-effort. `rig recto <repo>` pulls that pane beside the main
+// agent; until then the window is also a useful full-screen diff. A shell is
+// deliberately absent: tmux's normal split bindings can grow one from the
+// Recto's repo cwd for the occasional poke without making empty shells
+// permanent furniture.
+func addRectoWindow(rs rigSession, repo, repoDest string) {
+	if !rs.live() {
+		return
+	}
+	if pane, window, err := rs.b.NewCommandWindow(rs.name, repo, repoDest, rectoCommand()); err == nil {
+		_ = rs.markPane(pane, rigPaneRecto, repo)
+		_ = rs.markRepoWindow(window, repo)
+	}
 }
 
 // runLs lists the rigs currently in flight under ~/workspaces. The default

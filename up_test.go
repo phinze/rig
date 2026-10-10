@@ -119,28 +119,50 @@ func TestExtractRepoFlag(t *testing.T) {
 	cases := []struct {
 		name     string
 		args     []string
-		wantRepo string
+		wantRepo []string
 		wantRest []string
 	}{
-		{"no flag", []string{"MIR-75"}, "", []string{"MIR-75"}},
-		{"spaced form", []string{"MIR-75", "--repo", "me/api"}, "me/api", []string{"MIR-75"}},
-		{"equals form", []string{"--repo=me/api", "MIR-75"}, "me/api", []string{"MIR-75"}},
-		{"flag among query words", []string{"fix", "--repo", "me/api", "auth"}, "me/api", []string{"fix", "auth"}},
-		{"repeated keeps last", []string{"--repo", "me/a", "--repo=me/b"}, "me/b", nil},
+		{"no flag", []string{"MIR-75"}, nil, []string{"MIR-75"}},
+		{"spaced form", []string{"MIR-75", "--repo", "me/api"}, []string{"me/api"}, []string{"MIR-75"}},
+		{"equals form", []string{"--repo=me/api", "MIR-75"}, []string{"me/api"}, []string{"MIR-75"}},
+		{"flag among query words", []string{"fix", "--repo", "me/api", "auth"}, []string{"me/api"}, []string{"fix", "auth"}},
+		{"repeated keeps all, in order", []string{"--repo", "me/a", "--repo=me/b"}, []string{"me/a", "me/b"}, nil},
 		// A trailing bare --repo has no value to consume, so it stays in rest;
 		// resolveRepo's empty-override path then falls through to the picker.
-		{"trailing bare flag", []string{"MIR-75", "--repo"}, "", []string{"MIR-75", "--repo"}},
+		{"trailing bare flag", []string{"MIR-75", "--repo"}, nil, []string{"MIR-75", "--repo"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			repo, rest := extractRepoFlag(tc.args)
-			if repo != tc.wantRepo {
-				t.Errorf("repo = %q, want %q", repo, tc.wantRepo)
+			repo, rest := extractRepoFlags(tc.args)
+			if !reflect.DeepEqual(repo, tc.wantRepo) {
+				t.Errorf("repos = %q, want %q", repo, tc.wantRepo)
 			}
 			if !reflect.DeepEqual(rest, tc.wantRest) {
 				t.Errorf("rest = %#v, want %#v", rest, tc.wantRest)
 			}
 		})
+	}
+}
+
+// The first --repo is the primary and the rest ride along, but only once all
+// of them are known to fit: a malformed slug, a repeat, or two repos that
+// would claim the same subdir fail before anything is created.
+func TestSplitRepoFlags(t *testing.T) {
+	primary, extras, err := splitRepoFlags([]string{"phinze/rig", "phinze/memex"})
+	if err != nil || primary != "phinze/rig" || !reflect.DeepEqual(extras, []string{"phinze/memex"}) {
+		t.Errorf("split = %q %q %v, want phinze/rig then [phinze/memex]", primary, extras, err)
+	}
+	if primary, extras, err := splitRepoFlags(nil); err != nil || primary != "" || extras != nil {
+		t.Errorf("no flags = %q %q %v, want nothing", primary, extras, err)
+	}
+	for _, bad := range [][]string{
+		{"phinze/rig", "rig"},
+		{"phinze/rig", "Phinze/Rig"},
+		{"phinze/rig", "someone/rig"},
+	} {
+		if _, _, err := splitRepoFlags(bad); err == nil {
+			t.Errorf("%q split cleanly, want an error", bad)
+		}
 	}
 }
 
