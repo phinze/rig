@@ -110,6 +110,9 @@ var uuidRe = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[
 // Creation mirrors `rig up`: an explicit project is idempotent, while an
 // ambiguous or absent query opens a picker carrying the ordinary agent bar.
 func runProject(args []string) error {
+	if place, rest := extractValueFlag(args, "--on"); place != "" {
+		return runOn("project", place, rest)
+	}
 	if len(args) > 0 && args[0] == "status" {
 		return runProjectStatus(args[1:])
 	}
@@ -416,11 +419,34 @@ func buildProjectSnapshot(client *linearClient, projectID string) (projectSnapsh
 		}
 	}
 	enrichWithPRs(matching)
+	// Task rigs on other hosts count too: a project's work splits across the
+	// laptop and the devbox. They come with their host's PR answers, and a rig
+	// here wins an issue both have.
+	local := len(matching)
+	remote, _ := remoteRigs(nil)
+	for _, r := range remote {
+		status := r.row
+		if status.Kind == "project" {
+			continue
+		}
+		key := status.TrackerID
+		if status.Tracker == "" {
+			key = status.ID
+		} else if status.Tracker != "linear" {
+			continue
+		}
+		if issueIDs[strings.ToUpper(key)] {
+			matching = append(matching, status)
+		}
+	}
 	byIssue := make(map[string]*rigStatus, len(matching))
 	for i := range matching {
 		key := matching[i].TrackerID
 		if key == "" {
 			key = matching[i].ID
+		}
+		if _, taken := byIssue[strings.ToUpper(key)]; taken && i >= local {
+			continue
 		}
 		byIssue[strings.ToUpper(key)] = &matching[i]
 	}

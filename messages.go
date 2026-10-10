@@ -135,6 +135,11 @@ type rigSender struct {
 }
 
 func currentSender() rigSender {
+	// A command another host forwarded here speaks for whoever asked over
+	// there, as stamped by serve; see captureRemoteEnv.
+	if forwardedSender != nil {
+		return *forwardedSender
+	}
 	if cwd, err := os.Getwd(); err == nil {
 		if basedir, err := findBasedir(cwd); err == nil {
 			if m, err := readManifest(basedir); err == nil && m.ID != "" {
@@ -166,13 +171,7 @@ func resolveRig(query string) (rigInfo, error) {
 	if err != nil {
 		return rigInfo{}, err
 	}
-	var matches []rigInfo
-	for _, r := range rigs {
-		if strings.EqualFold(r.ID, query) || strings.EqualFold(r.Slug, query) ||
-			(r.TrackerID != "" && strings.EqualFold(r.TrackerID, query)) {
-			matches = append(matches, r)
-		}
-	}
+	matches := matchRigs(rigs, query, infoFields)
 	switch len(matches) {
 	case 0:
 		if strings.EqualFold(query, cosAddress) {
@@ -322,7 +321,7 @@ func descendantPID(procs []procEntry, root int, name string) (int, bool) {
 func agentPanePID(rs rigSession, basedir string, m manifest, name string) (int, error) {
 	backend, ok := rs.b.(interface{ PaneRootPID(string) (int, error) })
 	if !ok {
-		return 0, fmt.Errorf("can't probe a %s session (only local tmux for now)", rs.b.Name())
+		return 0, fmt.Errorf("can't probe a %s session (only this machine's tmux and Rex)", rs.b.Name())
 	}
 	panes, err := adoptLegacyRigPanes(rs, basedir, m)
 	if err != nil {
@@ -687,9 +686,13 @@ func deliverRigMessage(target rigInfo, text, replyTo string, sender rigSender) e
 	if err != nil {
 		return err
 	}
-	msgID, err := uuidV4()
-	if err != nil {
-		return err
+	// A send forwarded from another host carries the id that host minted,
+	// so both halves of the thread log the same one.
+	msgID := forwardedMessage.id
+	if msgID == "" {
+		if msgID, err = uuidV4(); err != nil {
+			return err
+		}
 	}
 	record := rigMessage{
 		V: 1, ID: msgID, At: time.Now(), Dir: "in",
@@ -778,15 +781,50 @@ func runSend(args []string) error {
 	if len(args) < 2 {
 		return fmt.Errorf("usage: rig send RIG MESSAGE...")
 	}
-	target, err := resolveRig(args[0])
-	if err != nil {
-		return err
-	}
 	text := strings.TrimSpace(strings.Join(args[1:], " "))
 	if text == "" {
 		return fmt.Errorf("rig send: empty message")
 	}
-	return deliverRigMessage(target, text, "", currentSender())
+	target, err := resolveTarget(args[0])
+	if err != nil {
+		return err
+	}
+	return sendTo(target, text, forwardedMessage.replyTo)
+}
+
+// sendTo delivers to a rig wherever it lives. A local rig goes straight to
+// its transport. A remote one is a send forwarded to its host, carrying an id
+// minted here so the receiver's log and this rig's share it; the host stamps
+// where it came from, and its probe failures come back as this command's.
+func sendTo(target rigTarget, text, replyTo string) error {
+	sender := currentSender()
+	if target.local != nil {
+		return deliverRigMessage(*target.local, text, replyTo, sender)
+	}
+	t := target.remote
+	msgID, err := uuidV4()
+	if err != nil {
+		return err
+	}
+	req := execRequest{
+		Argv: []string{"send", t.row.ID, text},
+		From: sender.addr, FromName: sender.name,
+		MessageID: msgID, ReplyTo: replyTo,
+	}
+	if err := t.host.exec(req, os.Stdout, os.Stderr); err != nil {
+		return err
+	}
+	if sender.rig != nil {
+		record := rigMessage{
+			V: 1, ID: msgID, At: time.Now(), Dir: "out",
+			From: sender.name, FromAddr: sender.addr, To: t.addr(), Text: text,
+			Transport: "rig-serve", ReplyTo: replyTo, Delivered: true,
+		}
+		if err := appendRigMessage(sender.rig.Path, record); err != nil {
+			fmt.Fprintf(os.Stderr, "rig: warning: logging to %s: %v\n", sender.rig.Path, err)
+		}
+	}
+	return nil
 }
 
 // runReply answers the most recent delivered inbound message in the current
@@ -812,15 +850,18 @@ func runReply(args []string) error {
 		if m.Dir != "in" || !m.Delivered {
 			continue
 		}
+		// rig:<id> is a rig on this host; rig:<id>@<place> is one on the host
+		// the tailnet said the message came from, which resolveTarget reaches
+		// through that place's surface.
 		rigID, ok := strings.CutPrefix(m.FromAddr, "rig:")
 		if !ok || rigID == "" {
 			return fmt.Errorf("last message came from %s, which isn't a rig address I can deliver a reply to", m.From)
 		}
-		target, err := resolveRig(rigID)
+		target, err := resolveTarget(rigID)
 		if err != nil {
 			return fmt.Errorf("the rig that messaged you (%s) is gone: %v", rigID, err)
 		}
-		return deliverRigMessage(target, text, m.ID, currentSender())
+		return sendTo(target, text, m.ID)
 	}
 	return fmt.Errorf("no inbound message to reply to")
 }
@@ -844,11 +885,18 @@ func runMessages(args []string) error {
 
 	var r rigInfo
 	if query != "" {
-		var err error
-		r, err = resolveRig(query)
+		target, err := resolveTarget(query)
 		if err != nil {
 			return err
 		}
+		if t := target.remote; t != nil {
+			format := "--format=table"
+			if jsonOut {
+				format = "--format=json"
+			}
+			return forward(*t, "messages", t.row.ID, format)
+		}
+		r = *target.local
 	} else {
 		cwd, err := os.Getwd()
 		if err != nil {

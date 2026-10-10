@@ -75,25 +75,46 @@ func runRelay(args []string) error {
 	if issue.Project == nil {
 		return fmt.Errorf("%s is not assigned to a Linear project", issueID)
 	}
-	rigs, err := listRigs()
+	overview, err := projectRigFor(issue.Project.ID)
 	if err != nil {
 		return err
 	}
-	var overview *rigInfo
-	for i := range rigs {
-		if rigs[i].Kind == "project" && rigs[i].Tracker == "linear" && rigs[i].TrackerID == issue.Project.ID {
-			overview = &rigs[i]
-			break
-		}
-	}
-	if overview == nil {
+	if overview.local == nil && overview.remote == nil {
 		return fmt.Errorf("no project rig for %s; run `rig project %s` first", issue.Project.Name, shellQuote(issue.Project.Name))
 	}
 	text := fmt.Sprintf("Discovery from %s (via rig relay):\n%s", issue.Identifier, message)
-	if err := relayDeliver(*overview, text, "", currentSender()); err != nil {
-		return fmt.Errorf("relaying to %s: %w", overview.ID, err)
+	if overview.local != nil {
+		err = relayDeliver(*overview.local, text, "", currentSender())
+	} else {
+		err = sendTo(overview, text, "")
+	}
+	if err != nil {
+		return fmt.Errorf("relaying to %s: %w", overview.label(), err)
 	}
 	return nil
+}
+
+// projectRigFor finds the overview rig for a Linear project: here first, then
+// on any host that serves its board, since a project rig started on the
+// devbox coordinates task rigs on the laptop just as well. The zero target
+// means there is none anywhere that answered.
+func projectRigFor(projectID string) (rigTarget, error) {
+	rigs, err := listRigs()
+	if err != nil {
+		return rigTarget{}, err
+	}
+	for i := range rigs {
+		if rigs[i].Kind == "project" && rigs[i].Tracker == "linear" && rigs[i].TrackerID == projectID {
+			return rigTarget{local: &rigs[i]}, nil
+		}
+	}
+	rows, _ := remoteRigs(nil)
+	for i, r := range rows {
+		if r.row.Kind == "project" && r.row.Tracker == "linear" && r.row.TrackerID == projectID {
+			return rigTarget{remote: &rows[i]}, nil
+		}
+	}
+	return rigTarget{}, nil
 }
 
 func queryLinearIssueProject(client *linearClient, issueID string) (linearIssueProject, error) {

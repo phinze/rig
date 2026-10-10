@@ -40,26 +40,26 @@ func TestServeGate(t *testing.T) {
 		"100.0.0.9:5000": false, // whois can't place it
 		"127.0.0.1:5000": false, // loopback, on a tailnet listener
 	} {
-		if got := g.check(context.Background(), addr) == nil; got != want {
+		if got := checkErr(g, addr) == nil; got != want {
 			t.Errorf("%s allowed = %v, want %v", addr, got, want)
 		}
 	}
 
 	before := calls
-	_ = g.check(context.Background(), "100.0.0.1:6000")
-	_ = g.check(context.Background(), "100.0.0.3:6000")
+	_, _ = g.check(context.Background(), "100.0.0.1:6000")
+	_, _ = g.check(context.Background(), "100.0.0.3:6000")
 	if calls != before {
 		t.Errorf("whois ran %d more times for addresses already answered, want 0", calls-before)
 	}
-	_ = g.check(context.Background(), "100.0.0.9:6000")
+	_, _ = g.check(context.Background(), "100.0.0.9:6000")
 	if calls != before+1 {
 		t.Errorf("a failed whois was cached; want it asked again")
 	}
 
-	if tg := newServeGate([]string{"tag:terraform"}, whois, false); tg.check(context.Background(), "100.0.0.2:1") != nil {
+	if tg := newServeGate([]string{"tag:terraform"}, whois, false); checkErr(tg, "100.0.0.2:1") != nil {
 		t.Error("tag:terraform on the list didn't admit a node carrying it")
 	}
-	if lg := newServeGate([]string{"me@github"}, whois, true); lg.check(context.Background(), "127.0.0.1:1") != nil {
+	if lg := newServeGate([]string{"me@github"}, whois, true); checkErr(lg, "127.0.0.1:1") != nil {
 		t.Error("a loopback listener refused a loopback peer")
 	}
 }
@@ -231,9 +231,6 @@ func TestRadarDrawsRemoteRigs(t *testing.T) {
 	if err != nil || dest.session.name != "~/workspaces/pers-20" || dest.session.b.Surface() != "tmux@fx" {
 		t.Errorf("enter = %+v, %v; want the host's session through its surface", dest.session, err)
 	}
-	if _, err := radarPrepare(m.parked[0]); err == nil || !strings.Contains(err.Error(), "wake it there") {
-		t.Errorf("enter on a parked remote rig = %v, want a refusal", err)
-	}
 }
 
 // A host that chose an icon is drawn by it, on its rigs and its plain
@@ -347,4 +344,9 @@ func TestListsTarget(t *testing.T) {
 			t.Errorf("listsTarget(%q) = %v, want %v", target, got, want)
 		}
 	}
+}
+
+func checkErr(g *serveGate, addr string) error {
+	_, err := g.check(context.Background(), addr)
+	return err
 }

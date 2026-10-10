@@ -30,7 +30,19 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
+	// The suite must never reach another host. Remote resolution finds hosts
+	// through the [surfaces] table, so config points at an empty dir unless a
+	// test sets its own; otherwise a developer with XDG_CONFIG_HOME set would
+	// have every lookup miss fall through to their real devbox.
+	cfg, err := os.MkdirTemp("", "rig-test-config-")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "rig tests: %v\n", err)
+		os.Exit(1)
+	}
+	_ = os.Setenv("XDG_CONFIG_HOME", cfg)
+
 	code := m.Run()
 	_ = os.RemoveAll(root)
+	_ = os.RemoveAll(cfg)
 	os.Exit(code)
 }

@@ -13,6 +13,9 @@ import (
 // hint to record. Like a repo added later with `rig add`, the workspace starts
 // at trunk() and branch discovery takes over once the work grows a bookmark.
 func runNew(args []string) error {
+	if place, rest := extractValueFlag(args, "--on"); place != "" {
+		return runOn("new", place, rest)
+	}
 	pick, args, err := extractAgentFlag(args)
 	if err != nil {
 		return err

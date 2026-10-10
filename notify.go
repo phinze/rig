@@ -36,6 +36,9 @@ type notification struct {
 	Created time.Time `json:"created"`
 	Updated time.Time `json:"updated"`
 	Count   int       `json:"count"`
+	// Location is set only on entries another host's inbox answered with,
+	// when a list merges every host's; nothing stores it.
+	Location string `json:"location,omitempty"`
 }
 
 // ref is the "source/key" handle dismiss accepts.
@@ -279,6 +282,13 @@ func runNotifyList(args []string) error {
 	}
 	list := activeNotifications()
 	if jsonOut {
+		remote, hosts := remoteJSONRows(func(n *notification, place string) { n.Location = place },
+			"notify", "list", "--format=json")
+		warnUnreachable(hosts)
+		list = append(list, remote...)
+		if list == nil {
+			list = []notification{}
+		}
 		blob, err := json.MarshalIndent(list, "", "  ")
 		if err != nil {
 			return err
@@ -286,6 +296,7 @@ func runNotifyList(args []string) error {
 		fmt.Println(string(blob))
 		return nil
 	}
+	defer remoteSections("notify", "list")
 	if len(list) == 0 {
 		fmt.Fprintln(os.Stderr, "rig: inbox is empty")
 		return nil

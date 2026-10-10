@@ -197,12 +197,18 @@ func radarPrepare(s rigStatus) (rigStatus, error) {
 	if s.bare {
 		return s, nil
 	}
-	// A remote rig is viewed from here, never changed: there's no manifest on
-	// this machine to stamp or unpark. A live one is entered through its
-	// surface's portal; a parked one has to be woken where it lives.
+	// A remote rig has no manifest on this machine to stamp or unpark. A live
+	// one is entered through its surface's portal; a parked one is woken by
+	// its own host (a forwarded wake), which reports the session it rebuilt.
 	if s.remote != nil {
 		if s.Parked {
-			return rigStatus{}, fmt.Errorf("%s is parked on %s — wake it there", s.ID, surfacePlace(s.remote.surface))
+			attach, err := execQuiet(s, "wake")
+			if err != nil {
+				return rigStatus{}, err
+			}
+			if attach != nil {
+				s.remote.session = attach.Target
+			}
 		}
 		if !s.child {
 			s.session = rigSession{name: s.remote.session, b: surfaceNamed(s.remote.surface)}
@@ -571,7 +577,18 @@ func radarFetchCmd(s rigStatus) tea.Cmd {
 
 func radarParkCmd(s rigStatus, parked bool) tea.Cmd {
 	return func() tea.Msg {
-		err := setRigParked(s.Path, parked, true, nil)
+		var err error
+		if s.remote != nil {
+			// Its host parks it, or wakes it without anyone entering it, the
+			// same two transitions ctrl-p makes here.
+			verb := "wake"
+			if parked {
+				verb = "park"
+			}
+			_, err = execQuiet(s, verb)
+		} else {
+			err = setRigParked(s.Path, parked, true, nil)
+		}
 		label := s.Title
 		if s.ID != "" {
 			label = s.ID
@@ -1092,10 +1109,6 @@ func (m radarModel) handleBoardKey(key string) (radarModel, tea.Cmd) {
 		}
 		if s.bare || s.Path == "" {
 			m.actionErr = fmt.Errorf("plain tmux sessions cannot be parked")
-			return m, nil
-		}
-		if s.remote != nil {
-			m.actionErr = fmt.Errorf("%s lives on %s — park it there", s.ID, surfacePlace(s.remote.surface))
 			return m, nil
 		}
 		if m.parkPending == nil {

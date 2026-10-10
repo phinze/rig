@@ -30,7 +30,7 @@ var commands = []command{
 	{
 		name:    "up",
 		group:   "start",
-		usage:   []string{"up [ID|QUERY|PR-URL] [--source linear|github|tasks] [--repo OWNER/REPO] [--agent AGENT] [--context TEXT]"},
+		usage:   []string{"up [ID|QUERY|PR-URL] [--source linear|github|tasks] [--repo OWNER/REPO] [--agent AGENT] [--context TEXT] [--on PLACE]"},
 		summary: "go to a task's rig, creating it if new",
 		details: `Argument: a task id (MIR-75, owner/repo#9, a GitHub issue URL, PERS-3), search
 terms, or a URL of your own PR. No argument opens an fzf picker (needs a TTY).
@@ -42,46 +42,64 @@ Idempotent: an existing rig is switched to, not rebuilt.
   --agent    see "rig help new".
   --context  text written to the new rig's KICKOFF.md. Piped stdin does the
              same when --context is absent; with it, stdin is never read.
-             Ignored with a warning if the rig exists; use dispatch.`,
+             Ignored with a warning if the rig exists; use dispatch.
+
+  --on PLACE  build it on another host (a rig+http surface) and enter it from
+              here. That host has no terminal, so give what a prompt would
+              have asked for: an exact id, --repo, a kickoff.`,
 	},
 	{
 		name:    "new",
 		group:   "start",
-		usage:   []string{"new [KICKOFF] [--repo OWNER/REPO] [--agent AGENT]"},
+		usage:   []string{"new [KICKOFF] [--repo OWNER/REPO] [--agent AGENT] [--on PLACE]"},
 		summary: "start a rig for work with no ticket",
 		details: `Prompts for the kickoff, then optional pasted context, then the repo. Piped
 stdin supplies the context without prompting. The rig starts at trunk with no
 branch.
 
   --agent  claude|cld, codex|cdx, antigravity|agy, pi. Default: $RIG_AGENT, then
-           "rig config agent", then claude.`,
+           "rig config agent", then claude.
+
+  --on PLACE  build it on another host (a rig+http surface) and enter it from
+              here. That host has no terminal, so give what a prompt would
+              have asked for: an exact id, --repo, a kickoff.`,
 	},
 	{
 		name:    "review",
 		group:   "start",
-		usage:   []string{"review [PR-URL] [--agent AGENT]", "review --refresh PR-URL"},
+		usage:   []string{"review [PR-URL] [--agent AGENT] [--on PLACE]", "review --refresh PR-URL"},
 		summary: "start or enter a review rig for someone else's PR",
 		details: `No argument: fzf picker over PRs awaiting your review plus existing review
 rigs. A URL for your own PR routes to "rig up".
 
-  --refresh  advance an existing review rig to the PR's current head.`,
+  --refresh  advance an existing review rig to the PR's current head.
+
+  --on PLACE  build it on another host (a rig+http surface) and enter it from
+              here. That host has no terminal, so give what a prompt would
+              have asked for: an exact id, --repo, a kickoff.`,
 	},
 	{
 		name:    "project",
 		group:   "start",
-		usage:   []string{"project [QUERY|URL|UUID] [--agent AGENT]", "project status [--format=json|table]"},
+		usage:   []string{"project [QUERY|URL|UUID] [--agent AGENT] [--on PLACE]", "project status [--format=json|table]"},
 		summary: "enter a Linear project overview rig (no repos)",
-		details: `status: the current project's issues joined to local rig, agent, PR, review,
-and CI state. Run from inside a project rig.`,
+		details: `status: the current project's issues joined to rig, agent, PR, review, and CI
+state, from this host and every rig+http surface (a rig here wins an issue
+both have). Run from inside a project rig.
+
+  --on PLACE  build it on another host (a rig+http surface) and enter it from
+              here. That host has no terminal, so give what a prompt would
+              have asked for: an exact id, --repo, a kickoff.`,
 	},
 	{
 		name:    "cos",
 		group:   "start",
-		usage:   []string{"cos [--agent AGENT]"},
+		usage:   []string{"cos [--agent AGENT] [--on PLACE]"},
 		summary: "enter today's chief-of-staff rig (no repos)",
 		details: `One per workday, named cos-YYYY-MM-DD; run again the same day to re-enter
-it. Any rig can message it with "rig send cos MESSAGE...", which reaches the
-newest one.`,
+it, here or on whichever host it's already up. Any rig on any host can message
+it with "rig send cos MESSAGE...", which reaches the newest one; two on one
+day on different hosts is refused by name.`,
 	},
 	{
 		name:    "adopt",
@@ -125,10 +143,11 @@ PR alongside the rig's primary one.`,
 	{
 		name:    "dispatch",
 		group:   "work",
-		usage:   []string{"dispatch RIG-OR-ISSUE [--] PROMPT..."},
+		usage:   []string{"dispatch RIG-OR-ISSUE[@PLACE] [--] PROMPT..."},
 		summary: "wake a stopped or parked rig and give its agent a prompt",
 		details: `Runs in the background; does not switch to the rig. Refuses a rig whose agent
-is already running. Use -- before a prompt that starts with a dash.`,
+is already running. Use -- before a prompt that starts with a dash. A rig on
+another host is dispatched by that host (see "rig help send" for @PLACE).`,
 	},
 	{
 		name:    "relay",
@@ -138,12 +157,13 @@ is already running. Use -- before a prompt that starts with a dash.`,
 		details: `Resolves the current rig's Linear issue to its project's overview rig and
 delivers like send: at that agent's next turn boundary, attributed to this rig,
 and failing loudly when it isn't reachable. Nothing is posted to Linear. The
-current rig must track a Linear issue that belongs to a project.`,
+current rig must track a Linear issue that belongs to a project. The project
+rig may live on another host.`,
 	},
 	{
 		name:    "send",
 		group:   "work",
-		usage:   []string{"send RIG MESSAGE..."},
+		usage:   []string{"send RIG[@PLACE] MESSAGE..."},
 		summary: "message another rig's agent, delivered at its next turn boundary",
 		details: `RIG is an id, slug, or tracker id; "cos" means today's chief-of-staff rig.
 Claude, codex, and pi rigs. Reachability is checked first and failure is loud:
@@ -155,7 +175,14 @@ accepts a message with the daemon down and delivers nothing. A pi session
 mid-turn answers busy and nothing is queued anywhere — retry when it
 settles.
 Every attempt is logged to the receiver's .rig/messages.jsonl (and yours,
-when you send from a rig). Unlike dispatch, send never wakes a rig.`,
+when you send from a rig). Unlike dispatch, send never wakes a rig.
+
+Rigs on other hosts: RIG is looked up here first, then on every rig+http
+surface, so a bare id reaches a rig elsewhere when nothing here has it.
+RIG@PLACE names the host outright, and is how to reach past a local rig with
+the same id. The far host runs the delivery and its failures come back here.
+The receiver sees you as rig:ID@PLACE, the place stamped by the tailnet, and
+its "rig reply" routes back.`,
 	},
 	{
 		name:    "reply",
@@ -163,12 +190,13 @@ when you send from a rig). Unlike dispatch, send never wakes a rig.`,
 		usage:   []string{"reply MESSAGE..."},
 		summary: "answer the latest message delivered to this rig",
 		details: `Run inside a rig. Replies are sends with a correlation id; the verb exists
-so an agent's cheap path is also the right one.`,
+so an agent's cheap path is also the right one. A message from another host
+is answered there.`,
 	},
 	{
 		name:    "messages",
 		group:   "work",
-		usage:   []string{"messages [RIG] [--format=json|table]"},
+		usage:   []string{"messages [RIG[@PLACE]] [--format=json|table]"},
 		summary: "read a rig's message thread",
 		details: `Default rig: the one you're in. ✗ rows are failed deliveries, with the
 reason on the following line.`,
@@ -178,7 +206,8 @@ reason on the following line.`,
 		group:   "navigate",
 		usage:   []string{"switch [QUERY]"},
 		summary: "jump to a rig's session (alias: cd)",
-		details: `Most recently used first; fzf when ambiguous.`,
+		details: `Most recently used first; fzf when ambiguous. Lists rigs on rig+http
+surfaces too, as ID@PLACE, entered through that host.`,
 	},
 	{
 		name:    "radar",
@@ -207,45 +236,59 @@ board as a document for agents and sweeps.
 
 The cheap tier (no --full) is local and instant: no gh calls, so repo PR
 fields read null and WIP is conservative (no PR heads to subtract). The tier
-for a board read that polls.`,
+for a board read that polls.
+
+Every rig+http surface answers the same command and its rigs join the board
+with location set to the place (ID@PLACE in the table). The JSON's hosts field
+says which hosts answered, so a missing rig reads as "couldn't look".`,
 	},
 	{
 		name:    "wake",
 		group:   "navigate",
 		usage:   []string{"wake [QUERY|PR-URL]"},
 		summary: "enter a rig, unparking it if parked",
+		details: `Covers rigs on rig+http surfaces too (ID@PLACE): their host wakes them and
+this side enters.`,
 	},
 	{
 		name:    "resume",
 		group:   "navigate",
 		usage:   []string{"resume [QUERY]"},
 		summary: "rebuild a live rig's agent and Recto panes",
-		details: `Default: the rig containing cwd. Does not change parked state.`,
+		details: `Default: the rig containing cwd. Does not change parked state. A rig on
+another host (ID@PLACE) is repaired there and entered from here.`,
 	},
 	{
 		name:    "park",
 		group:   "finish",
-		usage:   []string{"park"},
-		summary: "mark the current rig awaiting review and close its session",
-		details: `Keeps the directory. Inside the rig's session, opens radar to pick where to go
-next first. Undo with wake.`,
+		usage:   []string{"park [NAME]"},
+		summary: "mark a rig awaiting review and close its session",
+		details: `Default: the rig you're in. NAME is a rig's exact id or directory name, here
+or, when nothing here has it or with NAME@PLACE, on another host. Keeps the
+directory. Inside the rig's session, opens radar to pick where to go next
+first. Undo with wake.`,
 	},
 	{
 		name:    "waiting",
 		group:   "finish",
 		usage:   []string{"waiting"},
 		summary: "review status of parked rigs, most actionable first",
+		details: `Each rig+http surface's answer follows this host's, under its place.`,
 	},
 	{
 		name:    "sweep",
 		group:   "finish",
-		usage:   []string{"sweep [-n|--dry-run] [--merge-method merge|squash|rebase]"},
+		usage:   []string{"sweep [-n|--dry-run] [--format=json] [--merge-method merge|squash|rebase]"},
 		summary: "propose and run each rig's next step (merge, park, wake, tear down)",
 		details: `Shows a checkable board, then runs the checked actions; stops at the first
 failure. Merges start unchecked. Without a TTY, prints the plan and exits.
 
   -n              plan only.
-  --merge-method  default merge.`,
+  --format=json   print the plan as JSON; never interactive, never acts.
+  --merge-method  default merge.
+
+Rigs on rig+http surfaces are planned by their own host and shown as
+ID@PLACE; their checked actions run there, under that host's gates.`,
 	},
 	{
 		name:    "down",
@@ -253,21 +296,26 @@ failure. Merges start unchecked. Without a TTY, prints the plan and exits.
 		usage:   []string{"down [NAME] [-f|--force]"},
 		summary: "tear down the current rig, or the one named",
 		details: `NAME is a rig's exact id or directory name; without it, the rig you're in.
-Refuses with uncommitted work or an unmerged PR unless --force. Recoverable for
-a week with resurrect.`,
+A NAME nothing here has, or NAME@PLACE, is torn down on that host. Refuses
+with uncommitted work or an unmerged PR unless --force. Recoverable for a week
+with resurrect.`,
 	},
 	{
 		name:    "history",
 		group:   "finish",
-		usage:   []string{"history"},
+		usage:   []string{"history [--format=json|table]"},
 		summary: "list recently torn-down rigs that can be resurrected",
+		details: `Each rig+http surface's history follows, under its place (merged into the
+JSON with location set).`,
 	},
 	{
 		name:    "resurrect",
 		group:   "finish",
-		usage:   []string{"resurrect RIG-ID"},
+		usage:   []string{"resurrect RIG-ID[@PLACE]"},
 		summary: "rebuild a torn-down rig and resume its agent",
-		details: `Workspaces return at their recorded branches; uncommitted work does not.`,
+		details: `Workspaces return at their recorded branches; uncommitted work does not. A
+rig resurrects on the host it died on: an id nothing here has is looked for
+in every rig+http surface's history.`,
 	},
 	{
 		name:  "notify",
@@ -316,9 +364,12 @@ a week with resurrect.`,
 		name:    "serve",
 		group:   "plumbing",
 		usage:   []string{"serve --allow WHO [--allow WHO...] [--listen ADDR] [--icon GLYPH]"},
-		summary: "answer other hosts' radars over the tailnet",
-		details: `Serves this host's rigs, sessions, and agent panes read-only at
-GET /v1/board, for a radar elsewhere with a rig+http surface pointing here.
+		summary: "answer and run rig verbs for other hosts over the tailnet",
+		details: `Serves this host's rigs, sessions, and agent panes at GET /v1/board, for a
+radar elsewhere with a rig+http surface pointing here, and runs rig verbs for
+those hosts at POST /v1/exec: send, messages, ls, waiting, history, sweep,
+dispatch, wake, resume, park, down, resurrect, up, new, review, project, cos,
+and notify list. Nothing else is accepted.
 
 WHO is a tailnet login (you@github), a node's short name, or tag:NAME; each
 request's peer is checked with tailscale whois. A tagged node never matches

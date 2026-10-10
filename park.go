@@ -15,16 +15,37 @@ import (
 // face until a review comes back, at which point you wake it (changes requested)
 // or just merge and let reap collect it (approved).
 func runPark(args []string) error {
-	if len(args) != 0 {
-		return fmt.Errorf("usage: rig park")
+	if len(args) > 1 {
+		return fmt.Errorf("usage: rig park [NAME]")
 	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-	basedir, err := findBasedir(cwd)
-	if err != nil {
-		return err
+	var basedir string
+	if len(args) == 1 {
+		// A named park is for a rig you aren't sitting in: one sweep or a
+		// chief of staff decided is waiting, here or on another host.
+		rigs, err := listRigs()
+		if err != nil {
+			return err
+		}
+		local, localErr := downTarget(rigs, args[0])
+		t, ok, err := exactRemote(args[0], localErr == nil)
+		if err != nil {
+			return err
+		}
+		if ok {
+			return forward(t, "park", t.row.ID)
+		}
+		if localErr != nil {
+			return localErr
+		}
+		basedir = local
+	} else {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		if basedir, err = findBasedir(cwd); err != nil {
+			return err
+		}
 	}
 	m, err := readManifest(basedir)
 	if err != nil {

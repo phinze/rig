@@ -38,7 +38,7 @@ import (
 // it's the one irreversible act here — so merge rows start unchecked and never
 // come along with "select all".
 func runSweep(args []string) error {
-	dryRun := false
+	dryRun, jsonOut := false, false
 	// Merge commits, because that's what we use. Squash was the first guess and
 	// it was simply wrong: mirendev/runtime disallows it outright, so every merge
 	// in the first real run died on "Squash merges are not allowed".
@@ -47,6 +47,8 @@ func runSweep(args []string) error {
 		switch args[i] {
 		case "--dry-run", "-n":
 			dryRun = true
+		case "--format=json":
+			jsonOut = true
 		case "--merge-method":
 			i++
 			if i >= len(args) {
@@ -59,7 +61,7 @@ func runSweep(args []string) error {
 				return fmt.Errorf("--merge-method: expected merge, squash, or rebase, got %q", args[i])
 			}
 		default:
-			return fmt.Errorf("usage: rig sweep [--dry-run|-n] [--merge-method merge|squash|rebase]")
+			return fmt.Errorf("usage: rig sweep [--dry-run|-n] [--format=json] [--merge-method merge|squash|rebase]")
 		}
 	}
 
@@ -67,6 +69,16 @@ func runSweep(args []string) error {
 	// exactly as reap uses it, so trunk() reflects what merged over the weekend
 	// without re-fetching once per rig.
 	fetched := map[string]bool{}
+
+	// The plan as a document: never interactive, never acts. It's how another
+	// host's sweep reads this one's, and how an agent reads the whole board.
+	if jsonOut {
+		plans, err := sweepScan(fetched, nil)
+		if err != nil {
+			return err
+		}
+		return printSweepJSON(plans)
+	}
 
 	// No terminal means no board, and every action here needs a deliberate check.
 	// Degrade to the report rather than refuse, so the command stays safe to pipe
@@ -446,21 +458,33 @@ func sweepScan(fetched map[string]bool, report func(string)) ([]sweepPlan, error
 		}
 	}
 	say("reading workspaces")
+	// Other hosts plan their own rigs meanwhile; see sweep_remote.go.
+	remote := make(chan []sweepPlan, 1)
+	go func() { remote <- remoteSweepPlans() }()
 	rigs, err := listRigs()
 	if err != nil {
 		return nil, err
-	}
-	if len(rigs) == 0 {
-		return nil, nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
 	}
-	statuses := rigStatuses(rigs, home, time.Now())
-	say(fmt.Sprintf("asking GitHub about %d rigs", len(statuses)))
-	enrichWithPRs(statuses)
-	return planSweep(rigs, statuses, home, fetched, say), nil
+	var plans []sweepPlan
+	if len(rigs) > 0 {
+		statuses := rigStatuses(rigs, home, time.Now())
+		say(fmt.Sprintf("asking GitHub about %d rigs", len(statuses)))
+		enrichWithPRs(statuses)
+		plans = planSweep(rigs, statuses, home, fetched, say)
+	}
+	say("waiting on other hosts")
+	if more := <-remote; len(more) > 0 {
+		plans = append(plans, more...)
+		// The board groups by action; keep each group's local rows first.
+		sort.SliceStable(plans, func(i, j int) bool {
+			return sweepRank(plans[i].action) < sweepRank(plans[j].action)
+		})
+	}
+	return plans, nil
 }
 
 // planSweep builds one plan per rig and orders them the way the board groups
@@ -619,6 +643,12 @@ func sweepRank(action string) int {
 func executeSweep(picked []sweepPlan, dryRun bool, mergeFlag string, fetched map[string]bool) error {
 	fmt.Fprintln(os.Stderr)
 	for _, p := range picked {
+		if p.status.remote != nil {
+			if err := executeRemotePlan(p, dryRun, mergeFlag); err != nil {
+				return err
+			}
+			continue
+		}
 		switch p.action {
 		case actionMerge:
 			for _, pr := range p.merges {
@@ -758,7 +788,7 @@ func reportSweep(plans []sweepPlan) {
 			next = "needs you"
 		}
 		fmt.Fprintf(w, "  %s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			rigKindGlyph(rigKindOf(p.status)), p.status.ID, sweepRefs(p),
+			rigKindGlyph(rigKindOf(p.status)), remoteHandle(p.status), sweepRefs(p),
 			sweepSubject(p), p.detail, sweepMeta(p), next)
 	}
 	_ = w.Flush()
@@ -1111,7 +1141,7 @@ func (m sweepModel) columns() sweepCols {
 		if rigKindGlyph(rigKindOf(p.status)) != "" {
 			c.kind = 2
 		}
-		c.id = max(c.id, lipgloss.Width(p.status.ID))
+		c.id = max(c.id, lipgloss.Width(remoteHandle(p.status)))
 		c.ref = max(c.ref, lipgloss.Width(sweepRefs(p)))
 		c.why = max(c.why, lipgloss.Width(p.detail))
 		c.meta = max(c.meta, lipgloss.Width(sweepMeta(p)))
@@ -1195,7 +1225,7 @@ func (m sweepModel) sweepLine(box string, p sweepPlan, c sweepCols) (lead, subje
 	if c.kind > 0 {
 		lead += rigKindCell(p.status)
 	}
-	lead += padRight(sweepClip(p.status.ID, c.id), c.id) + "  "
+	lead += padRight(sweepClip(remoteHandle(p.status), c.id), c.id) + "  "
 	if c.ref > 0 {
 		lead += padRight(sweepRefs(p), c.ref) + "  "
 	}

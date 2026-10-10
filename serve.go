@@ -26,11 +26,12 @@ import (
 // (served.go) and gets real rig rows back instead of bare sessions, and ssh
 // is left for the one thing that needs a terminal, entering a session.
 //
-// It does one thing besides answer: show a session on this host's screen,
-// for a radar on a host that can't reach this one's client. That's the
-// foxtrotbase radar, seen through the Mac's Rex, entering a Mac rig: the
-// screen is the Mac's, so the Mac moves it. It changes what's displayed and
-// nothing else, and only for a session or agent pane the board lists.
+// It does two things besides answer. /v1/show puts a session on this host's
+// screen, for a radar on a host that can't reach this one's client: the
+// foxtrotbase radar, seen through the Mac's Rex, entering a Mac rig. The
+// screen is the Mac's, so the Mac moves it, and only to a session or agent
+// pane the board lists. /v1/exec runs a rig verb on another host's behalf,
+// which is how every verb reaches a rig that lives here (remote.go).
 //
 // Identity is the tailnet's. Every request's peer address goes through
 // `tailscale whois`, and only a caller on the --allow list gets an answer.
@@ -150,7 +151,7 @@ func runServe(args []string) error {
 func serveHandler(g *serveGate, build func() serveDoc) http.Handler {
 	h := http.NewServeMux()
 	h.HandleFunc("POST /v1/show", func(w http.ResponseWriter, r *http.Request) {
-		if err := g.check(r.Context(), r.RemoteAddr); err != nil {
+		if _, err := g.check(r.Context(), r.RemoteAddr); err != nil {
 			http.Error(w, err.Error(), http.StatusForbidden)
 			return
 		}
@@ -169,8 +170,16 @@ func serveHandler(g *serveGate, build func() serveDoc) http.Handler {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
+	h.HandleFunc("POST /v1/exec", func(w http.ResponseWriter, r *http.Request) {
+		id, err := g.check(r.Context(), r.RemoteAddr)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusForbidden)
+			return
+		}
+		serveExec(w, r, id)
+	})
 	h.HandleFunc("GET /v1/board", func(w http.ResponseWriter, r *http.Request) {
-		if err := g.check(r.Context(), r.RemoteAddr); err != nil {
+		if _, err := g.check(r.Context(), r.RemoteAddr); err != nil {
 			http.Error(w, err.Error(), http.StatusForbidden)
 			return
 		}
@@ -403,6 +412,7 @@ type serveGate struct {
 
 type gateEntry struct {
 	ok bool
+	id whoisIdentity
 	at time.Time
 }
 
@@ -416,17 +426,20 @@ func newServeGate(allow []string, whois whoisFunc, loopback bool) *serveGate {
 	return g
 }
 
-func (g *serveGate) check(ctx context.Context, remoteAddr string) error {
+// check admits or refuses a peer, and says who it is when it's admitted:
+// /v1/exec stamps that identity onto the messages it delivers, so a sender's
+// host is the tailnet's word rather than the sender's.
+func (g *serveGate) check(ctx context.Context, remoteAddr string) (whoisIdentity, error) {
 	host, _, err := net.SplitHostPort(remoteAddr)
 	if err != nil {
-		return fmt.Errorf("unreadable peer address")
+		return whoisIdentity{}, fmt.Errorf("unreadable peer address")
 	}
 	// A server bound to loopback is a test or a local experiment, and anyone
 	// who can reach it can already read this user's files or isn't on this
 	// machine at all. A tailnet listener never takes this path.
 	if g.loopback {
 		if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
-			return nil
+			return whoisIdentity{Node: loopbackPlace}, nil
 		}
 	}
 	g.mu.Lock()
@@ -434,22 +447,22 @@ func (g *serveGate) check(ctx context.Context, remoteAddr string) error {
 	g.mu.Unlock()
 	if ok && time.Since(e.at) < gateTTL {
 		if e.ok {
-			return nil
+			return e.id, nil
 		}
-		return fmt.Errorf("%s is not allowed", host)
+		return whoisIdentity{}, fmt.Errorf("%s is not allowed", host)
 	}
 	id, err := g.whois(ctx, host)
 	if err != nil {
-		return fmt.Errorf("can't identify %s", host)
+		return whoisIdentity{}, fmt.Errorf("can't identify %s", host)
 	}
 	allowed := g.allows(id)
 	g.mu.Lock()
-	g.known[host] = gateEntry{ok: allowed, at: time.Now()}
+	g.known[host] = gateEntry{ok: allowed, id: id, at: time.Now()}
 	g.mu.Unlock()
 	if !allowed {
-		return fmt.Errorf("%s (%s) is not allowed", host, id.Node)
+		return whoisIdentity{}, fmt.Errorf("%s (%s) is not allowed", host, id.Node)
 	}
-	return nil
+	return id, nil
 }
 
 // allows matches an identity against the list. A tagged node's login is the

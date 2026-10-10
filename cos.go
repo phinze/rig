@@ -22,6 +22,9 @@ func cosRigID(day time.Time) string { return "cos-" + day.Format(time.DateOnly) 
 // is repositoryless, its agent running from the rig root, but it coordinates
 // across every rig rather than one project's.
 func runCoS(args []string) error {
+	if place, rest := extractValueFlag(args, "--on"); place != "" {
+		return runOn("cos", place, rest)
+	}
 	pick, args, err := extractAgentFlag(args)
 	if err != nil {
 		return err
@@ -42,6 +45,17 @@ func runCoS(args []string) error {
 			return activateRig(r)
 		}
 	}
+	// Today's chief of staff may already be up on another host. Entering it
+	// there is the same idempotency as entering it here, and starting a second
+	// one would split the day's reports between two rigs `cos` can't choose
+	// between (resolveCoSAcross refuses).
+	remote, _ := remoteRigs(nil)
+	for _, r := range remote {
+		if r.row.ID == rigID {
+			fmt.Fprintf(os.Stderr, "rig: %s is already up on %s — entering it there\n", rigID, r.place)
+			return forward(r, "cos")
+		}
+	}
 	// Yesterday's rig still standing is the normal case: the day ends with the
 	// next morning's handover, not a teardown at night. Sends to `cos` now
 	// reach the newest rig, so the old one hears only from its successor, which
@@ -53,6 +67,17 @@ func runCoS(args []string) error {
 			fmt.Fprintf(os.Stderr, "rig: %s is still up; sends to %s now reach %s\n", r.ID, cosAddress, rigID)
 			if r.ID > predecessor {
 				predecessor = r.ID
+			}
+		}
+	}
+	// One left up on another host is the same handover, reached by its
+	// address there. The newest wins whichever host it's on.
+	newest := predecessor
+	for _, r := range remote {
+		if r.row.Kind == "cos" && r.row.ID < rigID {
+			fmt.Fprintf(os.Stderr, "rig: %s is still up; sends to %s now reach %s\n", r.addr(), cosAddress, rigID)
+			if r.row.ID > newest {
+				newest, predecessor = r.row.ID, r.addr()
 			}
 		}
 	}
@@ -96,7 +121,7 @@ func runCoS(args []string) error {
 func cosKickoff(day, predecessor string) string {
 	prompt := fmt.Sprintf("You are the chief of staff for %s. Use the chief-of-staff skill.", day)
 	if predecessor != "" {
-		prompt += fmt.Sprintf(" The previous chief of staff, %s, is still up: before anything else, ask it for a handover with `rig send %s <message>` and wait for its reply. Once its plan-file section is in, tear it down with `rig down` from its basedir. If it can't be reached, fall back to the plan file and leave the teardown to me.", predecessor, predecessor)
+		prompt += fmt.Sprintf(" The previous chief of staff, %s, is still up: before anything else, ask it for a handover with `rig send %s <message>` and wait for its reply. Once its plan-file section is in, tear it down with `rig down %s`. If it can't be reached, fall back to the plan file and leave the teardown to me.", predecessor, predecessor, predecessor)
 	}
 	return prompt + " Pick up any threads carried over from the last workday, read the board, and brief me. Propose before acting on another rig, and draft anything with my name on it for approval."
 }

@@ -9,6 +9,7 @@ import (
 )
 
 func main() {
+	captureRemoteEnv()
 	if len(os.Args) < 2 {
 		printIndex(os.Stderr)
 		os.Exit(2)
@@ -150,6 +151,11 @@ func main() {
 	}
 
 	if err != nil {
+		// A command forwarded to another host already printed its own
+		// failure, streamed from there; only its exit code is left to pass on.
+		if exit, ok := errors.AsType[remoteExit](err); ok {
+			os.Exit(exit.code)
+		}
 		if cmd == "recto" {
 			if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 				os.Exit(exitErr.ExitCode())

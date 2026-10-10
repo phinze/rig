@@ -211,7 +211,11 @@ session is refused with nothing queued anywhere, and a session without the
 extension simply has no presence, which fails loudly with the restart
 remediation. Sends fail loudly with the probe's reason — no session, no
 agent under the agent pane, no socket, no daemon, or no presence — and a
-message is an instruction with provenance, never consent.
+message is an instruction with provenance, never consent. The probe walks
+from the agent pane's root pid, which tmux answers as `pane_pid` and Rex as
+the `child` of `com.superlogical.terminal.process`; Rex rigs could not be
+messaged at all until that second spelling existed, which went unnoticed
+because every messaged rig had been in tmux.
 
 `rig sweep` is the pass over every rig that proposes each one's next step. It's
 plan-then-stream: a Bubble Tea board of checkable actions, then the TUI exits and
@@ -703,9 +707,8 @@ name their host sent: a session name is derived from the path relative to
 that host's home, so `rigKey` can't compute it from here, and `muxKey` is
 what the radar joins on instead. They draw led by their host's icon (`rig serve --icon`, chosen by the host
 so every viewer draws it the same, falling back to the place name), skip the local
-PR fan-out (their answer came with the row), and refuse park and wake with a
-note to do it where they live. Changing a rig across hosts is a write path
-serve deliberately doesn't have.
+PR fan-out (their answer came with the row), and park and wake by forwarding
+the verb to their host (below), since the manifest that changes is there.
 
 Serve is also what puts those rows on the radar's first frame. Every popup is
 a fresh process, so on its own it starts with no remote board and a cold
@@ -750,9 +753,9 @@ worked in the last half hour (that's when a PR appears or moves), fifteen for
 an open PR waiting on reviews, an hour otherwise. `ls --full` keeps its own
 one-minute `boardPRTTL`, because a sweep acts on what it reads.
 
-Serve has exactly one action, `POST /v1/show`, and it exists because of where
-the screen is. The Mac radar entering a foxtrotbase row opens its own portal,
-since the client is on the Mac. foxtrotbase's radar entering a Mac row can't:
+`POST /v1/show` exists because of where the screen is. The Mac radar
+entering a foxtrotbase row opens its own portal, since the client is on the
+Mac. foxtrotbase's radar entering a Mac row can't:
 it's being viewed through the Mac's Rex, has no Rex of its own to host a
 portal, and the client it would need to move is the Mac's. So
 `servedBackend.Attach` uses the local portal when this machine is on screen in
@@ -765,6 +768,72 @@ the wrong one. Show only accepts a session or agent pane the board lists, so a
 caller can only ask for what it was shown, and it only changes what's
 displayed. It needs Rex.app as the viewer with Remote Control on; anywhere else
 it comes back as the host's reason beside "switch by hand".
+
+Every verb that acts on a rig reaches one on another host by forwarding, not
+by a typed endpoint per verb: `POST /v1/exec` runs `rig <verb> <args>` on the
+owning host and streams its stdout, stderr, and exit code back as NDJSON
+frames (`remote.go`). A rig is local by construction, so only its host can
+probe its agent, park its session, or run the teardown gate against its jj
+state, and each of those verbs already exists there. Fifteen typed endpoints
+would have been fifteen second implementations drifting from the CLI; this
+way a remote `down` refuses for exactly the reasons a local one does, in the
+same words. The cost is that serve now runs rig commands, `down` included,
+for anyone on its allow list. That is the same human on their own nodes, but
+it moves messaging's trust boundary from "any process running as this user"
+to "any allowed tailnet identity", and the narrowing that remains is
+`forwardableVerbs`: nothing that configures this machine (config, serve,
+reap), draws on its screen (radar, switch, recto), or exists for other
+processes (env, info, `__` internals), and `notify` only as `list`.
+
+The forwarded command learns its circumstances from its environment:
+`RIG_LOCAL_ONLY`, the stamped sender, the message id, the reply id, and an
+attach fd. `captureRemoteEnv` moves all of them into globals and unsets them
+before `main` does anything else, and that ordering is load-bearing. A
+forwarded `wake` or `up` can start a tmux server, and a tmux server hands its
+own environment to every session it ever makes, so a leaked `RIG_LOCAL_ONLY`
+would cut every agent on that host off from the others and a leaked sender
+would sign their messages. `localOnly` is also what keeps forwarding from
+looping: a miss on the far side never consults that host's own surfaces.
+
+Resolution is local first, so every query that worked before means what it
+meant. `resolveTarget` tries this host, then the boards of every rig surface
+(the remote cache when serve has it fresh, a live fetch otherwise), and
+`ID@PLACE` names the host outright, which is the only way past a local rig
+with the same id. The pickers (switch, wake, resume) fold remote rows in as
+`ID@PLACE`, and `exactPick` settles just the two ambiguities that adds: a
+query spelled as a handle, and one local exact match against remote rigs that
+merely share the name. The exact-name verbs (park, down, resurrect) take a
+remote rig only when nothing here answers to the name, because those are the
+verbs where guessing wrong costs a rig. `cos` is the exception that always
+looks everywhere, because the alias means the newest chief of staff and
+today's may be on the other host; the same workday on two hosts is refused by
+name rather than split between them, and `rig cos` enters today's on another
+host instead of starting a second.
+
+A sender's address carries its host, and the host is the tailnet's word, not
+the sender's. The caller claims `rig:<id>`; the receiving serve drops any
+place in the claim and appends the whois node, so `rig reply` on foxtrotbase
+reads `rig:cos-2026-10-10@phinze-mrn-mbp` and routes back through the surface
+of that name (`servedAt` matches the surface's place, then its endpoint host,
+since the two only coincide by convention). The sending host mints the
+message id and passes it along so both hosts log the same one; the receiver
+logs the `in` half and the sender the `out` half, with transport `rig-serve`.
+
+A verb that would have attached a session (wake, resume, up, review, cos,
+resurrect) can't on a host with no screen for it, so `attachOrReport` writes
+the session to the attach fd instead and the asking side enters it through
+the surface: the portal, or `/v1/show` for Rex rows. It's a pipe rather than
+a marker on stdout so nothing a command prints can be mistaken for one. That
+same frame is how the radar learns which session a remote wake rebuilt. Board
+verbs fan out instead: `ls` merges every host's own `ls --format=json` (not
+the radar-tier `/v1/board`, which has no branches or WIP) and lists who
+answered under `hosts`, so a missing rig reads as "couldn't look"; `waiting`,
+`history`, and `notify list` print each host's answer as a section, since
+those tables are sorted by their own host's rows; `sweep` asks each host for
+`sweep --format=json` and runs checked remote rows by forwarding, treating a
+far-side refusal as that row's skip. `--on PLACE` on up, new, review, project,
+and cos builds the rig elsewhere; the far side has no terminal, so it takes
+its scriptable path and says what a prompt would have asked for.
 
 This machine's own tmux is a portal too: `localTmux()` wraps the plain tmux
 backend, and every place that means "the local tmux" (a manifest's empty or

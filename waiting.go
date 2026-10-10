@@ -17,6 +17,7 @@ func runWaiting(args []string) error {
 	if len(args) != 0 {
 		return fmt.Errorf("usage: rig waiting")
 	}
+	defer remoteSections("waiting")
 	rigs, err := listRigs()
 	if err != nil {
 		return err

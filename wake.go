@@ -35,7 +35,7 @@ func runWake(args []string) error {
 	if err != nil {
 		return err
 	}
-	statuses := rigStatuses(rigs, home, time.Now())
+	statuses := withRemoteStatuses(rigStatuses(rigs, home, time.Now()))
 
 	var chosen *rigStatus
 	if len(args) > 0 {
@@ -68,6 +68,9 @@ func runWake(args []string) error {
 	}
 	if chosen == nil {
 		return nil
+	}
+	if chosen.remote != nil {
+		return forwardPicked(*chosen, "wake")
 	}
 
 	for _, r := range rigs {

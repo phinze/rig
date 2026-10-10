@@ -261,6 +261,11 @@ func attachedTimes(sessions []mux.Session) map[sessionKey]int64 {
 // script or test). A backend that can't switch the client says so and
 // succeeds: the session is ready, and the last step is yours.
 func attachOrReport(b mux.Backend, target string) error {
+	// Forwarded from another host, there's no screen here to attach: hand the
+	// session back to the host that asked, which enters it from its side.
+	if reportAttach(b.Name(), target) {
+		return nil
+	}
 	if !stdinIsTTY() {
 		fmt.Fprintf(os.Stderr, "rig: not a tty — session ready as %q, attach manually\n", target)
 		return nil

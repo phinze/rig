@@ -118,6 +118,19 @@ func runLs(args []string) error {
 	now := time.Now()
 	statuses := rigStatuses(rigs, home, now)
 
+	// Other hosts answer their own boards while this one builds its own: a
+	// full read is a gh fan-out on each side, and there's no reason to pay
+	// them in sequence.
+	remoteArgs := []string{"ls", "--format=json"}
+	if full {
+		remoteArgs = append(remoteArgs, "--full")
+	}
+	if refresh {
+		remoteArgs = append(remoteArgs, "--refresh")
+	}
+	remote := make(chan []hostBoardDoc, 1)
+	go func() { remote <- remoteBoardDocs(remoteHosts(), remoteArgs) }()
+
 	doc := boardDoc{GeneratedAt: now, Tier: "cheap"}
 	if full {
 		doc.Tier = "full"
@@ -133,6 +146,20 @@ func runLs(args []string) error {
 		statuses[i].Inbox = boardInboxFor(statuses[i].Notifications)
 	}
 	doc.Rigs = rigsForJSON(statuses, full)
+	for _, hb := range <-remote {
+		doc.Hosts = append(doc.Hosts, hb.host)
+		if hb.doc == nil {
+			continue
+		}
+		if hb.doc.PRsAsOf != nil && doc.PRsAsOf != nil && hb.doc.PRsAsOf.Before(*doc.PRsAsOf) {
+			doc.PRsAsOf = hb.doc.PRsAsOf
+		}
+		for _, r := range hb.doc.Rigs {
+			r.Location = hb.host.Place
+			doc.Rigs = append(doc.Rigs, r)
+			statuses = append(statuses, statusFromRow(r))
+		}
+	}
 
 	if jsonOut {
 		blob, err := encodeRigsJSON(doc)
@@ -148,6 +175,15 @@ func runLs(args []string) error {
 	// you'd never scroll down to find.
 	for _, line := range notifyBanner(doc.LooseNotifications) {
 		fmt.Fprintln(os.Stderr, line)
+	}
+	for _, h := range doc.Hosts {
+		if !h.Reachable {
+			fmt.Fprintf(os.Stderr, "rig: %s didn't answer: %s\n", h.Place, h.Error)
+			continue
+		}
+		for _, line := range notifyBanner(h.LooseNotifications) {
+			fmt.Fprintf(os.Stderr, "%s: %s\n", h.Place, line)
+		}
 	}
 
 	if len(statuses) == 0 {
@@ -168,10 +204,14 @@ func runLs(args []string) error {
 		// cell collapses the column to nothing when no row on the board has a
 		// kind to show.
 		kind := rigKindGlyph(rigKindOf(s))
+		id := s.ID
+		if s.Location != "" && s.Location != "local" {
+			id += "@" + s.Location // the handle that reaches it from here
+		}
 		if full {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", kind, s.ID, age(s.Created), agentMarker(s), prMarker(s), title)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", kind, id, age(s.Created), agentMarker(s), prMarker(s), title)
 		} else {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", kind, s.ID, age(s.Created), agentMarker(s), title)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", kind, id, age(s.Created), agentMarker(s), title)
 		}
 	}
 	return w.Flush()
@@ -573,6 +613,18 @@ type boardDoc struct {
 	// bears on the whole board, not on one row.
 	LooseNotifications []notification `json:"looseNotifications,omitempty"`
 	Rigs               []rigRowJSON   `json:"rigs"`
+	// Hosts is every other host this board asked, whether it answered, and
+	// its own loose inbox. Their rigs are in Rigs with location set to the
+	// place; a host that didn't answer is here so a missing rig reads as
+	// "couldn't look" rather than "gone".
+	Hosts []hostBoard `json:"hosts,omitempty"`
+}
+
+type hostBoard struct {
+	Place              string         `json:"place"`
+	Reachable          bool           `json:"reachable"`
+	Error              string         `json:"error,omitempty"`
+	LooseNotifications []notification `json:"looseNotifications,omitempty"`
 }
 
 // rigRowJSON is a rigStatus as it appears on the wire: identical except its

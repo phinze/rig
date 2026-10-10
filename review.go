@@ -18,6 +18,9 @@ import (
 // offers review-requested PRs and your existing review rigs, both of which are
 // others' work by construction, so it skips straight to the review pickup.
 func runReview(args []string) error {
+	if place, rest := extractValueFlag(args, "--on"); place != "" {
+		return runOn("review", place, rest)
+	}
 	refresh := false
 	filtered := args[:0]
 	for _, arg := range args {

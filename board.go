@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -195,4 +197,51 @@ func boardInboxFor(pinned []notification) rigInbox {
 		}
 	}
 	return box
+}
+
+// hostBoardDoc is one other host's answer to `rig ls --format=json`, run there
+// by forwarding so its rows carry everything the host knows (branches, WIP,
+// PRs from its own cache) and not the radar tier /v1/board serves.
+type hostBoardDoc struct {
+	host hostBoard
+	doc  *boardDoc
+}
+
+func remoteBoardDocs(hosts []servedBackend, argv []string) []hostBoardDoc {
+	return eachHost(hosts, func(b servedBackend) hostBoardDoc {
+		hb := hostBoardDoc{host: hostBoard{Place: surfacePlace(b.Surface())}}
+		if servedBreaker.Down(b.URL) {
+			hb.host.Error = "unreachable (retrying shortly)"
+			return hb
+		}
+		out, err := b.execCapture(argv...)
+		if err != nil {
+			hb.host.Error = err.Error()
+			return hb
+		}
+		var doc boardDoc
+		if err := json.Unmarshal(out, &doc); err != nil {
+			hb.host.Error = fmt.Sprintf("unreadable board: %v", err)
+			return hb
+		}
+		hb.host.Reachable = true
+		hb.host.LooseNotifications = doc.LooseNotifications
+		hb.doc = &doc
+		return hb
+	})
+}
+
+// statusFromRow lifts a wire row back into the board's type, for the table:
+// the row's nested PRs flatten into the one list prMarker reads.
+func statusFromRow(r rigRowJSON) rigStatus {
+	s := r.rigStatus
+	s.Repos = nil
+	s.PRs = nil
+	for _, repo := range r.Repos {
+		s.Repos = append(s.Repos, rigRepo{Name: repo.Name, Branches: repo.Branches, WIP: repo.WIP, WIPUncertain: repo.WIPUncertain, Peers: repo.Peers})
+		if repo.PRs != nil {
+			s.PRs = append(s.PRs, *repo.PRs...)
+		}
+	}
+	return s
 }

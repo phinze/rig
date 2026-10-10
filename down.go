@@ -37,6 +37,17 @@ func runDown(args []string) error {
 			return err
 		}
 		basedir, err = downTarget(rigs, name)
+		t, remote, rerr := exactRemote(name, err == nil)
+		if rerr != nil {
+			return rerr
+		}
+		if remote {
+			argv := []string{"down", t.row.ID}
+			if force {
+				argv = append(argv, "--force")
+			}
+			return forward(t, argv...)
+		}
 	} else {
 		basedir, err = findBasedir(cwd)
 	}

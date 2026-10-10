@@ -27,32 +27,27 @@ func runDispatch(args []string) error {
 	if err != nil {
 		return err
 	}
-	return dispatchRig(rig, prompt)
+	if t := rig.remote; t != nil {
+		return forward(*t, "dispatch", t.row.ID, "--", prompt)
+	}
+	return dispatchRig(*rig.local, prompt)
 }
 
-func resolveDispatchRig(query string) (rigInfo, error) {
-	rigs, err := listRigs()
+func resolveDispatchRig(query string) (rigTarget, error) {
+	t, err := resolveTarget(query)
 	if err != nil {
-		return rigInfo{}, err
+		return rigTarget{}, err
 	}
-	var matches []rigInfo
-	for _, r := range rigs {
-		if strings.EqualFold(r.ID, query) || strings.EqualFold(r.Slug, query) ||
-			(r.TrackerID != "" && strings.EqualFold(r.TrackerID, query)) {
-			matches = append(matches, r)
-		}
+	kind := ""
+	if t.local != nil {
+		kind = t.local.Kind
+	} else {
+		kind = t.remote.row.Kind
 	}
-	switch len(matches) {
-	case 0:
-		return rigInfo{}, fmt.Errorf("no rig matches %q", query)
-	case 1:
-		if matches[0].Kind == "project" {
-			return rigInfo{}, fmt.Errorf("cannot dispatch a project overview rig")
-		}
-		return matches[0], nil
-	default:
-		return rigInfo{}, fmt.Errorf("rig query %q is ambiguous", query)
+	if kind == "project" {
+		return rigTarget{}, fmt.Errorf("cannot dispatch a project overview rig")
 	}
+	return t, nil
 }
 
 func dispatchRig(r rigInfo, prompt string) error {

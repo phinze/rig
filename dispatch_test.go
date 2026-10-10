@@ -27,7 +27,7 @@ func TestResolveDispatchRigUsesTrackerIdentityAndRejectsProjects(t *testing.T) {
 	write("project-byoi", manifest{ID: "project-byoi", Kind: "project", Tracker: "linear", TrackerID: "project-uuid"})
 
 	rig, err := resolveDispatchRig("MIR-1697")
-	if err != nil || rig.ID != "mir-1697" {
+	if err != nil || rig.local == nil || rig.local.ID != "mir-1697" {
 		t.Fatalf("issue dispatch resolution = %+v, %v", rig, err)
 	}
 	if _, err := resolveDispatchRig("project-uuid"); err == nil {

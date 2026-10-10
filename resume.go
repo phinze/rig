@@ -34,9 +34,12 @@ func runResume(args []string) error {
 		if err != nil {
 			return err
 		}
-		chosen, err := pickRigStatus(rigStatuses(rigs, home, time.Now()), args, "resume rig: ")
+		chosen, err := pickRigStatus(withRemoteStatuses(rigStatuses(rigs, home, time.Now())), args, "resume rig: ")
 		if err != nil || chosen == nil {
 			return err
+		}
+		if chosen.remote != nil {
+			return forwardPicked(*chosen, "resume")
 		}
 		basedir = chosen.Path
 	}

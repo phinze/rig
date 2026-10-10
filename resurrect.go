@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -26,11 +27,56 @@ func runResurrect(args []string) error {
 	if len(args) != 1 || args[0] == "" {
 		return fmt.Errorf("usage: rig resurrect <rig-id>")
 	}
+	if host, id, ok, err := remoteTombstone(args[0]); err != nil {
+		return err
+	} else if ok {
+		return forwardTo(host, nil, "resurrect", id)
+	}
 	rs, err := prepareResurrect(args[0], false, os.Stderr)
 	if err != nil {
 		return err
 	}
 	return rs.attach()
+}
+
+// remoteTombstone finds the host a resurrect belongs on: the one named by
+// id@place, or, when nothing died here under that id, the one host whose
+// history has it. A rig resurrects where it lived, because its sources, its
+// agent's conversation, and its scratch all stayed on that disk.
+func remoteTombstone(query string) (servedBackend, string, bool, error) {
+	if localOnly {
+		return servedBackend{}, "", false, nil
+	}
+	id, place := splitPlace(query)
+	if place != "" && place != thisPlace() {
+		host, ok := servedAt(place)
+		if !ok {
+			return servedBackend{}, "", false, fmt.Errorf("no rig surface for %s", place)
+		}
+		return host, id, true, nil
+	}
+	if place != "" {
+		return servedBackend{}, "", false, nil
+	}
+	if t, err := findTombstone(id, time.Now()); err != nil || t != nil {
+		return servedBackend{}, "", false, err
+	}
+	rows, _ := remoteJSONRows(func(r *historyRow, place string) { r.Location = place }, "history", "--format=json")
+	var hits []historyRow
+	for _, r := range rows {
+		if r.ID == id {
+			hits = append(hits, r)
+		}
+	}
+	switch len(hits) {
+	case 0:
+		return servedBackend{}, "", false, nil
+	case 1:
+		host, ok := servedAt(hits[0].Location)
+		return host, id, ok, nil
+	default:
+		return servedBackend{}, "", false, fmt.Errorf("%s died on more than one host; say which with %s@PLACE", id, id)
+	}
 }
 
 // prepareResurrect rebuilds a tombstoned rig without attaching to it. Radar
@@ -192,14 +238,36 @@ func prepareResurrect(id string, nonblocking bool, report io.Writer) (rigSession
 // that makes the regret window discoverable rather than a directory you'd have
 // to know about.
 func runHistory(args []string) error {
-	if len(args) != 0 {
-		return fmt.Errorf("usage: rig history")
+	jsonOut := false
+	for _, a := range args {
+		switch a {
+		case "--format=json":
+			jsonOut = true
+		case "--format=table":
+		default:
+			return fmt.Errorf("usage: rig history [--format=json|table]")
+		}
 	}
 	now := time.Now()
 	stones, err := listTombstones(now)
 	if err != nil {
 		return err
 	}
+	if jsonOut {
+		rows := make([]historyRow, 0, len(stones))
+		for _, t := range stones {
+			rows = append(rows, historyRow{ID: t.ID, Title: t.subject(), Died: t.Died, Resurrectable: t.resurrectable(), Location: "local"})
+		}
+		remote, hosts := remoteJSONRows(func(r *historyRow, place string) { r.Location = place }, "history", "--format=json")
+		warnUnreachable(hosts)
+		blob, err := json.MarshalIndent(append(rows, remote...), "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(blob))
+		return nil
+	}
+	defer remoteSections("history")
 	if len(stones) == 0 {
 		fmt.Fprintf(os.Stderr, "rig: no rigs torn down in the last %s\n", tombstoneRetentionLabel())
 		return nil
@@ -213,6 +281,16 @@ func runHistory(args []string) error {
 	}
 	fmt.Fprintf(os.Stderr, "\n↺ = session recoverable; `rig resurrect <id>` rebuilds it\n")
 	return nil
+}
+
+// historyRow is one tombstone as `rig history --format=json` lists it: what a
+// program needs to pick one to resurrect, and where it died.
+type historyRow struct {
+	ID            string    `json:"id"`
+	Title         string    `json:"title"`
+	Died          time.Time `json:"died"`
+	Resurrectable bool      `json:"resurrectable"`
+	Location      string    `json:"location"`
 }
 
 // humanAge renders a duration the way a history row wants it: coarse, no

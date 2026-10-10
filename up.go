@@ -9,6 +9,9 @@ import (
 )
 
 func runUp(args []string) error {
+	if place, rest := extractValueFlag(args, "--on"); place != "" {
+		return runOn("up", place, rest)
+	}
 	pick, args, err := extractAgentFlag(args)
 	if err != nil {
 		return err
