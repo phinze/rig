@@ -694,10 +694,12 @@ func rigsForJSON(rows []rigStatus, looked bool) []rigRowJSON {
 	return out
 }
 
-// age renders a compact relative age for ls output.
+// age renders a compact relative age for ls output. An unknown time is a dash,
+// not a question: Rex keeps no last-attached time, so for a bare Rex session
+// there is nothing to find out.
 func age(t time.Time) string {
 	if t.IsZero() {
-		return "?"
+		return "-"
 	}
 	d := time.Since(t)
 	switch {

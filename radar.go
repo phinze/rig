@@ -1286,13 +1286,22 @@ func (m *radarModel) applyParked(path string, parked bool) {
 // reads as the title, and its last-attached time
 // stands in for Created so the age column shows how long since you were there
 // and MRU sorting falls out of the same field the rigs use.
+//
+// A Rex session reads by its own name instead. Titling by directory is a tmux
+// habit, where session names are ghq paths; a Rex session has a name someone
+// chose (icy-shoal), and its focused block's directory is usually just ~.
 func bareSession(ts mux.Session, home string) rigStatus {
 	var created time.Time
 	if ts.LastAttached > 0 {
 		created = time.Unix(ts.LastAttached, 0)
 	}
 	title := ts.Name
-	switch place := surfacePlace(ts.Surface); {
+	place := surfacePlace(ts.Surface)
+	switch {
+	case surfaceKind(ts.Surface) == "rex":
+		if place != "" {
+			title = place + ":" + ts.Name
+		}
 	case place != "":
 		// Another host's session names a path on that host, and the place is
 		// what tells it apart from a local rig at the same path.

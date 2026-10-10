@@ -1685,6 +1685,35 @@ func TestRadarRigKindFallsBackToTheID(t *testing.T) {
 	}
 }
 
+// A Rex session reads by the name it was given, not its focused block's
+// directory: that's usually ~, and a board of ~ rows can't be told apart.
+// Rex keeps no last-attached time, so the age is a dash and the row sorts
+// below every row that has one.
+func TestRadarBareRexSession(t *testing.T) {
+	now := time.Now()
+	icy := bareSession(mux.Session{Surface: "rex", Name: "icy-shoal", Path: "/Users/me"}, "/Users/me")
+	if icy.Title != "icy-shoal" {
+		t.Errorf("title = %q, want icy-shoal", icy.Title)
+	}
+	far := bareSession(mux.Session{Surface: "rex@devbox", Name: "brave-summit", Path: "/home/me"}, "/Users/me")
+	if far.Title != "devbox:brave-summit" {
+		t.Errorf("remote title = %q, want devbox:brave-summit", far.Title)
+	}
+	old := bareSession(mux.Session{Surface: "tmux", Name: "old", Path: "/o", LastAttached: now.Add(-48 * time.Hour).Unix()}, "")
+	m := radarModel{
+		inflight: []rigStatus{{Slug: "a", Path: "/a", Title: "rig a", Created: now.Add(-3 * time.Hour)}},
+		sessions: []rigStatus{icy, old},
+	}
+	var got []string
+	for _, r := range m.boardRows() {
+		got = append(got, r.Title+" "+age(m.touchedAt(r)))
+	}
+	want := []string{"rig a 3h", "/o 2d", "icy-shoal -"}
+	if !slices.Equal(got, want) {
+		t.Errorf("rows = %q, want %q", got, want)
+	}
+}
+
 // Radar makes no judgment about what an agent called its session; it just never
 // lets that name stand in for the rig's own. Identity on every row, the agent's
 // title only on the row you've already picked out.

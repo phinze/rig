@@ -169,7 +169,7 @@ func TestRadarFoldsRemoteRowsIntoLocalScans(t *testing.T) {
 		t.Fatalf("local rows = %+v, want one", m.sessions)
 	}
 
-	far := sessionKey{"rex@devbox", "~-workspaces-foo"}
+	far := sessionKey{"rex@devbox", "~/workspaces/foo"}
 	next, _ := m.Update(radarRemoteMsg{
 		sessions: []mux.Session{{Surface: far.surface, Name: far.name, Path: "/home/me/workspaces/foo", LastAttached: 200}},
 		agents:   map[sessionKey][]agentChild{far: {{Surface: far.surface, Target: "block:1", Context: "remote work"}}},
