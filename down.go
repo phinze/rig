@@ -14,12 +14,15 @@ import (
 
 func runDown(args []string) error {
 	force := false
+	var name string
 	for _, a := range args {
-		switch a {
-		case "--force", "-f":
+		switch {
+		case a == "--force" || a == "-f":
 			force = true
+		case !strings.HasPrefix(a, "-") && name == "":
+			name = a
 		default:
-			return fmt.Errorf("usage: rig down [--force]")
+			return fmt.Errorf("usage: rig down [NAME] [--force]")
 		}
 	}
 
@@ -27,7 +30,16 @@ func runDown(args []string) error {
 	if err != nil {
 		return err
 	}
-	basedir, err := findBasedir(cwd)
+	var basedir string
+	if name != "" {
+		var rigs []rigInfo
+		if rigs, err = listRigs(); err != nil {
+			return err
+		}
+		basedir, err = downTarget(rigs, name)
+	} else {
+		basedir, err = findBasedir(cwd)
+	}
 	if err != nil {
 		return err
 	}
@@ -86,6 +98,33 @@ func runDown(args []string) error {
 		fmt.Fprintf(os.Stderr, "rig: note: your shell's cwd was inside the basedir; run `cd` to recover.\n")
 	}
 	return nil
+}
+
+// downTarget resolves `rig down NAME` to a basedir, so an agent tidying up
+// after itself (a throwaway test rig, yesterday's cos) doesn't have to cd into
+// the directory it's about to delete. NAME must be a rig's id or directory
+// name exactly. The navigation verbs take unique prefixes, but a prefix on the
+// one destructive verb would let `rig down cos` quietly pick some other cos-…
+// rig.
+func downTarget(rigs []rigInfo, name string) (string, error) {
+	var hits []rigInfo
+	for _, r := range rigs {
+		if r.ID == name || r.Slug == name {
+			hits = append(hits, r)
+		}
+	}
+	switch len(hits) {
+	case 0:
+		return "", fmt.Errorf("no rig named %q (rig ls lists them; down wants the exact id)", name)
+	case 1:
+		return hits[0].Path, nil
+	default:
+		paths := make([]string, len(hits))
+		for i, r := range hits {
+			paths[i] = r.Path
+		}
+		return "", fmt.Errorf("%q names more than one rig: %s", name, strings.Join(paths, ", "))
+	}
 }
 
 // finishDown destroys a rig whose preflight has passed and whose lock the

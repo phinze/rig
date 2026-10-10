@@ -250,9 +250,10 @@ failure. Merges start unchecked. Without a TTY, prints the plan and exits.
 	{
 		name:    "down",
 		group:   "finish",
-		usage:   []string{"down [-f|--force]"},
-		summary: "tear down the current rig",
-		details: `Refuses with uncommitted work or an unmerged PR unless --force. Recoverable for
+		usage:   []string{"down [NAME] [-f|--force]"},
+		summary: "tear down the current rig, or the one named",
+		details: `NAME is a rig's exact id or directory name; without it, the rig you're in.
+Refuses with uncommitted work or an unmerged PR unless --force. Recoverable for
 a week with resurrect.`,
 	},
 	{

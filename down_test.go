@@ -528,3 +528,40 @@ func TestTeardownQuarantinesBeforeRemoval(t *testing.T) {
 		}
 	})
 }
+
+func TestDownTarget(t *testing.T) {
+	rigs := []rigInfo{
+		{ID: "MIR-123", Slug: "mir-123-fix-the-thing", Path: "/w/mir-123-fix-the-thing"},
+		{ID: "cos-2026-10-09", Slug: "cos-2026-10-09", Path: "/w/cos-2026-10-09"},
+		{ID: "cos-2026-10-10", Slug: "cos-2026-10-10", Path: "/w/cos-2026-10-10"},
+	}
+	for _, tc := range []struct {
+		name, want, wantErr string
+	}{
+		{name: "MIR-123", want: "/w/mir-123-fix-the-thing"},
+		{name: "mir-123-fix-the-thing", want: "/w/mir-123-fix-the-thing"},
+		{name: "cos-2026-10-09", want: "/w/cos-2026-10-09"},
+		// A prefix that happens to be unique still isn't a name: down is the
+		// one verb where a near miss costs a rig.
+		{name: "mir-123", wantErr: "no rig named"},
+		{name: "cos", wantErr: "no rig named"},
+		{name: "nope", wantErr: "no rig named"},
+	} {
+		got, err := downTarget(rigs, tc.name)
+		if tc.wantErr != "" {
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("downTarget(%q) = %q, %v; want error containing %q", tc.name, got, err, tc.wantErr)
+			}
+			continue
+		}
+		if err != nil || got != tc.want {
+			t.Errorf("downTarget(%q) = %q, %v; want %q", tc.name, got, err, tc.want)
+		}
+	}
+
+	// An id that is another rig's directory name is ambiguous, not a pick.
+	clash := append(rigs, rigInfo{ID: "mir-123-fix-the-thing", Slug: "elsewhere", Path: "/w/elsewhere"})
+	if _, err := downTarget(clash, "mir-123-fix-the-thing"); err == nil || !strings.Contains(err.Error(), "more than one") {
+		t.Errorf("ambiguous name should refuse, got %v", err)
+	}
+}
