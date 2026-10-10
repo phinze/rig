@@ -526,11 +526,11 @@ func (b Backend) appClient() (string, error) {
 
 // Popup opens a floating layer centred over the session's active window
 // running the command, closing when it exits. The layer is sized in cells
-// from the focused block's grid, aiming at a board's worth (popupCols ×
-// popupRows) and never more than most of the window. Bounds go over as the
-// client draws them today, and the command is told the box's visible size
-// (COLUMNS, LINES) and colour (RIG_RADAR_BG) so it lays out inside the box
-// and paints every cell of it.
+// from the window's grid, aiming at a board's worth (popupCols × popupRows)
+// and never more than most of the window. Bounds go over as the client draws
+// them today, and the command is told the box's visible size (COLUMNS, LINES)
+// and colour (RIG_RADAR_BG) so it lays out inside the box and paints every
+// cell of it.
 func (b Backend) Popup(session, cmdline string) error {
 	v, err := b.view(session)
 	if err != nil {
@@ -546,7 +546,7 @@ func (b Backend) Popup(session, cmdline string) error {
 			Rows    float64 `json:"rows"`
 		}
 		if err := b.call(session, "com.superlogical.terminal.size", obj{"block_id": win.FocusedBlock, "args": obj{}}, &size); err == nil && size.Columns > 0 && size.Rows > 0 {
-			cols, rows = size.Columns, size.Rows
+			cols, rows = windowGrid(win, size.Columns, size.Rows)
 		}
 	}
 	w := min(popupCols/cols, 0.9)
@@ -563,6 +563,24 @@ func (b Backend) Popup(session, cmdline string) error {
 		"focus":  true,
 		"layout": block,
 	}, nil)
+}
+
+// windowGrid scales the focused block's grid up to its whole window, since
+// layer bounds are fractions of the window and a block in a split is only part
+// of it. Sizing from the block alone made the layer twice as wide as asked in
+// a half-width split, with the board laid out in its left half.
+func windowGrid(win viewWindow, cols, rows float64) (float64, float64) {
+	for _, layer := range win.Layers {
+		if layer.Kind != "tiled" {
+			continue
+		}
+		for _, blk := range layer.Blocks {
+			if blk.BlockID == win.FocusedBlock && blk.Rect.W > 0 && blk.Rect.H > 0 {
+				return cols / blk.Rect.W, rows / blk.Rect.H
+			}
+		}
+	}
+	return cols, rows
 }
 
 const (
@@ -847,6 +865,11 @@ func (b Backend) MarkWindow(window, role, repo string) error {
 type viewBlock struct {
 	BlockID string `json:"block_id"`
 	Label   string `json:"label"`
+	// Rect is where the block sits in its window, as fractions of it.
+	Rect struct {
+		W float64 `json:"w"`
+		H float64 `json:"h"`
+	} `json:"rect"`
 }
 
 type viewWindow struct {

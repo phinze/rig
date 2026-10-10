@@ -44,7 +44,14 @@ session.list)
   else
     echo '{"sessions":[{"session_id":"session:1","label":"~-workspaces-alpha"}]}'
   fi ;;
-session.view) cat <<'EOF'
+session.view)
+  if [ -n "$REX_FAKE_SPLIT" ]; then cat <<'EOF'
+{"session_id":"session:1","label":"~-workspaces-alpha","windows":[
+ {"window_id":"window:m","label":"main/alpha","active":true,"focused_block_id":"block:a","layers":[
+   {"kind":"tiled","blocks":[{"block_id":"block:a","label":"shell","rect":{"x":0,"y":0,"w":0.5,"h":1}},{"block_id":"block:r","label":"recto","rect":{"x":0.5,"y":0,"w":0.5,"h":1}}]}]}]}
+EOF
+  exit 0; fi
+  cat <<'EOF'
 {"session_id":"session:1","label":"~-workspaces-alpha","windows":[
  {"window_id":"window:m","label":"main/alpha","active":true,"focused_block_id":"block:a","layers":[
    {"kind":"tiled","blocks":[{"block_id":"block:a","label":"shell"},{"block_id":"block:r","label":"recto"}]},
@@ -170,9 +177,6 @@ func TestKillSessionAtMissingSocket(t *testing.T) {
 	}
 }
 
-// Popup opens one layer in the session running the command through a login
-// shell, sized from the focused block's grid (120 columns of 300 and 32 rows
-// of 100, centred) and told that size and its colour.
 // A respawn adds the command in a focused window of the same session and
 // closes only the tiled blocks whose command has ended: the live shell, the
 // other window, and the floating radar popup all stay.
@@ -201,7 +205,34 @@ func TestRespawnCommandSessionKeepsTheSession(t *testing.T) {
 	}
 }
 
+// Popup opens one layer in the session running the command through a login
+// shell, sized from the window's grid (120 columns of 300 and 32 rows of 100,
+// centred) and told that size and its colour.
 func TestPopupOpensASizedLayer(t *testing.T) {
+	layer := popupLayer(t)
+	for _, want := range []string{`"x":0.3`, `"w":0.7`, `"focus":true`, `"-lc"`, `COLUMNS=120 LINES=32 RIG_RADAR_BG=#181825 /usr/local/bin/rig radar`, `"on_completion":true`} {
+		if !strings.Contains(layer, want) {
+			t.Errorf("new_layer call lacks %s:\n%s", want, layer)
+		}
+	}
+}
+
+// In a split, the focused block's 300 columns are half a 600-column window,
+// and bounds are fractions of the window. So 120 columns is a fifth of it,
+// centred, not the 0.4 of the block's width that drew the board off to one
+// side of an oversized box.
+func TestPopupSizesFromTheWindowInASplit(t *testing.T) {
+	t.Setenv("REX_FAKE_SPLIT", "1")
+	layer := popupLayer(t)
+	for _, want := range []string{`"x":0.4`, `"w":0.6`, `COLUMNS=120 LINES=32 `} {
+		if !strings.Contains(layer, want) {
+			t.Errorf("new_layer call lacks %s:\n%s", want, layer)
+		}
+	}
+}
+
+func popupLayer(t *testing.T) string {
+	t.Helper()
 	log := fakeRex(t)
 	if err := (Backend{}).Popup("~-workspaces-alpha", "/usr/local/bin/rig radar"); err != nil {
 		t.Fatal(err)
@@ -216,11 +247,7 @@ func TestPopupOpensASizedLayer(t *testing.T) {
 	if layer == "" {
 		t.Fatalf("no new_layer call in:\n%s", raw)
 	}
-	for _, want := range []string{`"x":0.3`, `"w":0.7`, `"focus":true`, `"-lc"`, `COLUMNS=120 LINES=32 RIG_RADAR_BG=#181825 /usr/local/bin/rig radar`, `"on_completion":true`} {
-		if !strings.Contains(layer, want) {
-			t.Errorf("new_layer call lacks %s:\n%s", want, layer)
-		}
-	}
+	return layer
 }
 
 // Attach decides among its moves from what's on screen: the session already
