@@ -268,6 +268,13 @@ func listsTarget(b mux.Backend, target string) bool {
 	if target == "" {
 		return false
 	}
+	if f, ok := b.(targetFinder); ok {
+		if f.HasSession(target) {
+			return true
+		}
+		p, ok := f.FindPane(target)
+		return ok && isAgentPane(p)
+	}
 	for _, s := range b.Sessions() {
 		if s.Name == target {
 			return true
@@ -280,6 +287,15 @@ func listsTarget(b mux.Backend, target string) bool {
 		}
 	}
 	return false
+}
+
+// targetFinder is a backend that can answer listsTarget without describing
+// its whole board, which on Rex costs a subprocess per block. Its HasSession
+// must match names exactly; tmux's `has-session -t` matches prefixes, which
+// is why the general path compares Sessions instead.
+type targetFinder interface {
+	mux.Backend
+	FindPane(target string) (mux.Pane, bool)
 }
 
 // surfaceKind is the kind half of a surface.

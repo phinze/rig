@@ -346,6 +346,38 @@ func TestListsTarget(t *testing.T) {
 	}
 }
 
+// A backend that can find one pane answers without its board: describing
+// every session and pane is what made a show on a busy host time out.
+func TestListsTargetFindsOnePane(t *testing.T) {
+	b := &findingBackend{fakeBackend: fakeBackend{name: "rex",
+		sessions: []mux.Session{{Name: "~/workspaces/a"}},
+	}, found: map[string]mux.Pane{
+		"block:agent": {Target: "block:agent", Command: "claude"},
+		"block:shell": {Target: "block:shell", Command: "fish"},
+	}}
+	for target, want := range map[string]bool{"~/workspaces/a": true, "block:agent": true, "block:shell": false, "block:gone": false, "": false} {
+		if got := listsTarget(b, target); got != want {
+			t.Errorf("listsTarget(%q) = %v, want %v", target, got, want)
+		}
+	}
+}
+
+type findingBackend struct {
+	fakeBackend
+	found map[string]mux.Pane
+}
+
+func (f *findingBackend) FindPane(target string) (mux.Pane, bool) {
+	p, ok := f.found[target]
+	return p, ok
+}
+func (f *findingBackend) Sessions() []mux.Session {
+	panic("listsTarget listed every session")
+}
+func (f *findingBackend) AllPanes() ([]mux.Pane, error) {
+	panic("listsTarget listed every pane")
+}
+
 func checkErr(g *serveGate, addr string) error {
 	_, err := g.check(context.Background(), addr)
 	return err

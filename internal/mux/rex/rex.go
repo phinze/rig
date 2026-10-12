@@ -968,25 +968,33 @@ func (b Backend) title(session, block string) string {
 
 // sessionOfBlock finds which session owns a block id. Rig's callers address
 // blocks by id alone, as they did tmux panes, so the lookup is a list_blocks
-// per session; cheap, and only on layout changes.
+// per session, asked of every session at once: a pane switch runs it more
+// than once, and one session after another made each run cost a subprocess
+// round trip per session.
 func (b Backend) sessionOfBlock(block string) (string, error) {
 	sessions, err := b.listSessions()
 	if err != nil {
 		return "", err
 	}
-	for _, s := range sessions {
+	owns := make([]bool, len(sessions))
+	each(len(sessions), func(i int) {
 		var out struct {
 			Blocks []struct {
 				BlockID string `json:"block_id"`
 			} `json:"blocks"`
 		}
-		if err := b.call(s.Label, "session.list_blocks", nil, &out); err != nil {
-			continue
+		if err := b.call(sessions[i].Label, "session.list_blocks", nil, &out); err != nil {
+			return
 		}
 		for _, bl := range out.Blocks {
 			if bl.BlockID == block {
-				return s.Label, nil
+				owns[i] = true
 			}
+		}
+	})
+	for i, s := range sessions {
+		if owns[i] {
+			return s.Label, nil
 		}
 	}
 	return "", fmt.Errorf("rex block %s not found in any session", block)
@@ -1034,6 +1042,31 @@ func (b Backend) windowOfBlock(session, block string) string {
 // sidecar marks and a process/title probe per block. Floating layers (the
 // radar popup) are skipped: they're not part of the carousel.
 func (b Backend) Panes(session string) ([]mux.Pane, error) {
+	return b.panes(session, "")
+}
+
+// FindPane describes one block exactly as Panes would, or reports that no
+// tiled block has that id. It probes only that block, where a board pays two
+// rex calls for every block on the server, which is what made a cross-host
+// show queue behind the board polls.
+func (b Backend) FindPane(target string) (mux.Pane, bool) {
+	if !strings.HasPrefix(target, "block:") {
+		return mux.Pane{}, false
+	}
+	session, err := b.sessionOfBlock(target)
+	if err != nil {
+		return mux.Pane{}, false
+	}
+	panes, err := b.panes(session, target)
+	if err != nil || len(panes) != 1 {
+		return mux.Pane{}, false
+	}
+	return panes[0], true
+}
+
+// panes is Panes, narrowed to the block named only when it isn't "". The
+// narrowing happens before the probes, which are the expensive part.
+func (b Backend) panes(session, only string) ([]mux.Pane, error) {
 	v, err := b.view(session)
 	if err != nil {
 		return nil, err
@@ -1047,6 +1080,9 @@ func (b Backend) Panes(session string) ([]mux.Pane, error) {
 				continue
 			}
 			for pi, bl := range layer.Blocks {
+				if only != "" && bl.BlockID != only {
+					continue
+				}
 				p := mux.Pane{
 					Surface:    b.Surface(),
 					Session:    session,

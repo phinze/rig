@@ -231,6 +231,25 @@ func TestPopupSizesFromTheWindowInASplit(t *testing.T) {
 	}
 }
 
+// FindPane describes the one tiled block it's asked for, probing only that
+// block, and knows neither a floating layer's block nor a made-up id.
+func TestFindPaneProbesOneBlock(t *testing.T) {
+	log := fakeRex(t)
+	p, ok := (Backend{}).FindPane("block:a")
+	if !ok || p.Session != "~-workspaces-alpha" || p.Command != "claude" || p.Path != "/w/alpha" || p.WindowID != "window:m" {
+		t.Fatalf("FindPane(block:a) = %+v, %v", p, ok)
+	}
+	raw, _ := os.ReadFile(log)
+	if n := strings.Count(string(raw), "com.superlogical.terminal.process"); n != 1 {
+		t.Errorf("probed %d blocks, want just the one:\n%s", n, raw)
+	}
+	for _, target := range []string{"block:popup", "block:nope", "~-workspaces-alpha"} {
+		if _, ok := (Backend{}).FindPane(target); ok {
+			t.Errorf("FindPane(%q) found something", target)
+		}
+	}
+}
+
 func popupLayer(t *testing.T) string {
 	t.Helper()
 	log := fakeRex(t)
