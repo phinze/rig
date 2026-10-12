@@ -66,6 +66,8 @@ com.superlogical.terminal.process)
     *block:r*) if [ -n "$REX_FAKE_R_EXITED" ]; then echo '{"last_exit":{"exit_code":255,"error":"exit status 255"}}'; exit 0; fi
       echo '{"foreground":{"name":"recto","cwd":"/w/x"}}' ;;
     *block:a*) echo '{"child":{"pid":4242,"name":"login"},"foreground":{"pid":4300,"name":".claude-unwrapped","argv0":"/etc/profiles/per-user/phinze/bin/claude","cwd":"/w/alpha"}}' ;;
+    *block:z*) if [ -n "$REX_FAKE_Z_PORTAL" ]; then echo '{"foreground":{"name":"tmux","cwd":"/home"}}'; exit 0; fi
+      echo '{"foreground":{"name":"recto","cwd":"/w/x"}}' ;;
     *) echo '{"foreground":{"name":"recto","cwd":"/w/x"}}' ;;
   esac ;;
 com.superlogical.terminal.title) echo '{"title":"✳ Task A"}' ;;
@@ -202,6 +204,28 @@ func TestRespawnCommandSessionKeepsTheSession(t *testing.T) {
 	}
 	if n := strings.Count(calls, "block.close"); n != 1 || !strings.Contains(calls, `block.close {"block_id":"block:r"}`) {
 		t.Errorf("calls:\n%s\nwant exactly the exited block:r closed", calls)
+	}
+}
+
+// A portal rig took for gone can still be running: its far-side tty stamp
+// went stale while the ssh lived on. The respawn replaces it rather than
+// leaving a second tab beside the new one, and still leaves the shell alone.
+func TestRespawnCommandSessionReplacesALivePortal(t *testing.T) {
+	log := fakeRex(t)
+	t.Setenv("REX_FAKE_Z_PORTAL", "1")
+	t.Setenv("REX_FAKE_R_EXITED", "1")
+	if err := (Backend{}).RespawnCommandSession("~-workspaces-alpha", "local", "/home", "tmux attach -t foo"); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(log)
+	calls := string(raw)
+	for _, want := range []string{"block:r", "block:z"} {
+		if !strings.Contains(calls, `block.close {"block_id":"`+want+`"}`) {
+			t.Errorf("calls:\n%s\nwant %s closed", calls, want)
+		}
+	}
+	if strings.Contains(calls, `block.close {"block_id":"block:a"}`) {
+		t.Errorf("closed the live shell block:a:\n%s", calls)
 	}
 }
 

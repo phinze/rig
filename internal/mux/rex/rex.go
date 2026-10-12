@@ -705,15 +705,26 @@ func (b Backend) RespawnCommandSession(name, windowName, cwd, cmdline string) er
 	if err := b.call(name, "session.new_window", params, nil); err != nil {
 		return err
 	}
+	// The blocks to clear are the ones that were there before the new
+	// window: those whose command has ended, and those still running the
+	// command being replaced. The second kind is a portal rig decided was
+	// gone while its ssh lived on, which happens whenever the tty it stamped
+	// on the far side goes stale; leaving it made a second tab on every
+	// switch. Anything else, like a shell split off inside the session, stays.
+	replaced := labelFor(cmdline)
 	for _, w := range v.Windows {
 		for _, layer := range w.Layers {
 			if layer.Kind != "tiled" {
 				continue
 			}
 			for _, bl := range layer.Blocks {
-				// Best effort: the portal is already back, and a dead
+				// Best effort: the portal is already back, and a stale
 				// block left behind is clutter, not a failure.
-				if p, err := b.process(name, bl.BlockID); err == nil && p.LastExit != nil {
+				p, err := b.process(name, bl.BlockID)
+				if err != nil {
+					continue
+				}
+				if p.LastExit != nil || (p.Foreground != nil && commandName(p.Foreground) == replaced) {
 					_ = b.call(name, "block.close", obj{"block_id": bl.BlockID}, nil)
 				}
 			}
