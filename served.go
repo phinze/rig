@@ -34,6 +34,15 @@ type servedBackend struct {
 // tailnet longer than that, and the radar asks again in a couple of seconds.
 var servedClient = &http.Client{Timeout: 3 * time.Second}
 
+// showClient waits longer, because a show is the one request someone is
+// actually waiting on, and nothing asks again in a couple of seconds. The far side
+// confirms the target is on its board and finds its window before the switch,
+// a few dozen rex calls that queue behind the board polls when that host is
+// busy: a switch that landed in 14ms came back as a timeout at 3s, and the
+// radar told you to do by hand what had already happened. This matches the
+// rex CLI's own default timeout, the longest the far side should take.
+var showClient = &http.Client{Timeout: 10 * time.Second}
+
 // servedBreaker is keyed by URL. Only a failure to connect trips it; a serve
 // that answered with an error is up.
 var servedBreaker = &mux.Breaker{For: 30 * time.Second}
@@ -75,7 +84,7 @@ func (b servedBackend) showAs(kind, target string) error {
 	if err != nil {
 		return err
 	}
-	resp, err := servedClient.Post(b.URL+"/v1/show", "application/json", bytes.NewReader(body))
+	resp, err := showClient.Post(b.URL+"/v1/show", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("asking %s to show it: %v: %w", surfacePlace(b.Surface()), err, mux.ErrNoClientSwitch)
 	}
