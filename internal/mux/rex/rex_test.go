@@ -46,17 +46,18 @@ session.list)
   fi ;;
 session.view)
   if [ -n "$REX_FAKE_SPLIT" ]; then cat <<'EOF'
-{"session_id":"session:1","label":"~-workspaces-alpha","windows":[
- {"window_id":"window:m","label":"main/alpha","active":true,"focused_block_id":"block:a","layers":[
-   {"kind":"tiled","blocks":[{"block_id":"block:a","label":"shell","rect":{"x":0,"y":0,"w":0.5,"h":1}},{"block_id":"block:r","label":"recto","rect":{"x":0.5,"y":0,"w":0.5,"h":1}}]}]}]}
+{"session_id":"session:1","label":"~-workspaces-alpha","active_window_id":"window:m","windows":[
+ {"window_id":"window:m","label":"main/alpha","focused_block_id":"block:a","layers":[
+   {"kind":"tiled","blocks":[{"block_id":"block:a","label":"shell"},{"block_id":"block:r","label":"recto"}],
+    "layout":{"rect":[0,0,1,1],"split":{"direction":"horizontal","ratio":0.5,"before":{"rect":[0,0,0.5,1],"block_id":"block:a"},"after":{"rect":[0.5,0,0.5,1],"block_id":"block:r"}}}}]}]}
 EOF
   exit 0; fi
   cat <<'EOF'
-{"session_id":"session:1","label":"~-workspaces-alpha","windows":[
- {"window_id":"window:m","label":"main/alpha","active":true,"focused_block_id":"block:a","layers":[
+{"session_id":"session:1","label":"~-workspaces-alpha","active_window_id":"window:m","windows":[
+ {"window_id":"window:m","label":"main/alpha","focused_block_id":"block:a","layers":[
    {"kind":"tiled","blocks":[{"block_id":"block:a","label":"shell"},{"block_id":"block:r","label":"recto"}]},
    {"kind":"floating","blocks":[{"block_id":"block:popup","label":"rig radar"}]}]},
- {"window_id":"window:z","label":"zeta","active":false,"focused_block_id":"block:z","layers":[
+ {"window_id":"window:z","label":"zeta","focused_block_id":"block:z","layers":[
    {"kind":"tiled","blocks":[{"block_id":"block:z","label":"recto"}]}]}]}
 EOF
 ;;

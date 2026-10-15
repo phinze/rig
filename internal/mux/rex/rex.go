@@ -285,7 +285,7 @@ func (b Backend) sessionPath(session string) string {
 		return ""
 	}
 	for _, w := range v.Windows {
-		if w.Active && w.FocusedBlock != "" {
+		if w.WindowID == v.ActiveWindowID && w.FocusedBlock != "" {
 			if p, err := b.process(session, w.FocusedBlock); err == nil && p.Foreground != nil {
 				return p.Foreground.Cwd
 			}
@@ -538,7 +538,7 @@ func (b Backend) Popup(session, cmdline string) error {
 	}
 	cols, rows := 200.0, 60.0
 	for _, win := range v.Windows {
-		if !win.Active || win.FocusedBlock == "" {
+		if win.WindowID != v.ActiveWindowID || win.FocusedBlock == "" {
 			continue
 		}
 		var size struct {
@@ -574,10 +574,8 @@ func windowGrid(win viewWindow, cols, rows float64) (float64, float64) {
 		if layer.Kind != "tiled" {
 			continue
 		}
-		for _, blk := range layer.Blocks {
-			if blk.BlockID == win.FocusedBlock && blk.Rect.W > 0 && blk.Rect.H > 0 {
-				return cols / blk.Rect.W, rows / blk.Rect.H
-			}
+		if w, h, ok := layer.Layout.blockSize(win.FocusedBlock); ok && w > 0 && h > 0 {
+			return cols / w, rows / h
 		}
 	}
 	return cols, rows
@@ -876,28 +874,53 @@ func (b Backend) MarkWindow(window, role, repo string) error {
 type viewBlock struct {
 	BlockID string `json:"block_id"`
 	Label   string `json:"label"`
-	// Rect is where the block sits in its window, as fractions of it.
-	Rect struct {
-		W float64 `json:"w"`
-		H float64 `json:"h"`
-	} `json:"rect"`
+}
+
+// viewLayout is a layer's layout tree: a leaf names a block, a split holds
+// two subtrees, and every node carries its rect as [x, y, w, h] fractions of
+// the window.
+type viewLayout struct {
+	Rect    []float64 `json:"rect"`
+	BlockID string    `json:"block_id"`
+	Split   *struct {
+		Before *viewLayout `json:"before"`
+		After  *viewLayout `json:"after"`
+	} `json:"split"`
+}
+
+// blockSize finds a block's width and height in the tree.
+func (l *viewLayout) blockSize(block string) (float64, float64, bool) {
+	if l == nil {
+		return 0, 0, false
+	}
+	if l.BlockID == block && len(l.Rect) == 4 {
+		return l.Rect[2], l.Rect[3], true
+	}
+	if l.Split == nil {
+		return 0, 0, false
+	}
+	if w, h, ok := l.Split.Before.blockSize(block); ok {
+		return w, h, true
+	}
+	return l.Split.After.blockSize(block)
 }
 
 type viewWindow struct {
 	WindowID     string `json:"window_id"`
 	Label        string `json:"label"`
-	Active       bool   `json:"active"`
 	FocusedBlock string `json:"focused_block_id"`
 	Layers       []struct {
 		Kind   string      `json:"kind"`
 		Blocks []viewBlock `json:"blocks"`
+		Layout *viewLayout `json:"layout"`
 	} `json:"layers"`
 }
 
 type sessionView struct {
-	SessionID string       `json:"session_id"`
-	Label     string       `json:"label"`
-	Windows   []viewWindow `json:"windows"`
+	SessionID      string       `json:"session_id"`
+	Label          string       `json:"label"`
+	ActiveWindowID string       `json:"active_window_id"`
+	Windows        []viewWindow `json:"windows"`
 }
 
 func (b Backend) view(session string) (sessionView, error) {
