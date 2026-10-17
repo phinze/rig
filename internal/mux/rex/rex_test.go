@@ -22,6 +22,10 @@ func fakeRex(t *testing.T) (log string) {
 printf '%s\n' "$*" >> "` + log + `"
 if [ -n "$REX_FAKE_DOWN" ]; then echo 'Error: connecting to the server timed out after 3s: context deadline exceeded' >&2; exit 1; fi
 case "$*" in
+*" session.create "*)
+  # Matched here because its params carry the block flavor, which has dots.
+  echo '{"session_id":"session:1","initial_windows":[{"window_id":"window:m","block_ids":["block:a"],"revision":1}]}'
+  exit 0 ;;
 *"client ls --json"*)
   # A relaunched app leaves its old client listed as lost, as preview.12 does.
   echo '{"clients":[{"client_id":"client:gone","info":{"kind":"app"},"connection_state":"lost"},{"client_id":"client:app","info":{"kind":"app"},"connection_state":"connected"},{"client_id":"client:cli","info":{"kind":"cli"},"connection_state":"connected"}]}'
@@ -39,7 +43,10 @@ method=""
 for a in "$@"; do case "$a" in *.*) method="$a";; esac; done
 case "$method" in
 session.list)
-  if [ -n "$REX_FAKE_SECOND" ]; then
+  if [ -n "$REX_FAKE_RENAMED" ]; then
+    # What an agent leaves behind after Rex's hook tells it to name its session.
+    echo '{"sessions":[{"session_id":"session:1","label":"alpha-work"}]}'
+  elif [ -n "$REX_FAKE_SECOND" ]; then
     echo '{"sessions":[{"session_id":"session:1","label":"~-workspaces-alpha"},{"session_id":"session:2","label":"~-workspaces-beta"}]}'
   else
     echo '{"sessions":[{"session_id":"session:1","label":"~-workspaces-alpha"}]}'
@@ -160,13 +167,71 @@ func TestMarksSidecarLifecycle(t *testing.T) {
 	if n := len(b.readMarks("~-workspaces-alpha")); n != 2 {
 		t.Errorf("entries = %d, want 2", n)
 	}
-	b.forgetMarks("~-workspaces-alpha")
+	b.forget("~-workspaces-alpha")
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Errorf("sidecar survived forget: %v", err)
 	}
 	// Marks disabled: writes are no-ops rather than errors.
 	if err := (Backend{}).MarkPane("block:a", "agent", "alpha"); err != nil {
 		t.Errorf("markless backend errored: %v", err)
+	}
+}
+
+// A session rig made stays rig's under the name it was made with after
+// something renames it, which Rex's agent hook has every agent do on its first
+// turn: still found, still listed by that name, still probed and killed by the
+// id Rex minted for it. Without the record it's found only by its label.
+func TestRenamedSessionStaysFound(t *testing.T) {
+	log := fakeRex(t)
+	b := Backend{MarksDir: filepath.Join(t.TempDir(), "marks")}
+	const name = "~-workspaces-alpha"
+	if _, _, err := b.NewSession(name, "main/alpha", "/w/alpha"); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("REX_FAKE_RENAMED", "1")
+
+	if !b.HasSession(name) {
+		t.Fatal("renamed session not found by the name rig made it with")
+	}
+	if got := b.Sessions(); len(got) != 1 || got[0].Name != name {
+		t.Errorf("Sessions = %+v, want it listed as %q", got, name)
+	}
+	if id, err := b.SessionID(name); err != nil || id != "session:1" {
+		t.Errorf("SessionID = %q, %v", id, err)
+	}
+	panes, err := b.Panes(name)
+	if err != nil || len(panes) == 0 || panes[0].Session != name {
+		t.Fatalf("Panes = %+v, %v", panes, err)
+	}
+	if session, err := b.sessionOfBlock("block:a"); err != nil || session != name {
+		t.Errorf("sessionOfBlock = %q, %v", session, err)
+	}
+	t.Setenv("REX_SESSION", "session:1")
+	if got := b.CurrentSession(); got != name {
+		t.Errorf("CurrentSession = %q, want %q", got, name)
+	}
+	if b.HasSession("alpha-work") {
+		t.Error("the new label answered for a session rig knows by another name")
+	}
+
+	if err := b.KillSession(name); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(log)
+	calls := string(raw)
+	if !strings.Contains(calls, "-s session:1 session.view") {
+		t.Errorf("view didn't address the session by id:\n%s", calls)
+	}
+	if !strings.Contains(calls, "kill session:1") {
+		t.Errorf("kill didn't address the session by id:\n%s", calls)
+	}
+	if _, err := os.Stat(b.idPath(name)); !os.IsNotExist(err) {
+		t.Errorf("id record survived the kill: %v", err)
+	}
+
+	unrecorded := Backend{MarksDir: t.TempDir()}
+	if unrecorded.HasSession(name) || !unrecorded.HasSession("alpha-work") {
+		t.Error("a session with no record should answer to its current label only")
 	}
 }
 

@@ -2,8 +2,9 @@
 // way the tmux backend drives `tmux`. Rex's model maps onto rig's directly: a
 // session, windows, and blocks where tmux has panes, each addressed by the
 // opaque id Rex mints for it. Rig's role/repo marks live in a sidecar file per
-// session under rig's state dir. Every read goes through `rex api call` and
-// parses JSON, never the human tables.
+// session under rig's state dir, beside the id each session was created with.
+// Every read goes through `rex api call` and parses JSON, never the human
+// tables.
 package rex
 
 import (
@@ -136,11 +137,11 @@ func (b Backend) SessionID(name string) (string, error) {
 		return "", err
 	}
 	for _, s := range sessions {
-		if s.Label == name {
+		if s.Name == name {
 			return s.ID, nil
 		}
 	}
-	return "", fmt.Errorf("no rex session labelled %q", name)
+	return "", fmt.Errorf("no rex session named %q", name)
 }
 
 // Unreachable reports whether this instance is a remote server that a recent
@@ -149,7 +150,7 @@ func (b Backend) SessionID(name string) (string, error) {
 func (b Backend) Unreachable() bool { return b.remote() && breaker.Down(b.Server) }
 
 // call invokes one session-scoped API method and decodes its JSON reply into
-// out (nil to discard). session is a label or id; "" means no session scope.
+// out (nil to discard). session is a name or id; "" means no session scope.
 // A remote server that was just found unreachable fails fast rather than
 // costing another timeout; teardown doesn't come through here, so it never
 // skips a kill on that account.
@@ -161,7 +162,7 @@ func (b Backend) call(session, method string, params any, out any) error {
 	defer func() { <-callSlots }()
 	args := []string{"api", "call"}
 	if session != "" {
-		args = append(args, "-s", session)
+		args = append(args, "-s", b.target(session))
 	}
 	args = append(args, method)
 	if params != nil {
@@ -234,9 +235,13 @@ func commandLine(cmdline string) []string {
 	return []string{"/bin/sh", "-lc", cmdline}
 }
 
+// sessionEntry is one live session. Name is what rig calls it: the label it
+// was created with, which survives a rename, or its current label when rig
+// has no record of making it.
 type sessionEntry struct {
 	ID    string `json:"session_id"`
 	Label string `json:"label"`
+	Name  string `json:"-"`
 }
 
 func (b Backend) listSessions() ([]sessionEntry, error) {
@@ -246,7 +251,7 @@ func (b Backend) listSessions() ([]sessionEntry, error) {
 	if err := b.call("", "session.list", nil, &out); err != nil {
 		return nil, err
 	}
-	return out.Sessions, nil
+	return b.named(out.Sessions), nil
 }
 
 func (b Backend) HasSession(name string) bool {
@@ -255,11 +260,98 @@ func (b Backend) HasSession(name string) bool {
 		return false
 	}
 	for _, s := range sessions {
-		if s.Label == name {
+		if s.Name == name {
 			return true
 		}
 	}
 	return false
+}
+
+// A session's label is not rig's to keep. Rex's agent hook tells every agent
+// it starts to `rex session rename` its session as soon as it knows what the
+// work is, and the app renames on a double-click, so a rig that found its
+// session by label lost it within seconds of creating it: its own host drew it
+// stopped and refused to show it. The id Rex mints never changes, so rig
+// records it under the name it created the session with, addresses the
+// session by that id, and reports it by that name whatever the label says now.
+// The label is only the fallback for a session rig didn't make, or made before
+// it kept these records.
+
+const idSuffix = ".session"
+
+func (b Backend) idPath(name string) string {
+	return filepath.Join(b.MarksDir, url.PathEscape(name)+idSuffix)
+}
+
+// target is how a call addresses the session rig calls name: by its recorded
+// id, else by name as a label. An id, or a name with no record, passes through.
+func (b Backend) target(name string) string {
+	if b.MarksDir == "" {
+		return name
+	}
+	raw, err := os.ReadFile(b.idPath(name))
+	if err != nil {
+		return name
+	}
+	if id := strings.TrimSpace(string(raw)); id != "" {
+		return id
+	}
+	return name
+}
+
+// named fills in each session's Name from the recorded ids.
+func (b Backend) named(sessions []sessionEntry) []sessionEntry {
+	names := b.recordedNames()
+	for i := range sessions {
+		sessions[i].Name = sessions[i].Label
+		if name, ok := names[sessions[i].ID]; ok {
+			sessions[i].Name = name
+		}
+	}
+	return sessions
+}
+
+// recordedNames maps each recorded session id to the name rig gave it.
+func (b Backend) recordedNames() map[string]string {
+	names := map[string]string{}
+	if b.MarksDir == "" {
+		return names
+	}
+	entries, err := os.ReadDir(b.MarksDir)
+	if err != nil {
+		return names
+	}
+	for _, e := range entries {
+		escaped, ok := strings.CutSuffix(e.Name(), idSuffix)
+		if !ok {
+			continue
+		}
+		name, err := url.PathUnescape(escaped)
+		if err != nil {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(b.MarksDir, e.Name()))
+		if err != nil {
+			continue
+		}
+		names[strings.TrimSpace(string(raw))] = name
+	}
+	return names
+}
+
+func (b Backend) recordID(name, id string) error {
+	if b.MarksDir == "" || id == "" {
+		return nil
+	}
+	if err := os.MkdirAll(b.MarksDir, 0o755); err != nil {
+		return err
+	}
+	path := b.idPath(name)
+	tmp := fmt.Sprintf("%s.tmp-%d", path, os.Getpid())
+	if err := os.WriteFile(tmp, []byte(id+"\n"), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // Sessions lists every live session. Rex records neither a session's working
@@ -274,7 +366,7 @@ func (b Backend) Sessions() []mux.Session {
 	out := make([]mux.Session, len(sessions))
 	each(len(sessions), func(i int) {
 		s := sessions[i]
-		out[i] = mux.Session{Surface: b.Surface(), Name: s.Label, Path: b.sessionPath(s.Label)}
+		out[i] = mux.Session{Surface: b.Surface(), Name: s.Name, Path: b.sessionPath(s.ID)}
 	})
 	return out
 }
@@ -294,25 +386,26 @@ func (b Backend) sessionPath(session string) string {
 	return ""
 }
 
-// KillSession destroys the session and its marks sidecar together: a parked
-// rig's session comes back with fresh block ids, and the old ones would
-// otherwise sit in the file forever.
+// KillSession destroys the session and its sidecars together: a parked rig's
+// session comes back with fresh block ids and a fresh session id, and the old
+// ones would otherwise sit in the files forever.
 func (b Backend) KillSession(name string) error {
 	if !b.HasSession(name) {
 		return nil
 	}
-	cmd := b.command("kill", name)
+	cmd := b.command("kill", b.target(name))
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
 		return err
 	}
-	b.forgetMarks(name)
+	b.forget(name)
 	return nil
 }
 
-func (b Backend) forgetMarks(session string) {
+func (b Backend) forget(session string) {
 	if b.MarksDir != "" {
 		_ = os.Remove(b.marksPath(session))
+		_ = os.Remove(b.idPath(session))
 	}
 }
 
@@ -352,21 +445,21 @@ func (b Backend) KillSessionAt(name, endpoint string) error {
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return fmt.Errorf("listing sessions on %s: %w", endpoint, err)
 	}
-	for _, s := range out.Sessions {
-		if s.Label == name {
-			cmd := at.command("kill", name)
+	for _, s := range at.named(out.Sessions) {
+		if s.Name == name {
+			cmd := at.command("kill", s.ID)
 			cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 			if err := cmd.Run(); err != nil {
 				return err
 			}
-			b.forgetMarks(name)
+			b.forget(name)
 			return nil
 		}
 	}
 	return nil
 }
 
-// CurrentSession maps REX_SESSION, which is an id, back to the label rig
+// CurrentSession maps REX_SESSION, which is an id, back to the name rig
 // addresses sessions by. The process runs on the host whose server set that
 // variable, so a remote instance is never the one it's inside.
 func (b Backend) CurrentSession() string {
@@ -380,7 +473,7 @@ func (b Backend) CurrentSession() string {
 	}
 	for _, s := range sessions {
 		if s.ID == id {
-			return s.Label
+			return s.Name
 		}
 	}
 	return ""
@@ -405,7 +498,7 @@ func (b Backend) CurrentPane() string {
 // screen the person pressing Enter is looking at.
 func (b Backend) Attach(target string) error {
 	if os.Getenv("REX_SESSION") == "" && !b.Viewer {
-		cmd := b.command("attach", target)
+		cmd := b.command("attach", b.target(target))
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 		return cmd.Run()
 	}
@@ -607,7 +700,8 @@ func (b Backend) NewCommandSession(name, windowName, cwd, cmdline string) (strin
 
 func (b Backend) createSession(name, windowName string, layout obj) (string, string, error) {
 	var out struct {
-		Windows []struct {
+		SessionID string `json:"session_id"`
+		Windows   []struct {
 			WindowID string   `json:"window_id"`
 			BlockIDs []string `json:"block_ids"`
 		} `json:"initial_windows"`
@@ -625,6 +719,9 @@ func (b Backend) createSession(name, windowName string, layout obj) (string, str
 	if len(out.Windows) != 1 || len(out.Windows[0].BlockIDs) != 1 {
 		return "", "", fmt.Errorf("unexpected rex session.create reply: %+v", out)
 	}
+	// Without the record the session still works by its label, until
+	// something renames it, so a failed write isn't worth the session.
+	_ = b.recordID(name, out.SessionID)
 	return out.Windows[0].BlockIDs[0], out.Windows[0].WindowID, nil
 }
 
@@ -793,7 +890,7 @@ func (b Backend) SendKeys(target, text string) error {
 	if err != nil {
 		return err
 	}
-	cmd := b.command("send", "-s", session, "-b", target, text+"\n")
+	cmd := b.command("send", "-s", b.target(session), "-b", target, text+"\n")
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	return cmd.Run()
 }
@@ -1017,7 +1114,7 @@ func (b Backend) sessionOfBlock(block string) (string, error) {
 				BlockID string `json:"block_id"`
 			} `json:"blocks"`
 		}
-		if err := b.call(sessions[i].Label, "session.list_blocks", nil, &out); err != nil {
+		if err := b.call(sessions[i].ID, "session.list_blocks", nil, &out); err != nil {
 			return
 		}
 		for _, bl := range out.Blocks {
@@ -1028,7 +1125,7 @@ func (b Backend) sessionOfBlock(block string) (string, error) {
 	})
 	for i, s := range sessions {
 		if owns[i] {
-			return s.Label, nil
+			return s.Name, nil
 		}
 	}
 	return "", fmt.Errorf("rex block %s not found in any session", block)
@@ -1040,13 +1137,13 @@ func (b Backend) sessionOfWindow(window string) (string, error) {
 		return "", err
 	}
 	for _, s := range sessions {
-		v, err := b.view(s.Label)
+		v, err := b.view(s.ID)
 		if err != nil {
 			continue
 		}
 		for _, w := range v.Windows {
 			if w.WindowID == window {
-				return s.Label, nil
+				return s.Name, nil
 			}
 		}
 	}
@@ -1156,7 +1253,7 @@ func (b Backend) AllPanes() ([]mux.Pane, error) {
 	}
 	per := make([][]mux.Pane, len(sessions))
 	each(len(sessions), func(i int) {
-		per[i], _ = b.Panes(sessions[i].Label)
+		per[i], _ = b.Panes(sessions[i].Name)
 	})
 	var out []mux.Pane
 	for _, panes := range per {

@@ -853,6 +853,16 @@ stamped, it is on screen in Rex, so rig takes `tmux-local`'s session as
 `REX_SESSION` and a remote row goes through the Rex portal. The tty match is the
 whole test, so a tmux in a plain terminal still reads as tmux and refuses.
 
+A Rex session's label is not rig's to keep. Rex's agent hook tells every
+agent to `rex session rename` its session on its first turn, so a rig that
+found its session by label lost it within seconds: its own host drew it
+stopped, and a cross-host show came back "not on this host's board". The rex
+backend therefore records the id `session.create` returns beside its marks
+sidecar, addresses the session by that id, and reports it by the name rig gave
+it. Everything above `internal/mux` keeps meaning the name, and the label is
+only a fallback for sessions rig has no record of. Don't fight the rename with
+an instruction to agents or a relabel pass; the rename is Rex's to make.
+
 `session.select` is a client action: whichever server receives it only relays
 it to the app named by `-C`. So a session on another Rex server can be shown
 through either server, provided the app has that host under Remote Hosts;
