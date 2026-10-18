@@ -232,7 +232,8 @@ func TestRadarStateCell(t *testing.T) {
 		fetched bool
 		want    string
 	}{
-		{"inflight working", rigStatus{Agent: "working"}, false, "working"},
+		{"inflight working", rigStatus{Agent: "working", SessionLive: true}, false, "working"},
+		{"inflight working, session gone", rigStatus{Agent: "working"}, false, "-"},
 		{"inflight no session", rigStatus{}, false, "-"},
 		{"parked unfetched", rigStatus{Parked: true}, false, "…"},
 		{"parked no pr", rigStatus{Parked: true}, true, "no PR"},

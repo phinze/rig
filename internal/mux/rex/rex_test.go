@@ -623,3 +623,31 @@ func TestPaneRootPID(t *testing.T) {
 		t.Error("a remote server's pid was taken as this machine's")
 	}
 }
+
+// Lookup finds the CLI in whatever the Rex Server helper is called this
+// release: build 1203 renamed it from `Rex Server.app` to `Rex Server.rex`,
+// and rig serve, started by launchd, has nothing else to find it by.
+func TestLookupFindsRenamedHelper(t *testing.T) {
+	for _, helper := range []string{"Rex Server.app", "Rex Server.rex"} {
+		t.Run(helper, func(t *testing.T) {
+			bundle := t.TempDir()
+			bin := filepath.Join(bundle, "Contents", "Helpers", helper, "Contents", "MacOS", "rex")
+			if err := os.MkdirAll(filepath.Dir(bin), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			old := appBundle
+			appBundle = bundle
+			t.Cleanup(func() { appBundle = old })
+			t.Setenv("PATH", t.TempDir())
+			t.Setenv("REX_BIN_DIR", "")
+
+			got, looked, ok := Lookup()
+			if !ok || got != bin {
+				t.Fatalf("Lookup = %q, %v (looked %v), want %q", got, ok, looked, bin)
+			}
+		})
+	}
+}

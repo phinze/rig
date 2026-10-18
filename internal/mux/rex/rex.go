@@ -59,6 +59,10 @@ func (b Backend) Surface() string {
 // environment points at.
 func (b Backend) remote() bool { return b.Server != "" }
 
+// appBundle is where Rex.app is installed, a variable so tests can stand up
+// a bundle layout without one.
+var appBundle = "/Applications/Rex.app"
+
 // binary is where Rex.app ships its CLI, or the last place looked when it's
 // nowhere, so a call fails naming a real path.
 func binary() string {
@@ -72,11 +76,12 @@ func binary() string {
 // Lookup finds the CLI and reports every place it tried. PATH comes first so
 // a standalone install or a test shim wins, then REX_BIN_DIR, which Rex
 // terminals carry for exactly the case of a shell that rebuilt PATH. The
-// bundle paths come last, newest layout first: preview.12 moved the CLI from
-// Helpers/rex into the Rex Server helper app, and an install still on the old
-// layout keeps working. Those matter most where neither of the others
-// reaches, which is anything launchd or tmux started: rig serve, and every
-// rig inside tmux.
+// bundle paths come last. preview.12 moved the CLI from Helpers/rex into the
+// Rex Server helper, and build 1203 renamed that helper from `Rex
+// Server.app` to `Rex Server.rex`, unannounced. So the helper is globbed
+// rather than named, and an install still on the oldest layout keeps
+// working. Those matter most where neither of the others reaches, which is
+// anything launchd or tmux started: rig serve, and every rig inside tmux.
 func Lookup() (path string, looked []string, ok bool) {
 	if p, err := exec.LookPath("rex"); err == nil {
 		return p, nil, true
@@ -86,10 +91,10 @@ func Lookup() (path string, looked []string, ok bool) {
 	if dir := os.Getenv("REX_BIN_DIR"); dir != "" {
 		candidates = append(candidates, filepath.Join(dir, "rex"))
 	}
-	candidates = append(candidates,
-		"/Applications/Rex.app/Contents/Helpers/Rex Server.app/Contents/MacOS/rex",
-		"/Applications/Rex.app/Contents/Helpers/rex",
-	)
+	helpers := filepath.Join(appBundle, "Contents", "Helpers")
+	bundled, _ := filepath.Glob(filepath.Join(helpers, "*", "Contents", "MacOS", "rex"))
+	candidates = append(candidates, bundled...)
+	candidates = append(candidates, filepath.Join(helpers, "rex"))
 	for _, c := range candidates {
 		if _, err := os.Stat(c); err == nil {
 			return c, nil, true

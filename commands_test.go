@@ -67,7 +67,8 @@ func TestAgentMarker(t *testing.T) {
 		want string
 	}{
 		{"no session", rigStatus{}, "-"},
-		{"working", rigStatus{Agent: "working"}, "working"},
+		{"working", rigStatus{Agent: "working", SessionLive: true}, "working"},
+		{"fresh transcript, dead session", rigStatus{Agent: "working"}, "-"},
 		{"parked wins over blank", rigStatus{Parked: true}, "parked"},
 		{"parked wins over stale agent", rigStatus{Parked: true, Agent: "idle"}, "parked"},
 	}

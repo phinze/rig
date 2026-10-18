@@ -492,7 +492,9 @@ func agentMarker(s rigStatus) string {
 	if s.Parked {
 		return "parked"
 	}
-	if s.Agent == "" {
+	// A transcript's mtime outlives its session: a Rex server restart kills
+	// every agent, and the writes they make on the way out read as a turn.
+	if s.Agent == "" || !s.SessionLive {
 		return "-"
 	}
 	return s.Agent
