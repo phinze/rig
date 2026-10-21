@@ -30,17 +30,10 @@ import (
 // board and in its Surface. MarksDir is where per-session mark sidecars live;
 // empty disables marks, which a remote instance and a test both want, since a
 // remote session's marks belong to the rig on that host.
-//
-// Viewer makes Attach drive the app even from a process that isn't inside
-// Rex. Attach normally decides by REX_SESSION: inside Rex the app is told to
-// switch, outside it a text-mode attach takes over the terminal. A background
-// process (rig serve, asked by another host to show a session) has neither a
-// Rex session nor a terminal, and the app is the only screen there is.
 type Backend struct {
 	Server   string
 	Place    string
 	MarksDir string
-	Viewer   bool
 }
 
 var _ mux.Backend = Backend{}
@@ -491,9 +484,12 @@ func (b Backend) CurrentPane() string {
 	return os.Getenv("REX_BLOCK")
 }
 
-// Attach from a bare terminal is Rex's text-mode attach. From inside Rex the
-// app is told to show the target: the session itself, or a block's window
-// with that block focused. A block in the session already on screen needs
+// Attach tells the app to show the target: the session itself, or a block's
+// window with that block focused. It does this from anywhere, inside Rex or
+// not, because the app is the only Rex client there is: `rex attach` is on its
+// way out and never drew a session quite right, and a radar in a tmux pane on a
+// host the app has under Remote Hosts wants the app to switch, not a text
+// client inside its popup. A block in the session already on screen needs
 // only the focus.
 //
 // A remote instance resolves the target on its own server and then tells
@@ -502,11 +498,6 @@ func (b Backend) CurrentPane() string {
 // server it has under Remote Hosts, so the local relay always reaches the
 // screen the person pressing Enter is looking at.
 func (b Backend) Attach(target string) error {
-	if os.Getenv("REX_SESSION") == "" && !b.Viewer {
-		cmd := b.command("attach", b.target(target))
-		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-		return cmd.Run()
-	}
 	current := b.CurrentSession()
 	if target == current {
 		return nil

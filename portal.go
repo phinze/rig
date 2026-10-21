@@ -5,7 +5,6 @@ import (
 	"os"
 
 	"github.com/phinze/rig/internal/mux"
-	"github.com/phinze/rig/internal/mux/rex"
 	"github.com/phinze/rig/internal/mux/tmux"
 )
 
@@ -69,7 +68,7 @@ func (p portalBackend) Attach(target string) error {
 // to move and no Rex session we're inside, so it always goes through the
 // portal and tells the app to show it.
 func (p portalBackend) Show(target string) error {
-	rx := viewerRex()
+	rx := localRex()
 	if rx == nil {
 		return fmt.Errorf("no Rex here to show it in: %w", mux.ErrNoClientSwitch)
 	}
@@ -159,18 +158,6 @@ func portalSessions() map[sessionKey]bool {
 
 // localRex is this machine's own Rex backend, or nil where there isn't one.
 // A var so a test can hand the portal a fake instead of the real app.
-// viewerRex is localRex set to drive the app from outside Rex; see
-// rex.Backend.Viewer.
-var viewerRex = func() portalHost {
-	for _, b := range localBackends() {
-		if rb, ok := b.(rex.Backend); ok {
-			rb.Viewer = true
-			return rb
-		}
-	}
-	return nil
-}
-
 var localRex = func() portalHost {
 	for _, b := range localBackends() {
 		if h, ok := b.(portalHost); ok && b.Name() == "rex" {

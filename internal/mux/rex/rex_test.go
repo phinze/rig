@@ -574,14 +574,14 @@ func calls(t *testing.T, log string) int {
 	return len(strings.Split(strings.TrimSpace(string(raw)), "\n"))
 }
 
-// A viewer has no Rex session of its own and no terminal, so it tells the app
-// to show the target rather than falling through to a text-mode attach.
-func TestViewerAttachSelectsFromOutsideRex(t *testing.T) {
+// Outside Rex (a tmux pane, rig serve under launchd) Attach still tells the
+// app to show the target. It never falls back to a text-mode `rex attach`.
+func TestAttachSelectsFromOutsideRex(t *testing.T) {
 	log := fakeRex(t)
 	t.Setenv("REX_SESSION", "")
 	t.Setenv("REX_FAKE_SECOND", "1")
 
-	if err := (Backend{Viewer: true}).Attach("~-workspaces-beta"); err != nil {
+	if err := (Backend{}).Attach("~-workspaces-beta"); err != nil {
 		t.Fatal(err)
 	}
 	got := selects(t, log)
@@ -590,7 +590,7 @@ func TestViewerAttachSelectsFromOutsideRex(t *testing.T) {
 	}
 	raw, _ := os.ReadFile(log)
 	if strings.Contains(string(raw), "attach ") {
-		t.Errorf("viewer fell through to a text-mode attach:\n%s", raw)
+		t.Errorf("fell through to a text-mode attach:\n%s", raw)
 	}
 }
 

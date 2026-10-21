@@ -254,7 +254,6 @@ var show = func(req showRequest) error {
 	case portalBackend:
 		return b.Show(req.Target)
 	case rex.Backend:
-		b.Viewer = true
 		return b.Attach(req.Target)
 	default:
 		return fmt.Errorf("%s can't show a session: %w", b.Name(), mux.ErrNoClientSwitch)

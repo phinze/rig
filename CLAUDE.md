@@ -762,9 +762,9 @@ portal, and the client it would need to move is the Mac's. So
 Rex, and otherwise asks the owning host to show the target, which runs the same
 portal upsert through `portalBackend.Show` and tells Rex.app to display it. A
 background serve is neither inside a Rex session nor on a terminal, which is
-what `rex.Backend.Viewer` is for: Attach otherwise picks between "tell the app"
-and "text-mode attach" by `REX_SESSION`, and from launchd that answer is always
-the wrong one. Show only accepts a session or agent pane the board lists, so a
+fine because the Rex backend's Attach always tells the app and never falls
+back to a text-mode `rex attach` (on its way out upstream, and never drew a
+session quite right). Show only accepts a session or agent pane the board lists, so a
 caller can only ask for what it was shown, and it only changes what's
 displayed. It needs Rex.app as the viewer with Remote Control on; anywhere else
 it comes back as the host's reason beside "switch by hand".
