@@ -753,14 +753,15 @@ worked in the last half hour (that's when a PR appears or moves), fifteen for
 an open PR waiting on reviews, an hour otherwise. `ls --full` keeps its own
 one-minute `boardPRTTL`, because a sweep acts on what it reads.
 
-`POST /v1/show` exists because of where the screen is. The Mac radar
-entering a foxtrotbase row opens its own portal, since the client is on the
-Mac. foxtrotbase's radar entering a Mac row can't:
-it's being viewed through the Mac's Rex, has no Rex of its own to host a
-portal, and the client it would need to move is the Mac's. So
-`servedBackend.Attach` uses the local portal when this machine is on screen in
-Rex, and otherwise asks the owning host to show the target, which runs the same
-portal upsert through `portalBackend.Show` and tells Rex.app to display it. A
+`POST /v1/show` exists because of where the screen is. Rex.app reaches each
+host's own Rex over the tailnet, so the host that owns a session can put it on
+screen itself: `servedBackend.Attach` asks the owning host to show the target,
+which runs the portal upsert through `portalBackend.Show` (its own
+`tmux-local`, a plain local tmux client) and tells Rex.app to display it. No
+ssh from the Mac, so nothing forwards an agent or ports behind bankshot's back.
+Only when the host can't show it (no Rex there, no app connected, an older rig)
+does a machine that's on screen in Rex fall back to a portal of its own, tmux
+over ssh, the way remote rows were all entered before. A
 background serve is neither inside a Rex session nor on a terminal, which is
 fine because the Rex backend's Attach always tells the app and never falls
 back to a text-mode `rex attach` (on its way out upstream, and never drew a

@@ -382,3 +382,45 @@ func checkErr(g *serveGate, addr string) error {
 	_, err := g.check(context.Background(), addr)
 	return err
 }
+
+// From inside Rex, a tmux row on a served host is shown by that host's own
+// tmux-local portal, with no ssh from here; only when the host can't show
+// it does this machine fall back to a portal of its own.
+func TestServedTmuxPrefersHostPortal(t *testing.T) {
+	failWith := error(nil)
+	var got []showRequest
+	orig := show
+	show = func(req showRequest) error { got = append(got, req); return failWith }
+	t.Cleanup(func() { show = orig })
+
+	rx := &fakePortalHost{fakeBackend: fakeBackend{name: "rex"}}
+	origRex := localRex
+	localRex = func() portalHost { return rx }
+	t.Cleanup(func() { localRex = origRex })
+
+	gate := newServeGate([]string{"nobody"}, nil, true)
+	srv := httptest.NewServer(serveHandler(gate, func() serveDoc { return serveDoc{} }))
+	defer srv.Close()
+	b, err := newServedBackend("fx", srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("REX_SESSION", "session:here")
+	t.Setenv("TMUX", "")
+
+	if err := b.Attach("~/workspaces/pers-20"); err != nil {
+		t.Fatalf("attach = %v, want the host to show it", err)
+	}
+	if len(got) != 1 || len(rx.created)+len(rx.respawned)+len(rx.attached) != 0 {
+		t.Errorf("shows %+v, local portal created %v attached %v; want the host's show and no local portal", got, rx.created, rx.attached)
+	}
+
+	failWith = fmt.Errorf("0 Rex apps are connected, want exactly one: %w", mux.ErrNoClientSwitch)
+	fakeSSH(t, "", "")
+	if err := b.Attach("~/workspaces/pers-20"); err != nil {
+		t.Fatalf("attach after a refused show = %v, want the local portal", err)
+	}
+	if len(rx.created) != 1 || !strings.Contains(rx.created[0], "ssh") {
+		t.Errorf("created %v, want one ssh portal as the fallback", rx.created)
+	}
+}
