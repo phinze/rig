@@ -610,6 +610,16 @@ name is fatal except for `config` and `help`, since `rig config backend
 --unset` is the repair. `backend_test.go` registers a fake backend to prove the
 routing.
 
+`rig backend tmux|rex [NAME]` moves an existing rig. Nothing but the session is
+tied to a backend: the agent's conversation lives in its own store keyed by the
+basedir, Recto's state by workspace, and pane marks are recreated on spawn. So
+the move is `captureRigRuntimeHints`, rewrite `m.Backend`, kill the old session,
+then `ensureRigRuntime` resumes the same conversation on the new one; killing
+first means two agents never share a conversation. It gates on
+`sessionExitHandoff` like park, so an agent can't move its own rig, but a chief
+of staff or any shell outside it can, and only a person at a terminal outside
+the rig gets attached to the result.
+
 A backend is an instance, not a kind. `Name()` is the kind a manifest records;
 `Surface()` names the instance, spelled as the bare kind for this machine's own
 multiplexer and `kind@place` for one elsewhere. That split exists because every

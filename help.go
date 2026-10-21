@@ -259,6 +259,18 @@ this side enters.`,
 another host (ID@PLACE) is repaired there and entered from here.`,
 	},
 	{
+		name:    "backend",
+		group:   "work",
+		usage:   []string{"backend tmux|rex [NAME]"},
+		summary: "move a rig to another multiplexer, resuming its agent",
+		details: `Default: the rig you're in. NAME is a rig's exact id or directory name, here
+or on another host (NAME@PLACE). Kills the rig's session and builds a new one
+on the named backend that resumes the same agent conversation; a parked rig
+just opens there when woken. Inside the rig's own session it needs a terminal,
+like park; from anywhere else, an agent included, it just runs. Enters the
+moved rig only when run by a person at a terminal outside it.`,
+	},
+	{
 		name:    "park",
 		group:   "finish",
 		usage:   []string{"park [NAME]"},

@@ -95,6 +95,8 @@ func main() {
 		err = runSwitch(args)
 	case "radar":
 		err = runRadar(args)
+	case "backend":
+		err = runBackendMove(args)
 	case "park":
 		err = runPark(args)
 	case "wake":
