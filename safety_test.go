@@ -41,8 +41,20 @@ func TestMain(m *testing.M) {
 	}
 	_ = os.Setenv("XDG_CONFIG_HOME", cfg)
 
+	// State gets the same treatment, because the radar reads the real notify
+	// store on every scan. A live notification on the developer's machine drew
+	// an inbox banner that pushed the board two rows down, and the mouse tests
+	// failed for as long as nix-config-sync had something to say.
+	state, err := os.MkdirTemp("", "rig-test-state-")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "rig tests: %v\n", err)
+		os.Exit(1)
+	}
+	_ = os.Setenv("XDG_STATE_HOME", state)
+
 	code := m.Run()
 	_ = os.RemoveAll(root)
 	_ = os.RemoveAll(cfg)
+	_ = os.RemoveAll(state)
 	os.Exit(code)
 }
