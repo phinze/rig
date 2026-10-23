@@ -9,6 +9,7 @@ package rex
 
 import (
 	"bytes"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -149,15 +151,7 @@ func (b Backend) Unreachable() bool { return b.remote() && breaker.Down(b.Server
 
 // call invokes one session-scoped API method and decodes its JSON reply into
 // out (nil to discard). session is a name or id; "" means no session scope.
-// A remote server that was just found unreachable fails fast rather than
-// costing another timeout; teardown doesn't come through here, so it never
-// skips a kill on that account.
 func (b Backend) call(session, method string, params any, out any) error {
-	if b.remote() && breaker.Down(b.Server) {
-		return fmt.Errorf("rex %s: %s is unreachable (retrying within %s)", method, b.Server, remoteBackoff)
-	}
-	callSlots <- struct{}{}
-	defer func() { <-callSlots }()
 	args := []string{"api", "call"}
 	if session != "" {
 		args = append(args, "-s", b.target(session))
@@ -170,7 +164,75 @@ func (b Backend) call(session, method string, params any, out any) error {
 		}
 		args = append(args, string(raw))
 	}
-	cmd := b.command(args...)
+	raw, err := b.run(b.command(args...))
+	if err != nil {
+		return fmt.Errorf("rex %s: %w", method, err)
+	}
+	if out == nil {
+		return nil
+	}
+	return json.Unmarshal(raw, out)
+}
+
+// script runs a Lua script with `rex do` and decodes what it returns. The
+// script names every session it touches, so the caller's REX_SESSION and
+// REX_BLOCK are left out: they name this machine's session, which a remote
+// server has never heard of.
+func (b Backend) script(lua string, out any) error {
+	cmd := b.command("do", "-")
+	cmd.Stdin = strings.NewReader(lua)
+	cmd.Env = slices.DeleteFunc(os.Environ(), func(kv string) bool {
+		return strings.HasPrefix(kv, "REX_SESSION=") || strings.HasPrefix(kv, "REX_BLOCK=")
+	})
+	raw, err := b.run(cmd)
+	if err != nil {
+		return fmt.Errorf("rex do: %w", err)
+	}
+	return decodeLua(raw, out)
+}
+
+// decodeLua decodes a script's JSON result. Lua has one table type, so an
+// empty list comes back as {} where the server sent []; each empty object is
+// read as null, which decodes as the zero value whatever it stands for.
+func decodeLua(raw []byte, out any) error {
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return err
+	}
+	norm, err := json.Marshal(nullEmpty(v))
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(norm, out)
+}
+
+func nullEmpty(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		if len(t) == 0 {
+			return nil
+		}
+		for k, e := range t {
+			t[k] = nullEmpty(e)
+		}
+	case []any:
+		for i, e := range t {
+			t[i] = nullEmpty(e)
+		}
+	}
+	return v
+}
+
+// run executes one CLI invocation under the guards every call shares. A
+// remote server that was just found unreachable fails fast rather than
+// costing another timeout; teardown doesn't come through here, so it never
+// skips a kill on that account.
+func (b Backend) run(cmd *exec.Cmd) ([]byte, error) {
+	if b.remote() && breaker.Down(b.Server) {
+		return nil, fmt.Errorf("%s is unreachable (retrying within %s)", b.Server, remoteBackoff)
+	}
+	callSlots <- struct{}{}
+	defer func() { <-callSlots }()
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	raw, err := cmd.Output()
@@ -178,16 +240,12 @@ func (b Backend) call(session, method string, params any, out any) error {
 		noteReachability(b.Server, strings.TrimSpace(stderr.String()))
 	}
 	if err != nil {
-		msg := strings.TrimSpace(stderr.String())
-		if msg == "" {
-			return fmt.Errorf("rex %s: %w", method, err)
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return nil, errors.New(msg)
 		}
-		return fmt.Errorf("rex %s: %s", method, msg)
+		return nil, err
 	}
-	if out == nil {
-		return nil
-	}
-	return json.Unmarshal(raw, out)
+	return raw, nil
 }
 
 // callSlots caps how many CLI calls run at once. A listing costs a view per
@@ -1203,6 +1261,16 @@ func (b Backend) panes(session, only string) ([]mux.Pane, error) {
 // panesOf is panes from a view already in hand, so Snapshot can describe a
 // session's panes and its path from the one view.
 func (b Backend) panesOf(session string, v sessionView, only string) []mux.Pane {
+	panes := b.layoutPanes(session, v, only)
+	each(len(panes), func(i int) {
+		fill(&panes[i], b.probe(session, panes[i].PaneID, true))
+	})
+	return panes
+}
+
+// layoutPanes is the tiled blocks of a view as panes, with the sidecar marks
+// read back but nothing probed yet.
+func (b Backend) layoutPanes(session string, v sessionView, only string) []mux.Pane {
 	marks := b.readMarks(session)
 	var panes []mux.Pane
 	for wi, w := range v.Windows {
@@ -1234,15 +1302,41 @@ func (b Backend) panesOf(session string, v sessionView, only string) []mux.Pane 
 			}
 		}
 	}
-	each(len(panes), func(i int) {
-		p := &panes[i]
-		if info, err := b.process(session, p.PaneID); err == nil && info.Foreground != nil {
-			p.Command = commandName(info.Foreground)
-			p.Path = info.Foreground.Cwd
-		}
-		p.Title = b.title(session, p.PaneID)
-	})
 	return panes
+}
+
+// blockFacts is what a pane needs from its block beyond the layout. Either
+// probe can fail on its own, which leaves its half nil.
+type blockFacts struct {
+	Process *processInfo `json:"process"`
+	Title   *struct {
+		Title string `json:"title"`
+	} `json:"title"`
+}
+
+// probe asks one block for its facts, a CLI call each. The title is skipped
+// when only the path is wanted.
+func (b Backend) probe(session, block string, withTitle bool) blockFacts {
+	var f blockFacts
+	if info, err := b.process(session, block); err == nil {
+		f.Process = &info
+	}
+	if withTitle {
+		f.Title = &struct {
+			Title string `json:"title"`
+		}{b.title(session, block)}
+	}
+	return f
+}
+
+func fill(p *mux.Pane, f blockFacts) {
+	if f.Process != nil && f.Process.Foreground != nil {
+		p.Command = commandName(f.Process.Foreground)
+		p.Path = f.Process.Foreground.Cwd
+	}
+	if f.Title != nil {
+		p.Title = f.Title.Title
+	}
 }
 
 // AllPanes is Panes over every session. Nil when the server isn't reachable,
@@ -1277,12 +1371,64 @@ func (b Backend) SessionNames() ([]string, bool) {
 	return names, true
 }
 
-// Snapshot is Sessions and AllPanes from one session list and one view per
-// session. Separately they view every session twice and probe each session's
-// focused block twice, once for its path and again as a pane. The focused
-// block is probed on its own only when it isn't a tiled pane, which is the
-// popup's own layer while a radar is open over that session.
+// Snapshot is Sessions and AllPanes in one pass. It runs snapshot.lua, which
+// gathers the whole board over one connection, and falls back to asking a
+// CLI call at a time when the script can't run.
 func (b Backend) Snapshot() ([]mux.Session, []mux.Pane) {
+	if sessions, panes, err := b.scriptSnapshot(); err == nil {
+		return sessions, panes
+	}
+	return b.callSnapshot()
+}
+
+//go:embed snapshot.lua
+var snapshotLua string
+
+// scriptSession is one session as snapshot.lua reports it. View is nil when
+// the session couldn't be attached, which leaves it listed with no panes, the
+// same as a failed view does on the CLI path.
+type scriptSession struct {
+	ID     string                `json:"session_id"`
+	Label  string                `json:"label"`
+	View   *sessionView          `json:"view"`
+	Probes map[string]blockFacts `json:"probes"`
+}
+
+func (b Backend) scriptSnapshot() ([]mux.Session, []mux.Pane, error) {
+	var out struct {
+		Sessions []scriptSession `json:"sessions"`
+	}
+	if err := b.script(snapshotLua, &out); err != nil {
+		return nil, nil, err
+	}
+	entries := make([]sessionEntry, len(out.Sessions))
+	for i, s := range out.Sessions {
+		entries[i] = sessionEntry{ID: s.ID, Label: s.Label}
+	}
+	entries = b.named(entries)
+	sessions := make([]mux.Session, len(entries))
+	var panes []mux.Pane
+	for i, s := range out.Sessions {
+		name := entries[i].Name
+		sessions[i] = mux.Session{Surface: b.Surface(), Name: name}
+		if s.View == nil {
+			continue
+		}
+		facts := func(block string) blockFacts { return s.Probes[block] }
+		ps := b.layoutPanes(name, *s.View, "")
+		for j := range ps {
+			fill(&ps[j], facts(ps[j].PaneID))
+		}
+		sessions[i].Path = focusedPath(*s.View, ps, facts)
+		panes = append(panes, ps...)
+	}
+	return sessions, panes, nil
+}
+
+// callSnapshot is Snapshot a CLI call at a time: one session list and one view
+// per session, where Sessions and AllPanes separately would view every
+// session twice and probe each focused block twice.
+func (b Backend) callSnapshot() ([]mux.Session, []mux.Pane) {
 	sessions, err := b.listSessions()
 	if err != nil {
 		return nil, nil
@@ -1297,7 +1443,9 @@ func (b Backend) Snapshot() ([]mux.Session, []mux.Pane) {
 			return
 		}
 		per[i] = b.panesOf(s.Name, v, "")
-		out[i].Path = b.focusedPath(s.Name, v, per[i])
+		out[i].Path = focusedPath(v, per[i], func(block string) blockFacts {
+			return b.probe(s.Name, block, false)
+		})
 	})
 	var panes []mux.Pane
 	for _, ps := range per {
@@ -1306,8 +1454,10 @@ func (b Backend) Snapshot() ([]mux.Session, []mux.Pane) {
 	return out, panes
 }
 
-// focusedPath is sessionPath answered from panes already probed where it can be.
-func (b Backend) focusedPath(session string, v sessionView, panes []mux.Pane) string {
+// focusedPath is sessionPath answered from panes already probed, asking facts
+// only when the focused block isn't one of them: a popup's layer, while a
+// radar is open over the session.
+func focusedPath(v sessionView, panes []mux.Pane, facts func(block string) blockFacts) string {
 	for _, w := range v.Windows {
 		if w.WindowID != v.ActiveWindowID || w.FocusedBlock == "" {
 			continue
@@ -1317,8 +1467,8 @@ func (b Backend) focusedPath(session string, v sessionView, panes []mux.Pane) st
 				return p.Path
 			}
 		}
-		if p, err := b.process(session, w.FocusedBlock); err == nil && p.Foreground != nil {
-			return p.Foreground.Cwd
+		if f := facts(w.FocusedBlock); f.Process != nil && f.Process.Foreground != nil {
+			return f.Process.Foreground.Cwd
 		}
 	}
 	return ""

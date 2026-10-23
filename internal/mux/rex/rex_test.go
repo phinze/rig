@@ -23,6 +23,12 @@ func fakeRex(t *testing.T) (log string) {
 printf '%s\n' "$*" >> "` + log + `"
 if [ -n "$REX_FAKE_DOWN" ]; then echo 'Error: connecting to the server timed out after 3s: context deadline exceeded' >&2; exit 1; fi
 case "$*" in
+*"do -")
+  # A snapshot script. Without a canned answer it fails the way an older
+  # server would, so Snapshot's CLI fallback is what the other tests see.
+  printf 'env REX_SESSION=%s\n' "$REX_SESSION" >> "` + log + `"
+  if [ -n "$REX_FAKE_SCRIPT" ]; then cat "$REX_FAKE_SCRIPT"; exit 0; fi
+  echo 'Error: unknown script' >&2; exit 1 ;;
 *" session.create "*)
   # Matched here because its params carry the block flavor, which has dots.
   echo '{"session_id":"session:1","initial_windows":[{"window_id":"window:m","block_ids":["block:a"],"revision":1}]}'
@@ -655,9 +661,9 @@ func TestLookupFindsRenamedHelper(t *testing.T) {
 	}
 }
 
-// Snapshot is Sessions and AllPanes in one pass: the same answer, with one
-// view per session rather than two, and the focused block probed only as a
-// pane unless it's somewhere Panes doesn't look.
+// Snapshot's CLI fallback is Sessions and AllPanes in one pass: the same
+// answer, with one view per session rather than two, and the focused block
+// probed only as a pane unless it's somewhere Panes doesn't look.
 func TestSnapshotMatchesSessionsAndAllPanes(t *testing.T) {
 	log := fakeRex(t)
 	t.Setenv("REX_FAKE_SECOND", "1")
@@ -715,5 +721,72 @@ func TestSessionNamesIsOneList(t *testing.T) {
 	raw, _ := os.ReadFile(log)
 	if got := strings.Count(string(raw), "\n"); got != 1 {
 		t.Errorf("%d calls, want one session.list:\n%s", got, raw)
+	}
+}
+
+// What snapshot.lua returns for the fake's two sessions, as Lua encodes it:
+// nulls dropped, and the popup layer's empty block list come back as {}.
+const fakeScriptAnswer = `{"sessions":[` + fakeScriptSession + `,` + fakeScriptSession2 + `]}`
+
+const fakeScriptView = `{"session_id":"session:1","label":"~-workspaces-alpha","active_window_id":"window:m","windows":[
+ {"window_id":"window:m","label":"main/alpha","focused_block_id":"block:a","layers":[
+   {"kind":"tiled","blocks":[{"block_id":"block:a","label":"shell"},{"block_id":"block:r","label":"recto"}]},
+   {"kind":"floating","blocks":{}}]},
+ {"window_id":"window:z","label":"zeta","focused_block_id":"block:z","layers":[
+   {"kind":"tiled","blocks":[{"block_id":"block:z","label":"recto"}]}]}]}`
+
+const fakeScriptProbes = `{
+ "block:a":{"process":{"child":{"pid":4242,"name":"login"},"foreground":{"pid":4300,"name":".claude-unwrapped","argv0":"/etc/profiles/per-user/phinze/bin/claude","cwd":"/w/alpha"}},"title":{"title":"✳ Task A"}},
+ "block:r":{"process":{"foreground":{"name":"recto","cwd":"/w/x"}},"title":{"title":"✳ Task A"}},
+ "block:z":{"process":{"foreground":{"name":"recto","cwd":"/w/x"}},"title":{"title":"✳ Task A"}}}`
+
+const fakeScriptSession = `{"session_id":"session:1","label":"~-workspaces-alpha","view":` + fakeScriptView + `,"probes":` + fakeScriptProbes + `}`
+const fakeScriptSession2 = `{"session_id":"session:2","label":"~-workspaces-beta","view":` + fakeScriptView + `,"probes":` + fakeScriptProbes + `}`
+
+// With a server that runs scripts, Snapshot is one `rex do` and gives the
+// same answer the CLI path does, without the caller's session in its
+// environment.
+func TestSnapshotRunsOneScript(t *testing.T) {
+	log := fakeRex(t)
+	t.Setenv("REX_FAKE_SECOND", "1")
+	t.Setenv("REX_SESSION", "session:caller")
+	b := Backend{MarksDir: t.TempDir()}
+	if err := b.MarkPane("block:a", "agent", "alpha"); err != nil {
+		t.Fatal(err)
+	}
+	wantSessions, wantPanes := b.callSnapshot()
+
+	answer := filepath.Join(t.TempDir(), "answer.json")
+	if err := os.WriteFile(answer, []byte(fakeScriptAnswer), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("REX_FAKE_SCRIPT", answer)
+	if err := os.WriteFile(log, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sessions, panes := b.Snapshot()
+	if !reflect.DeepEqual(sessions, wantSessions) {
+		t.Errorf("sessions = %+v, want %+v", sessions, wantSessions)
+	}
+	if !reflect.DeepEqual(panes, wantPanes) {
+		t.Errorf("panes = %+v, want %+v", panes, wantPanes)
+	}
+	raw, _ := os.ReadFile(log)
+	if want := "do -\nenv REX_SESSION=\n"; string(raw) != want {
+		t.Errorf("calls = %q, want one script run with REX_SESSION cleared", raw)
+	}
+}
+
+// A session the script couldn't attach is still listed, with no panes.
+func TestSnapshotScriptKeepsAnUnattachedSession(t *testing.T) {
+	fakeRex(t)
+	answer := filepath.Join(t.TempDir(), "answer.json")
+	if err := os.WriteFile(answer, []byte(`{"sessions":[{"session_id":"session:9","label":"gone","probes":{}}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("REX_FAKE_SCRIPT", answer)
+	sessions, panes := Backend{MarksDir: t.TempDir()}.Snapshot()
+	if len(sessions) != 1 || sessions[0].Name != "gone" || len(panes) != 0 {
+		t.Errorf("snapshot = %+v, %+v; want the session alone", sessions, panes)
 	}
 }
