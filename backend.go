@@ -224,6 +224,58 @@ func allSessions(backends []mux.Backend) []mux.Session {
 	return slices.Concat(eachBackend(backends, func(b mux.Backend) []mux.Session { return b.Sessions() })...)
 }
 
+// boardListing is allSessions and every pane together, one pass per backend,
+// for the boards that draw both. A backend that can answer the two at once
+// does (mux.Snapshotter); the rest run the two listings side by side, as the
+// separate passes did.
+func boardListing(backends []mux.Backend) ([]mux.Session, []mux.Pane) {
+	type listing struct {
+		sessions []mux.Session
+		panes    []mux.Pane
+	}
+	per := eachBackend(backends, func(b mux.Backend) listing {
+		if s, ok := b.(mux.Snapshotter); ok {
+			sessions, panes := s.Snapshot()
+			return listing{sessions, panes}
+		}
+		var l listing
+		var wg sync.WaitGroup
+		wg.Go(func() { l.sessions = b.Sessions() })
+		wg.Go(func() { l.panes, _ = b.AllPanes() })
+		wg.Wait()
+		return l
+	})
+	var sessions []mux.Session
+	var panes []mux.Pane
+	for _, l := range per {
+		sessions = append(sessions, l.sessions...)
+		panes = append(panes, l.panes...)
+	}
+	return sessions, panes
+}
+
+// liveness answers rigSession.live for a batch of rigs. A backend that can
+// list its session names (mux.SessionNamer) is listed once on first ask;
+// anything else is asked per rig, which for tmux is a cheap has-session.
+type liveness map[string]map[string]bool // surface → live session names
+
+func (l liveness) live(rs rigSession) bool {
+	n, ok := rs.b.(mux.SessionNamer)
+	if !ok {
+		return rs.live()
+	}
+	set, seen := l[rs.b.Surface()]
+	if !seen {
+		set = map[string]bool{}
+		names, _ := n.SessionNames()
+		for _, name := range names {
+			set[name] = true
+		}
+		l[rs.b.Surface()] = set
+	}
+	return set[rs.name]
+}
+
 // eachBackend runs one listing against every given backend at once and
 // returns the answers in backend order. Concurrently because a surface on
 // another host costs a network round trip per call and one that has dropped

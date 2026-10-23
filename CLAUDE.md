@@ -672,6 +672,10 @@ with twenty-odd rigs is about 200 calls a scan, three seconds serially at
 process, but scoping its calls to each session isn't documented yet, so that
 waits.
 
+Until then, batch: every Rex call is a process spawn, so boards go through
+`liveness` and `boardListing` (`mux.SessionNamer`, `mux.Snapshotter`) rather
+than calling `HasSession`, `Sessions`, or `AllPanes` per item.
+
 A tmux server on another host is a surface too (`tmux+ssh://host`), and it's
 the bridge for a host that keeps tmux while this machine lives in Rex. Listing
 is cheap by comparison: one `list-panes -a` over a shared ssh ControlMaster

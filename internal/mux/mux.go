@@ -94,6 +94,25 @@ type Backend interface {
 	AllPanes() ([]Pane, error)
 }
 
+// The two interfaces below are optional, for a backend whose every call is a
+// process spawn. A board asks HasSession once per rig and then Sessions and
+// AllPanes back to back, and on such a backend that's the same session list
+// fetched a dozen times and every session viewed twice. Backends whose calls
+// are cheap needn't bother; callers fall back to the Backend methods.
+
+// SessionNamer lists live session names without describing them, which is
+// all a liveness check needs. ok is false when the server can't be listed,
+// which callers read as nothing live, the way HasSession does.
+type SessionNamer interface {
+	SessionNames() (names []string, ok bool)
+}
+
+// Snapshotter answers Sessions and AllPanes from one pass, exactly as the two
+// would answer separately.
+type Snapshotter interface {
+	Snapshot() ([]Session, []Pane)
+}
+
 // Session is one live session as the radar's universal picker sees it: its
 // name (what you attach to), the working directory the backend reports for it,
 // and when it was last attached (0 if never), so non-rig sessions can sort MRU

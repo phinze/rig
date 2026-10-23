@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -59,7 +60,9 @@ session.view)
     "layout":{"rect":[0,0,1,1],"split":{"direction":"horizontal","ratio":0.5,"before":{"rect":[0,0,0.5,1],"block_id":"block:a"},"after":{"rect":[0.5,0,0.5,1],"block_id":"block:r"}}}}]}]}
 EOF
   exit 0; fi
-  cat <<'EOF'
+  # A radar open over the session leaves its floating layer focused.
+  focus=cat; [ -n "$REX_FAKE_POPUP_FOCUSED" ] && focus="sed s/block:a\",\"layers/block:popup\",\"layers/"
+  $focus <<'EOF'
 {"session_id":"session:1","label":"~-workspaces-alpha","active_window_id":"window:m","windows":[
  {"window_id":"window:m","label":"main/alpha","focused_block_id":"block:a","layers":[
    {"kind":"tiled","blocks":[{"block_id":"block:a","label":"shell"},{"block_id":"block:r","label":"recto"}]},
@@ -649,5 +652,68 @@ func TestLookupFindsRenamedHelper(t *testing.T) {
 				t.Fatalf("Lookup = %q, %v (looked %v), want %q", got, ok, looked, bin)
 			}
 		})
+	}
+}
+
+// Snapshot is Sessions and AllPanes in one pass: the same answer, with one
+// view per session rather than two, and the focused block probed only as a
+// pane unless it's somewhere Panes doesn't look.
+func TestSnapshotMatchesSessionsAndAllPanes(t *testing.T) {
+	log := fakeRex(t)
+	t.Setenv("REX_FAKE_SECOND", "1")
+	b := Backend{MarksDir: t.TempDir()}
+	for _, popup := range []bool{false, true} {
+		if popup {
+			t.Setenv("REX_FAKE_POPUP_FOCUSED", "1")
+		}
+		wantSessions, wantPanes := b.Sessions(), mustPanes(t, b)
+		if err := os.WriteFile(log, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		sessions, panes := b.Snapshot()
+		if !reflect.DeepEqual(sessions, wantSessions) {
+			t.Errorf("popup=%v: sessions = %+v, want %+v", popup, sessions, wantSessions)
+		}
+		if !reflect.DeepEqual(panes, wantPanes) {
+			t.Errorf("popup=%v: panes = %+v, want %+v", popup, panes, wantPanes)
+		}
+		raw, _ := os.ReadFile(log)
+		calls := string(raw)
+		wantProcess := 6 // three tiled blocks in each of two sessions
+		if popup {
+			wantProcess += 2 // and the popup each session has focused
+		}
+		if got := strings.Count(calls, "session.view"); got != 2 {
+			t.Errorf("popup=%v: %d views, want one per session", popup, got)
+		}
+		if got := strings.Count(calls, "terminal.process"); got != wantProcess {
+			t.Errorf("popup=%v: %d process probes, want %d", popup, got, wantProcess)
+		}
+	}
+	if sessions, _ := b.Snapshot(); sessions[0].Path != "/w/x" {
+		t.Errorf("popup-focused session path = %q, want the popup's own cwd as Sessions reports it", sessions[0].Path)
+	}
+}
+
+func mustPanes(t *testing.T, b Backend) []mux.Pane {
+	t.Helper()
+	panes, err := b.AllPanes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return panes
+}
+
+// SessionNames is the one session.list a batch of liveness checks needs.
+func TestSessionNamesIsOneList(t *testing.T) {
+	log := fakeRex(t)
+	t.Setenv("REX_FAKE_SECOND", "1")
+	names, ok := Backend{MarksDir: t.TempDir()}.SessionNames()
+	if !ok || !reflect.DeepEqual(names, []string{"~-workspaces-alpha", "~-workspaces-beta"}) {
+		t.Errorf("SessionNames = %v, %v", names, ok)
+	}
+	raw, _ := os.ReadFile(log)
+	if got := strings.Count(string(raw), "\n"); got != 1 {
+		t.Errorf("%d calls, want one session.list:\n%s", got, raw)
 	}
 }

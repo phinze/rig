@@ -2021,3 +2021,19 @@ func TestPaintBackgroundFillsEveryCell(t *testing.T) {
 		t.Error("an unparseable colour should leave the frame untouched")
 	}
 }
+
+// A tick that lands while the last local scan is still out skips the scan
+// rather than stacking another hundred Rex calls behind it.
+func TestRadarTickSkipsAScanStillOut(t *testing.T) {
+	m := radarModel{}
+	if m.localScan() == nil || !m.scanBusy {
+		t.Fatal("first scan should start and mark busy")
+	}
+	if m.localScan() != nil {
+		t.Error("second scan started while the first was out")
+	}
+	next, _ := m.Update(radarScanMsg{})
+	if next.(radarModel).scanBusy {
+		t.Error("a scan's answer should clear busy")
+	}
+}

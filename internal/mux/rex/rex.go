@@ -1198,6 +1198,12 @@ func (b Backend) panes(session, only string) ([]mux.Pane, error) {
 	if err != nil {
 		return nil, err
 	}
+	return b.panesOf(session, v, only), nil
+}
+
+// panesOf is panes from a view already in hand, so Snapshot can describe a
+// session's panes and its path from the one view.
+func (b Backend) panesOf(session string, v sessionView, only string) []mux.Pane {
 	marks := b.readMarks(session)
 	var panes []mux.Pane
 	for wi, w := range v.Windows {
@@ -1237,7 +1243,7 @@ func (b Backend) panes(session, only string) ([]mux.Pane, error) {
 		}
 		p.Title = b.title(session, p.PaneID)
 	})
-	return panes, nil
+	return panes
 }
 
 // AllPanes is Panes over every session. Nil when the server isn't reachable,
@@ -1256,6 +1262,67 @@ func (b Backend) AllPanes() ([]mux.Pane, error) {
 		out = append(out, panes...)
 	}
 	return out, nil
+}
+
+// SessionNames is the session list alone, one call where HasSession per rig
+// would make one each.
+func (b Backend) SessionNames() ([]string, bool) {
+	sessions, err := b.listSessions()
+	if err != nil {
+		return nil, false
+	}
+	names := make([]string, len(sessions))
+	for i, s := range sessions {
+		names[i] = s.Name
+	}
+	return names, true
+}
+
+// Snapshot is Sessions and AllPanes from one session list and one view per
+// session. Separately they view every session twice and probe each session's
+// focused block twice, once for its path and again as a pane. The focused
+// block is probed on its own only when it isn't a tiled pane, which is the
+// popup's own layer while a radar is open over that session.
+func (b Backend) Snapshot() ([]mux.Session, []mux.Pane) {
+	sessions, err := b.listSessions()
+	if err != nil {
+		return nil, nil
+	}
+	out := make([]mux.Session, len(sessions))
+	per := make([][]mux.Pane, len(sessions))
+	each(len(sessions), func(i int) {
+		s := sessions[i]
+		out[i] = mux.Session{Surface: b.Surface(), Name: s.Name}
+		v, err := b.view(s.Name)
+		if err != nil {
+			return
+		}
+		per[i] = b.panesOf(s.Name, v, "")
+		out[i].Path = b.focusedPath(s.Name, v, per[i])
+	})
+	var panes []mux.Pane
+	for _, ps := range per {
+		panes = append(panes, ps...)
+	}
+	return out, panes
+}
+
+// focusedPath is sessionPath answered from panes already probed where it can be.
+func (b Backend) focusedPath(session string, v sessionView, panes []mux.Pane) string {
+	for _, w := range v.Windows {
+		if w.WindowID != v.ActiveWindowID || w.FocusedBlock == "" {
+			continue
+		}
+		for _, p := range panes {
+			if p.PaneID == w.FocusedBlock {
+				return p.Path
+			}
+		}
+		if p, err := b.process(session, w.FocusedBlock); err == nil && p.Foreground != nil {
+			return p.Foreground.Cwd
+		}
+	}
+	return ""
 }
 
 // Installed reports whether the CLI can be run at all. The backend is

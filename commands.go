@@ -411,6 +411,7 @@ func rigStatuses(rigs []rigInfo, home string, now time.Time) []rigStatus {
 		paths[i] = rigs[i].Path
 	}
 	activity := agentSessionActivities(home, paths)
+	live := liveness{}
 	for _, r := range rigs {
 		repos := make([]rigRepo, 0, len(r.Repos))
 		for _, nwo := range r.Repos {
@@ -433,7 +434,7 @@ func rigStatuses(rigs []rigInfo, home string, now time.Time) []rigStatus {
 			Building:    r.Building,
 			Backend:     r.Backend,
 			Location:    "local", // rigs are local by construction; see surface.go and PERS-17
-			SessionLive: r.session().live(),
+			SessionLive: live.live(r.session()),
 		}
 		if ts := activity[r.Path]; ts > 0 {
 			t := time.Unix(ts, 0)

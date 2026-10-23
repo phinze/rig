@@ -227,3 +227,85 @@ func sessionsNamed(names ...string) []mux.Session {
 	}
 	return out
 }
+
+// namingBackend is fakeBackend with a names-only listing, counting what the
+// liveness batch asks of it.
+type namingBackend struct {
+	*fakeBackend
+	listed, probed int
+}
+
+func (n *namingBackend) SessionNames() ([]string, bool) {
+	n.listed++
+	var names []string
+	for _, s := range n.sessions {
+		names = append(names, s.Name)
+	}
+	return names, true
+}
+
+func (n *namingBackend) HasSession(name string) bool {
+	n.probed++
+	return n.fakeBackend.HasSession(name)
+}
+
+// On a backend where every call is a process, asking each rig whether its
+// session is live would list every session once per rig. A batch lists once
+// and answers every rig from the one list.
+func TestLivenessListsOncePerBackend(t *testing.T) {
+	b := &namingBackend{fakeBackend: &fakeBackend{name: "fake", sessions: []mux.Session{{Name: "alpha"}, {Name: "beta"}}}}
+	l := liveness{}
+	got := map[string]bool{}
+	for _, name := range []string{"alpha", "beta", "gamma"} {
+		got[name] = l.live(rigSession{name: name, b: b})
+	}
+	if !got["alpha"] || !got["beta"] || got["gamma"] {
+		t.Errorf("liveness = %v, want alpha and beta live, gamma not", got)
+	}
+	if b.listed != 1 || b.probed != 0 {
+		t.Errorf("listed %d times and probed %d, want one list and no probes", b.listed, b.probed)
+	}
+}
+
+// boardListing takes a backend's snapshot when it has one, and otherwise
+// lists sessions and panes the ordinary way.
+type snapshotBackend struct {
+	*fakeBackend
+	snapped int
+}
+
+func (s *snapshotBackend) Snapshot() ([]mux.Session, []mux.Pane) {
+	s.snapped++
+	return s.sessions, s.panes
+}
+
+func (s *snapshotBackend) Sessions() []mux.Session {
+	panic("boardListing should snapshot rather than list sessions")
+}
+
+func TestBoardListingPrefersASnapshot(t *testing.T) {
+	snap := &snapshotBackend{fakeBackend: &fakeBackend{
+		name:     "snap",
+		sessions: []mux.Session{{Surface: "snap", Name: "s1"}},
+		panes:    []mux.Pane{{Surface: "snap", Session: "s1", PaneID: "p1"}},
+	}}
+	plain := &fakeBackend{
+		name:     "plain",
+		sessions: []mux.Session{{Surface: "plain", Name: "s2"}},
+		panes:    []mux.Pane{{Surface: "plain", Session: "s2", PaneID: "p2"}},
+	}
+	sessions, panes := boardListing([]mux.Backend{snap, plain})
+	if snap.snapped != 1 {
+		t.Errorf("snapshot taken %d times, want once", snap.snapped)
+	}
+	var names, ids []string
+	for _, s := range sessions {
+		names = append(names, s.Name)
+	}
+	for _, p := range panes {
+		ids = append(ids, p.PaneID)
+	}
+	if !slices.Equal(names, []string{"s1", "s2"}) || !slices.Equal(ids, []string{"p1", "p2"}) {
+		t.Errorf("listing = sessions %v panes %v, want both backends in order", names, ids)
+	}
+}

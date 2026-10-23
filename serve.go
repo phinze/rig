@@ -210,23 +210,19 @@ func buildServeDoc(home string, backends []mux.Backend) serveDoc {
 			})
 		}
 	}
-	for _, s := range allSessions(backends) {
+	sessions, panes := boardListing(backends)
+	for _, s := range sessions {
 		doc.Sessions = append(doc.Sessions, serveSession{Kind: surfaceKind(s.Surface), Name: s.Name, Path: s.Path, LastAttached: s.LastAttached})
 	}
-	for _, ps := range eachBackend(backends, func(b mux.Backend) []mux.Pane {
-		ps, _ := b.AllPanes()
-		return ps
-	}) {
-		for _, p := range ps {
-			if !isAgentPane(p) {
-				continue
-			}
-			doc.Panes = append(doc.Panes, servePane{
-				Kind: surfaceKind(p.Surface), Session: p.Session,
-				WindowIdx: p.WindowIdx, WindowName: p.WindowName, Target: p.Target,
-				Command: p.Command, Path: p.Path, Title: p.Title, Activity: p.Activity,
-			})
+	for _, p := range panes {
+		if !isAgentPane(p) {
+			continue
 		}
+		doc.Panes = append(doc.Panes, servePane{
+			Kind: surfaceKind(p.Surface), Session: p.Session,
+			WindowIdx: p.WindowIdx, WindowName: p.WindowName, Target: p.Target,
+			Command: p.Command, Path: p.Path, Title: p.Title, Activity: p.Activity,
+		})
 	}
 	return doc
 }

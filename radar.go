@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -316,6 +317,10 @@ type radarModel struct {
 	remote     radarRemoteMsg
 	remoteBusy bool
 
+	// scanBusy is remoteBusy for the local scan, which on Rex is a hundred-odd
+	// CLI calls and can run long enough under load for ticks to stack.
+	scanBusy bool
+
 	// iso peers, keyed by resolved workspace, on the same off-render clock as
 	// the remote pass: docker answers in milliseconds, but a wedged daemon must
 	// never hold the first frame.
@@ -396,7 +401,8 @@ func radarRemoteCmd() tea.Cmd {
 		}
 		now := time.Now()
 		touchRadarHeartbeat(now)
-		msg := radarRemoteMsg{sessions: allSessions(listed), agents: liveAgentChildren(listed)}
+		sessions, panes := boardListing(listed)
+		msg := radarRemoteMsg{sessions: sessions, agents: agentChildren(panes, time.Now().Unix())}
 		ask := msg.addCached(served, loadRemoteCache(), now, false)
 		answers := pollServed(ask, now, true) // a radar is open: this one
 		for _, b := range ask {
@@ -468,6 +474,15 @@ func radarPeersCmd() tea.Cmd {
 	}
 }
 
+// localScan starts a local scan unless one is still out.
+func (m *radarModel) localScan() tea.Cmd {
+	if m.scanBusy {
+		return nil
+	}
+	m.scanBusy = true
+	return radarScanCmd(m.home)
+}
+
 // peersScan starts a peers pass unless one is still out.
 func (m *radarModel) peersScan() tea.Cmd {
 	if m.peersBusy {
@@ -522,13 +537,18 @@ func radarScanNow(home string) radarScanMsg {
 	// board already paid. Only this machine's own backends are asked here:
 	// this scan runs before the first frame, and a surface elsewhere costs a
 	// network round trip per call, so those arrive separately (radarRemoteCmd).
-	local := localBackends()
-	sessions := allSessions(local)
+	// The rig statuses and the listing are independent, and on Rex each is a
+	// batch of CLI calls, so they overlap rather than queue.
+	var statuses []rigStatus
+	var wg sync.WaitGroup
+	wg.Go(func() { statuses = rigStatuses(rigs, home, time.Now()) })
+	sessions, panes := boardListing(localBackends())
+	wg.Wait()
 	return radarScanMsg{
-		statuses: rigStatuses(rigs, home, time.Now()),
+		statuses: statuses,
 		sessions: sessions,
 		attached: attachedTimes(sessions),
-		agents:   liveAgentChildren(local),
+		agents:   agentChildren(panes, time.Now().Unix()),
 		portals:  portalSessions(),
 		stones:   tombstoneRows(time.Now()),
 	}
@@ -872,7 +892,7 @@ func (m radarModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 
 	case radarTickMsg:
-		return m, tea.Batch(radarScanCmd(m.home), m.remoteScan(), m.peersScan(), radarTickCmd())
+		return m, tea.Batch(m.localScan(), m.remoteScan(), m.peersScan(), radarTickCmd())
 
 	case radarPeersMsg:
 		m.peersBusy = false
@@ -892,6 +912,7 @@ func (m radarModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case radarScanMsg:
+		m.scanBusy = false
 		m.apply(msg)
 		// A rig created (or parked) while the radar is open gets its PR
 		// fetch on the scan that first sees it.
@@ -927,6 +948,8 @@ func (m radarModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.actionErr = nil
 		m.applyParked(msg.path, msg.parked)
+		// Unconditional: a scan already out may predate the park.
+		m.scanBusy = true
 		return m, radarScanCmd(m.home)
 
 	case radarLeaveCheckMsg:
