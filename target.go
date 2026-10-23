@@ -10,8 +10,8 @@ import (
 )
 
 // A target is the rig a verb acts on, wherever it lives. Resolution is local
-// first, so every query that worked before this file existed means exactly
-// what it meant, and a rig on another host is reached two ways: by a query
+// first, so a query that matches a rig here always means that rig, and a rig
+// on another host is reached two ways: by a query
 // nothing here matches, or by naming the place outright (`mir-12@foxtrotbase`).
 // The second is how you reach past a local rig that shares an id, which local
 // always wins: a review rig for the same PR on two hosts, say.

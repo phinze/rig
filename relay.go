@@ -27,11 +27,8 @@ var relayDeliver = deliverRigMessage
 // connect the discovery to sibling issues and draft the durable external
 // update with a human in the loop.
 //
-// It used to post to the notify store, which reached the project agent only
-// when it next read `rig project status`, so a discovery could sit unread for
-// a day. Delivery now lands at the agent's next turn boundary and fails loudly
-// when the project rig isn't running, which is the answer the task agent
-// needs to hear rather than a note filed where nobody is looking.
+// Delivery lands at the agent's next turn boundary and fails loudly when the
+// project rig isn't running, which is the answer the task agent needs to hear.
 func runRelay(args []string) error {
 	message := strings.TrimSpace(strings.Join(args, " "))
 	if message == "" {

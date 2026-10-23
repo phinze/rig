@@ -1037,19 +1037,6 @@ and leaves the choice where it belongs.
   judgment can tell them apart; a review rig with no review from you yet stays
   put (and `--force` still overrides).
 
-## Next actions
-
-The prototype-and-port plan is spent; rig is the Go tool now, so what's
-left is growth on the built base:
-
-1. `rig radar` (above) — the live-TUI switcher, first replacing ilmari on
-   rigs, later absorbing plain tmux sessions so it becomes the one board.
-2. Fold `rig sweep`'s ladder back into the radar as per-row verbs, so the
-   board can advance the row you're looking at instead of only switching
-   to it.
-3. Sand off the open questions still open (sandbox primitive) as real use
-   pushes on them.
-
 ## Related
 
 - `nix-config/home-manager/phinze/fish-functions/jpickup.fish` — the

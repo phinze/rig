@@ -68,7 +68,7 @@ func (b servedBackend) Endpoint() string { return b.URL }
 //
 // When the host can't show it (no Rex there, no app connected, an older rig)
 // and this machine can host a portal, it falls back to one here, tmux over
-// ssh, the way every remote row used to be entered.
+// ssh.
 func (b servedBackend) Attach(target string) error {
 	adoptLocalPortal()
 	err := b.show(target)

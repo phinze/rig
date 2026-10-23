@@ -39,8 +39,7 @@ func TestAuthorizeElevationRefusesWhatTheJobDoesNotOwn(t *testing.T) {
 		// case is about the scope check, and it only reaches it if the path is
 		// a real directory. /etc is a symlink on macOS, so Lstat refuses it as
 		// "not a directory" one check earlier and the case silently stops
-		// testing what it was written for — which is how it broke the darwin
-		// build while staying green on Linux.
+		// testing what it was written for.
 		{"an absolute path elsewhere", "/", "outside everything this teardown owns"},
 		{"a relative path", "runtime/bin", "non-absolute"},
 		{"an empty path", "", "non-absolute"},

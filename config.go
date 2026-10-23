@@ -31,9 +31,8 @@ const configName = "config.toml"
 
 // surfacesName is the [surfaces] table's second home, one rig only ever reads.
 // config.toml is rewritten whole by every `rig config` write, so nothing else
-// can own it, and a machine wipe that took it took every surface with it (the
-// 2026-09-28 one did). This file is for a config manager like home-manager to
-// own instead. It's read with the same parser, and only its [surfaces] table
+// can own it. This file is for a config manager like home-manager to own
+// instead. It's read with the same parser, and only its [surfaces] table
 // counts.
 const surfacesName = "surfaces.toml"
 

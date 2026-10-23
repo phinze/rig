@@ -221,12 +221,10 @@ func pickupPrompt(tk task, hasContext bool) string {
 // other channel to the task agent until it's running. A terminal on stdin means
 // nothing was piped.
 //
-// The flag wins outright and stdin is never read when it's given. It used to
-// read both, and an agent's shell tool can hand rig a stdin that isn't a
-// terminal but is a pipe nobody ever closes, so `rig up X --context ...` from
-// one hung forever in ReadAll before creating anything. Not-a-tty can't tell a
-// pipe that's coming from one that never will; the flag is the caller saying
-// which it meant.
+// The flag wins outright and stdin is never read when it's given. An agent's
+// shell tool can hand rig a stdin that isn't a terminal but is a pipe nobody
+// ever closes, and not-a-tty can't tell that from a pipe with data coming; the
+// flag is the caller saying which it meant.
 func resolveUpContext(flag string) (string, error) {
 	if flag = strings.TrimSpace(flag); flag != "" || stdinIsTTY() {
 		return flag, nil
@@ -343,9 +341,8 @@ func extractValueFlag(args []string, name string) (value string, rest []string) 
 // create path when nothing matched — or when what matched is a rig whose own
 // create was interrupted, which it hands back as unfinished rather than
 // entering. Attaching to one of those cannot work (there is no workspace for a
-// session to start in) and it is the retry that would have fixed it, so
-// claiming the id here is what used to make the failure permanent: every
-// `rig up MIR-1564` reported "already up" and then died in ensureRigRuntime.
+// session to start in) and the retry is what fixes it, so claiming the id here
+// would make the failure permanent.
 // Session-stand-up-and-attach mirrors wake/switch.
 func attachExistingRig(rigID string) (done bool, unfinished *rigInfo, err error) {
 	rigs, err := listRigs()

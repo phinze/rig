@@ -27,7 +27,7 @@ const boardPRTTL = time.Minute
 // enrichBoardLocal fills the facts that need no network: each repo's branches
 // and whether it holds unaccounted work, plus the rig's tracker links. One rig
 // with a broken workspace must not blank the whole board, so every read here is
-// degrade-quiet — see the mir-822 note on rigDirtyRepos. No PRs: the cheap tier
+// degrade-quiet. No PRs: the cheap tier
 // leaves rigStatus.PRs nil, which the encoder renders as null per repo.
 func enrichBoardLocal(statuses []rigStatus) {
 	peers := boardPeers()

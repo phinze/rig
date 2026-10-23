@@ -352,8 +352,8 @@ func TestTeardownQuarantinesBeforeRemoval(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 
 	// A rig that built anything under Go's module cache leaves directories
-	// stamped 0555. They used to strand teardown outright; now they are the
-	// ordinary case and must go away on the first pass.
+	// stamped 0555. That's the ordinary case, and it must go away on the
+	// first pass.
 	t.Run("read-only build output does not strand teardown", func(t *testing.T) {
 		root := t.TempDir()
 		basedir := filepath.Join(root, "rig")

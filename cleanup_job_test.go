@@ -92,12 +92,10 @@ func TestSupersededJobCleansOnlyItsOwnTrash(t *testing.T) {
 	}
 }
 
-// Trash whose directories deny their own owner write access is the shape that
-// stranded every teardown job rig has ever accumulated, and it needs no
-// privilege at all: a rig that populated GOMODCACHE leaves thousands of 0555
-// directories full of files we own. This used to be diagnosed as root-owned
-// container output and handed to the operator with a note about sudo, which
-// sent them after an elevation they never needed.
+// Trash whose directories deny their own owner write access needs no privilege
+// at all: a rig that populated GOMODCACHE leaves thousands of 0555 directories
+// full of files we own. Removal restores the write bit itself rather than
+// treating it as somebody else's files.
 func TestQuarantineRemovalRepairsOwnReadOnlyDirs(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("running as root, which can unlink anything")

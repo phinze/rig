@@ -23,19 +23,16 @@ import (
 )
 
 // runRadar is the live board over everything rig knows: switch and waiting
-// folded into one TUI, meant to live in a tmux popup on ilmari's old prefix-i
-// slot. It renders immediately from local state (sessions, agent recency, park
-// stamps), then fires the same per-branch gh fan-out ls --full uses and fills
-// the PR/review cells in as they land. Local state re-ticks every couple
-// seconds on top, so a rig going hot updates while you're looking at it.
+// folded into one TUI, meant to live in a popup. It renders immediately from
+// local state (sessions, agent recency, park stamps), then fires the same
+// per-branch gh fan-out ls --full uses and fills the PR/review cells in as
+// they land. Local state re-ticks every couple seconds on top, so a rig going
+// hot updates while you're looking at it.
 //
 // Enter does the right thing per row so you never pick a verb: a live rig
 // switches after repairing its carousel when needed, and a parked one wakes.
-// The popup inherits $TMUX, so switch-client from inside it moves the
-// underlying client, and the -E popup tears down as we exit.
 //
-// It doubles as the universal picker that replaces tmux-session-wizard: the
-// hosting session appears first as non-selectable context, then other live rigs
+// It doubles as the universal session picker: the hosting session appears first as non-selectable context, then other live rigs
 // and non-rig tmux sessions share an MRU section, with review-priority parked
 // rigs below. Each parent dangles its live agent windows as a HUD of what's in
 // flight. You just type to fuzzy-filter, with verbs on modifier keys so they
@@ -48,8 +45,8 @@ import (
 // is running in. ctrl+x opens a small leave menu instead — p parks, d tears
 // down — that arms "do this once I've landed", and the next Enter (or a rig
 // born from ctrl+n) picks where to land. The verb runs after the client has
-// switched away, which is the order `rig park` and `rig down` already use from
-// inside a rig. Down runs its teardown gate when armed, not when applied, so a
+// switched away, the same order `rig park` and `rig down` use from inside a
+// rig. Down runs its teardown gate when armed, not when applied, so a
 // refusal lands in the popup where you can read it rather than in a terminal
 // you've just left.
 func runRadar(args []string) error {
@@ -244,10 +241,7 @@ func radarPrepare(s rigStatus) (rigStatus, error) {
 
 // openRadarPopup shows the radar in a popup over the session the caller is
 // inside, on whichever backend that is. It exists so a keybinding has one
-// thing to run in either multiplexer: tmux's leader-r used to spell out
-// display-popup itself, and Rex has no keybindings yet, so the thing that
-// eventually triggers it (a global hotkey, a Rex bind) shouldn't need to know
-// how a popup is made.
+// thing to run in either multiplexer and needn't know how a popup is made.
 func openRadarPopup() error {
 	b, session := currentSession()
 	if b == nil {

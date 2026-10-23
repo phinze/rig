@@ -124,8 +124,7 @@ func runSweep(args []string) error {
 // means this rig wants nothing today.
 //
 // Wake and park are both `setRigParked` and both reversible with one command,
-// which is why a batch pass is allowed to run them. They used to be one
-// display-only rung ("wake needs a human"), but what needs the human is the
+// which is why a batch pass is allowed to run them. What needs a human is the
 // review verdict, not the session rebuild: a rig parked on review is a promise
 // that the verdict brings it back, and a rig idling live with its PR out is
 // exactly what park is for.
@@ -435,7 +434,7 @@ func rigDirtyRepos(basedir string, m manifest, prs []rigPR) []string {
 		}
 		beyond, err := jjRevsetEmpty(ws, strings.Join(clauses, " & "))
 		// A workspace jj can't read is a state worth naming, not one to silently
-		// call clean — mir-822 sat broken for days looking tidy.
+		// call clean.
 		if err != nil {
 			dirty = append(dirty, sub+"?")
 			continue

@@ -261,7 +261,7 @@ type rigStatus struct {
 	// session at all. parked | building | stopped | working | idle.
 	State string `json:"state"`
 	// Location is where the rig lives. Rigs are local by construction; see
-	// surface.go and PERS-17. Present so a remote rig has somewhere to land.
+	// surface.go. Present so a remote rig has somewhere to land.
 	Location string `json:"location"`
 	// Repos is the local repo facts. It is tagged out of the wire shape and
 	// re-added as `repos` on rigRowJSON, which nests each repo's PRs; see
@@ -369,8 +369,8 @@ type rigRepo struct {
 	// reads as WIP — conservative on purpose.
 	WIP bool `json:"wip"`
 	// WIPUncertain marks the "sub?" case: jj couldn't read the workspace, so
-	// even the existence of work is a guess (the mir-822 lesson — name a broken
-	// state rather than silently reporting clean).
+	// even the existence of work is a guess, and a broken state is named rather
+	// than reported clean.
 	WIPUncertain bool `json:"wipUncertain,omitempty"`
 	// Peers is the repo's iso peer containers (`iso peers up`), running or
 	// not, read from iso's docker labels. Absent when there are none or

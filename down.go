@@ -204,12 +204,10 @@ func handoffWithoutRigLock(lock *rigLock, handoff func() (bool, error)) (bool, e
 // switches the client to the selected destination, and gives the caller
 // permission to continue. Commands run elsewhere need no rescue.
 //
-// A caller inside the doomed session with no terminal is refused outright. It
-// used to proceed without the picker, which "worked" by killing the caller: an
-// agent running `rig park` from its shell tool parked the rig and died mid-turn
-// on an unanswered call, and the client was thrown wherever tmux felt like.
-// Nothing legitimately wants that, and the radar's leave menu is the way to do
-// it with a landing spot chosen.
+// A caller inside the doomed session with no terminal is refused outright:
+// going ahead would kill the caller (typically an agent's shell tool, mid-turn)
+// and leave the client wherever the multiplexer put it. The radar's leave menu
+// is the way to do it with a landing spot chosen.
 func sessionExitHandoff(inExitingSession bool) (bool, error) {
 	if !inExitingSession {
 		return true, nil

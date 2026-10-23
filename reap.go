@@ -12,16 +12,11 @@ import (
 // state. It retries teardown jobs a previous `down` or `sweep` left stranded,
 // then stops the tmux and iso scopes of rigs that are already gone.
 //
-// It deliberately does not decide which rigs should stop existing. That
-// judgment used to live here behind a 24h idle window, and it could not work:
-// rigTeardownBlocker reasons entirely in commits, branches, and PR states, so
-// a rig that produced none of those — a long exploration, a planning session,
-// anything whose whole value is the agent conversation it carries — was
-// indistinguishable from one whose work had shipped and merged. Both read as
-// "no PR, clean tree", and the nightly pass silently collected them at 3am
-// with nobody looking. `rig sweep` asks the same question with the row in
-// front of a human, which is the only way it can be asked safely; see
-// sweepCollectable, which already refuses to pre-check exactly this case.
+// It deliberately does not decide which rigs should stop existing.
+// rigTeardownBlocker reasons in commits, branches, and PR states, so a rig
+// whose whole value is its agent conversation reads exactly like one whose
+// work has merged. Only `rig sweep`, with the row in front of a human, can ask
+// that safely; see sweepCollectable.
 func runReap(args []string) error {
 	dryRun := false
 	for _, arg := range args {

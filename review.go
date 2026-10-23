@@ -493,11 +493,8 @@ type reviewCandidate struct {
 // that made it; and a PR you have already picked up should say so rather than
 // look like fresh work.
 //
-// Rows are marked rather than removed. The picker used to subtract the PRs it
-// had rigs for, which meant a busy week ended at "all open PRs awaiting your
-// review already have rigs in flight" — a dead end whose one useful action,
-// going to one of those rigs, was the thing it had just hidden. Selecting a
-// marked row lands in the existing rig by way of attachExistingReviewRig, which
+// Rows are marked rather than removed, since hiding a PR that has a rig would
+// hide the one useful action on it: going to that rig. Selecting a marked row lands in the existing rig by way of attachExistingReviewRig, which
 // the caller already runs on every pick.
 //
 // Returns nil (no error) when the picker is cancelled.

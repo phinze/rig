@@ -24,20 +24,10 @@ var commandNames = func() []string {
 // They join the prefix namespace rather than sitting beside it, so `rig cd`
 // and `rig c` both reach switch.
 //
-// `c` is spelled out rather than left to the prefix pass because it used to
-// work by accident: nothing else began with that letter, so `c` abbreviated
-// `cd`. Adding config would have made it ambiguous and quietly broken a
-// working abbreviation, so it's pinned here instead — an exact alias match
-// resolves before the prefix pass runs, which is what keeps config from
-// contesting a letter it never had.
-//
-// `a` and `ad` are pinned for the same reason and by the same precedent: both
-// abbreviated add until adopt arrived, and a new command must never steal a
-// spelling that already worked. Adopt is the newcomer, so it pays the cost and
-// starts at `ado`.
-//
-// `co` is the same story a third time: it abbreviated config until cos
-// arrived, so it stays config's and cos is reached by its full name.
+// An alias also pins an abbreviation to the command it already meant, since an
+// exact alias match resolves before the prefix pass. That's how a new command
+// avoids stealing a spelling that works: `c` stays switch, `a` and `ad` stay
+// add, and `co` stays config.
 var commandAliases = map[string]string{
 	"cd": "switch", "c": "switch",
 	"a": "add", "ad": "add",

@@ -56,10 +56,8 @@ func (b Backend) remote() bool { return b.Host != "" }
 // connect timeout. BatchMode because nobody is there to answer a prompt.
 //
 // ControlPersist is long because the radar is a fresh process per popup: a
-// master that expired between popups meant a new connection, and a new ssh
-// agent approval, nearly every time you opened it. Thirty idle minutes is
-// one approval per working stretch. It's a stopgap; PERS-20 is the non-ssh
-// link that makes listing not need ssh at all.
+// master that expires between popups costs a new connection and a new ssh
+// agent approval. Thirty idle minutes is one approval per working stretch.
 var sshOptions = []string{
 	"-o", "BatchMode=yes",
 	"-o", "ConnectTimeout=3",

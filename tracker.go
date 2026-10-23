@@ -121,13 +121,11 @@ func runIssueRows(args []string) error {
 	return nil
 }
 
-// issueRows renders the picker's rows for one source and query. Because fzf
-// runs this on a keypress, a lookup failure can't go to stderr without
-// splatting over the UI; it used to yield no rows at all, which made a tracker
-// outage indistinguishable from having nothing to pick up. It now yields one
-// row with the error where the rows would be: a blank identifier (so
-// parseIssueSelection knows to refuse it), the state `error`, and the message
-// as the title.
+// issueRows renders the picker's rows for one source and query. fzf runs this
+// on a keypress, so a lookup failure can't go to stderr without splatting over
+// the UI, and no rows at all would read as nothing to pick up. A failure is one
+// row where the rows would be: a blank identifier (so parseIssueSelection knows
+// to refuse it), the state `error`, and the message as the title.
 func issueRows(source taskSource, query string) string {
 	cands, err := fetchSourceIssues(source, query, 25)
 	if err != nil {

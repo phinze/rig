@@ -962,12 +962,10 @@ exit 1
 	})
 }
 
-// TestReap pins reap's post-judge contract: it is a janitor, not an executioner.
-// The rig it builds is precisely the shape the old nightly pass used to collect
-// — nothing off trunk, no WIP, no PR on record — which is also precisely the
-// shape of a rig whose entire value is the agent conversation it carries. Reap
-// must leave it standing at any age, and the idle knob it used to be judged by
-// must be gone rather than merely defaulted to something safer.
+// TestReap pins reap's contract: it is a janitor, not an executioner. The rig it
+// builds has nothing off trunk, no WIP, and no PR on record, which is also the
+// shape of a rig whose entire value is its agent conversation. Reap must leave
+// it standing at any age, and must have no idle knob to judge it by.
 func TestReap(t *testing.T) {
 	realTmux, err := exec.LookPath("tmux")
 	if err != nil {
@@ -1330,9 +1328,7 @@ func mustRun(t *testing.T, dir string, env []string, name string, args ...string
 
 // rectoStub stands in for recto in a pane: it hangs so the pane stays open, but
 // answers `recto state forget` at once, since teardown runs that inline and
-// would otherwise wait on the pane command forever. It used to hang there too
-// and nobody noticed, because every e2e ran with the developer's TMUX inherited
-// and `rig down` took the detached-worker path, where the wait was invisible.
+// would otherwise wait on the pane command forever.
 const rectoStub = "#!/bin/sh\nif [ \"$1\" = state ]; then exit 0; fi\nexec sleep infinity\n"
 
 func mustOutput(t *testing.T, dir string, env []string, name string, args ...string) string {

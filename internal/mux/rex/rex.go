@@ -267,9 +267,8 @@ func (b Backend) HasSession(name string) bool {
 
 // A session's label is not rig's to keep. Rex's agent hook tells every agent
 // it starts to `rex session rename` its session as soon as it knows what the
-// work is, and the app renames on a double-click, so a rig that found its
-// session by label lost it within seconds of creating it: its own host drew it
-// stopped and refused to show it. The id Rex mints never changes, so rig
+// work is, and the app renames on a double-click, so a label can change within
+// seconds of rig creating the session. The id Rex mints never changes, so rig
 // records it under the name it created the session with, addresses the
 // session by that id, and reports it by that name whatever the label says now.
 // The label is only the fallback for a session rig didn't make, or made before

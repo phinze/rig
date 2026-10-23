@@ -64,7 +64,7 @@ func readLines(t *testing.T, path string) []string {
 	return strings.Fields(strings.ReplaceAll(string(b), "\t", " "))
 }
 
-// The mir-1979 shape: iso stop has run, the services are gone, and the peers
+// After iso stop: it has run, the services are gone, and the peers
 // network is still there. Teardown finishes it. A resource another workspace
 // made under the same session name is not this rig's and stays.
 func TestRemoveISOLeftoversFinishesWhatStopLeft(t *testing.T) {
@@ -164,7 +164,7 @@ func discoveryDocker(t *testing.T, byKind map[string][]string) {
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
-// The mir-1994 shape: rig only knows dev-<id>-<sub>, but an agent ran a
+// Rig only knows dev-<id>-<sub>, but an agent may run a
 // test- session from the same workspace. Discovery finds every session by
 // where it ran, from whichever kind of resource is left (a session whose
 // containers are already gone still has volumes), and ignores other rigs.

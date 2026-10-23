@@ -42,17 +42,14 @@ func envExports(cwd string) []string {
 //
 // GH_REPO is unset rather than exported. Workspaces are colocated, so gh reads
 // the repo from cwd's git remote like it would in any checkout. An exported
-// GH_REPO was worse than none: an agent keeps the value from the directory it
-// started in, so one that later ran gh from a second repo in the same rig
-// aimed at the first. The PATH_rm clears the gh shim that used to patch over
-// that from shells in older rigs that still have it.
+// GH_REPO would be worse than none: an agent keeps the value from the directory
+// it started in, so gh run later from a second repo in the same rig would aim
+// at the first. The PATH_rm clears a gh shim that older rigs' shells may carry.
 //
-// Deliberately absent: the rig's agent. Every other key here exists because
-// something downstream reads it — a dev server wants RIG_PORT, iso wants
-// ISO_SESSION — and nothing ever read RIG_AGENT. What it did instead was collide with the input side: parseAgent reads that same name
-// to seed the picker, so a rig quietly made its own agent the starting position
-// for the next rig you created from inside it. RIG_AGENT is now yours alone,
-// a standing preference set in your shell, and rig only reads it.
+// Deliberately absent: the rig's agent. Every key here exists because something
+// downstream reads it (a dev server wants RIG_PORT, iso wants ISO_SESSION).
+// RIG_AGENT is an input: parseAgent reads it to seed the picker, so exporting
+// it would make a rig's agent the default for the next rig created inside it.
 func rigExports(basedir, cwd string) []string {
 	m, err := readManifest(basedir)
 	if err != nil {

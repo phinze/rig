@@ -92,9 +92,7 @@ func captureRigRuntimeHints(basedir string, m *manifest, refreshSession bool) {
 	// Only replace the recorded main repo with one we actually found. A rig
 	// whose create was interrupted has no workspace on disk to fall back to, and
 	// blanking the field there destroys the only surviving record of which repo
-	// it was being built around — while running on the very path that is
-	// supposed to be repairing it. Each failed retry used to make the rig a
-	// little less recoverable.
+	// it was being built around, on the very path meant to repair it.
 	if m.MainRepo == "" || m.Repos[m.MainRepo] == "" {
 		if repo := firstRigRepo(basedir, *m); repo != "" {
 			m.MainRepo = repo

@@ -147,8 +147,8 @@ func defaultBackendWithSource() (name string, src agentSource, raw string) {
 
 // rigSession is one rig's session together with the multiplexer hosting it.
 // The two travel as a pair because a session name alone is ambiguous on a
-// machine with two multiplexers, and every command that used to hold the bare
-// string now holds this.
+// machine with two multiplexers, so commands hold this rather than the bare
+// string.
 type rigSession struct {
 	name string
 	b    mux.Backend

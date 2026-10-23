@@ -106,8 +106,8 @@ func runningPeers(peers []isoPeer) int {
 // discoverISOSessions finds every iso session that has anything (a container,
 // network, or volume) from a project directory under basedir. Teardown can't
 // derive these from the rig: rig exports dev-<id>-<sub> as ISO_SESSION, but an
-// agent is free to start another, and mir-1994 left a test-mir-1994-runtime
-// running beside its dev session for exactly that reason. iso's own labels
+// agent is free to start another (a test- session beside the dev one, say).
+// iso's own labels
 // answer the question rig can't, whatever the session was called, and they
 // also catch the eph- sessions an interrupted `iso run` leaves behind.
 //
@@ -160,8 +160,7 @@ func mergeISOCleanups(derived, discovered []isoCleanup) []isoCleanup {
 // stop on purpose, so the normal path finds nothing; it exists because iso stop
 // warns and moves on when a network still has endpoints, and `iso peers up`
 // attaches the session's services to a peers network that stop tries to remove
-// before those services are gone. That left runtime-dev-mir-1979-runtime-iso-peers
-// behind on 2026-10-01, and -mir-1827- before it without anyone noticing.
+// before those services are gone.
 //
 // Only session volumes (iso.volume.type=session) are touched. iso stop
 // normally removes those itself; cache volumes are shared across every session
