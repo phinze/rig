@@ -88,6 +88,30 @@ type servePane struct {
 	Path       string `json:"path"`
 	Title      string `json:"title"`
 	Activity   int64  `json:"activity"`
+	// Status is the pane program's own report, absent when it made none. A
+	// host too old to send it leaves the reader on Activity, as tmux does.
+	Status *serveStatus `json:"status,omitempty"`
+}
+
+type serveStatus struct {
+	State   string `json:"state"`
+	Kind    string `json:"kind,omitempty"`
+	Msg     string `json:"msg,omitempty"`
+	Updated int64  `json:"updated,omitempty"`
+}
+
+func wireStatus(s mux.ProgramStatus) *serveStatus {
+	if s.State == "" {
+		return nil
+	}
+	return &serveStatus{State: s.State, Kind: s.Kind, Msg: s.Msg, Updated: s.Updated}
+}
+
+func (s *serveStatus) status() mux.ProgramStatus {
+	if s == nil {
+		return mux.ProgramStatus{}
+	}
+	return mux.ProgramStatus{State: s.State, Kind: s.Kind, Msg: s.Msg, Updated: s.Updated}
 }
 
 func runServe(args []string) error {
@@ -199,9 +223,12 @@ func serveHandler(g *serveGate, build func() serveDoc) http.Handler {
 func buildServeDoc(home string, backends []mux.Backend) serveDoc {
 	now := time.Now()
 	doc := serveDoc{Version: serveVersion, GeneratedAt: now, Rigs: []serveRig{}, Sessions: []serveSession{}, Panes: []servePane{}}
+	sessions, panes := boardListing(backends)
 	if rigs, err := listRigs(); err == nil {
 		cache := loadRadarCache()
-		for _, s := range rigStatuses(rigs, home, now) {
+		statuses := rigStatuses(rigs, home, now)
+		applyAgentStatuses(statuses, agentChildren(panes, now.Unix()))
+		for _, s := range statuses {
 			e, looked := cache[s.Slug]
 			s.PRs = e.PRs
 			doc.Rigs = append(doc.Rigs, serveRig{
@@ -210,7 +237,6 @@ func buildServeDoc(home string, backends []mux.Backend) serveDoc {
 			})
 		}
 	}
-	sessions, panes := boardListing(backends)
 	for _, s := range sessions {
 		doc.Sessions = append(doc.Sessions, serveSession{Kind: surfaceKind(s.Surface), Name: s.Name, Path: s.Path, LastAttached: s.LastAttached})
 	}
@@ -222,6 +248,7 @@ func buildServeDoc(home string, backends []mux.Backend) serveDoc {
 			Kind: surfaceKind(p.Surface), Session: p.Session,
 			WindowIdx: p.WindowIdx, WindowName: p.WindowName, Target: p.Target,
 			Command: p.Command, Path: p.Path, Title: p.Title, Activity: p.Activity,
+			Status: wireStatus(p.Status),
 		})
 	}
 	return doc

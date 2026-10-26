@@ -470,7 +470,7 @@ func sweepScan(fetched map[string]bool, report func(string)) ([]sweepPlan, error
 	}
 	var plans []sweepPlan
 	if len(rigs) > 0 {
-		statuses := rigStatuses(rigs, home, time.Now())
+		statuses := boardStatuses(rigs, home, time.Now())
 		say(fmt.Sprintf("asking GitHub about %d rigs", len(statuses)))
 		enrichWithPRs(statuses)
 		plans = planSweep(rigs, statuses, home, fetched, say)

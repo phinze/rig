@@ -89,7 +89,7 @@ func TestServedRoundTrip(t *testing.T) {
 		},
 		Panes: []servePane{
 			{Kind: "tmux", Session: "~/workspaces/pers-21", Target: "%3", Command: "claude", Title: "Plan it"},
-			{Kind: "rex", Session: "elsewhere", Target: "b1", Command: "claude"},
+			{Kind: "rex", Session: "elsewhere", Target: "b1", Command: "claude", Status: wireStatus(mux.ProgramStatus{State: "done", Updated: 7})},
 		},
 	}
 
@@ -126,6 +126,9 @@ func TestServedRoundTrip(t *testing.T) {
 	}
 	if len(board.panes) != 2 || board.panes[0].Surface != "tmux@fx" || board.panes[0].Target != "%3" || board.panes[1].Surface != "rex@fx" {
 		t.Errorf("panes = %+v, want both agents, each tagged with its own surface", board.panes)
+	}
+	if st := board.panes[1].Status; st != (mux.ProgramStatus{State: "done", Updated: 7}) || board.panes[0].Status != (mux.ProgramStatus{}) {
+		t.Errorf("pane statuses = %+v / %+v, want the rex agent's report and none for tmux", board.panes[0].Status, st)
 	}
 	// Each surface lists only its own rows, so a caller listing both never
 	// counts a session twice.

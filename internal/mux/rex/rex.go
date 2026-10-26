@@ -1305,13 +1305,49 @@ func (b Backend) layoutPanes(session string, v sessionView, only string) []mux.P
 	return panes
 }
 
-// blockFacts is what a pane needs from its block beyond the layout. Either
-// probe can fail on its own, which leaves its half nil.
+// blockFacts is what a pane needs from its block beyond the layout. Each
+// probe can fail on its own, which leaves its part nil. Only snapshot.lua
+// asks for Status: the CLI path would pay a process spawn per block for it,
+// and a pane without a status falls back to its output activity anyway.
 type blockFacts struct {
 	Process *processInfo `json:"process"`
 	Title   *struct {
 		Title string `json:"title"`
 	} `json:"title"`
+	Status *struct {
+		Records []statusRecord `json:"records"`
+	} `json:"status"`
+}
+
+// statusRecord is one entry of a block's program_status. A program can
+// report several under slash-separated ids (build/test); the root record,
+// with no id, is the program's own.
+type statusRecord struct {
+	ID        string    `json:"id"`
+	State     string    `json:"state"`
+	Kind      string    `json:"kind"`
+	Msg       string    `json:"msg"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// programStatus is the block's root record, or the first one when no record
+// is the root.
+func programStatus(records []statusRecord) mux.ProgramStatus {
+	if len(records) == 0 {
+		return mux.ProgramStatus{}
+	}
+	r := records[0]
+	for _, c := range records {
+		if c.ID == "" {
+			r = c
+			break
+		}
+	}
+	s := mux.ProgramStatus{State: r.State, Kind: r.Kind, Msg: r.Msg}
+	if !r.UpdatedAt.IsZero() {
+		s.Updated = r.UpdatedAt.Unix()
+	}
+	return s
 }
 
 // probe asks one block for its facts, a CLI call each. The title is skipped
@@ -1336,6 +1372,9 @@ func fill(p *mux.Pane, f blockFacts) {
 	}
 	if f.Title != nil {
 		p.Title = f.Title.Title
+	}
+	if f.Status != nil {
+		p.Status = programStatus(f.Status.Records)
 	}
 }
 

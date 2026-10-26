@@ -538,11 +538,13 @@ func radarScanNow(home string) radarScanMsg {
 	wg.Go(func() { statuses = rigStatuses(rigs, home, time.Now()) })
 	sessions, panes := boardListing(localBackends())
 	wg.Wait()
+	agents := agentChildren(panes, time.Now().Unix())
+	applyAgentStatuses(statuses, agents)
 	return radarScanMsg{
 		statuses: statuses,
 		sessions: sessions,
 		attached: attachedTimes(sessions),
-		agents:   agentChildren(panes, time.Now().Unix()),
+		agents:   agents,
 		portals:  portalSessions(),
 		stones:   tombstoneRows(time.Now()),
 	}
@@ -2224,6 +2226,17 @@ func radarGlyph(s rigStatus, fetched bool) (string, lipgloss.Style) {
 			return "·", radarFaintStyle
 		default: // waiting
 			return "", radarFaintStyle // eye: awaiting review
+		}
+	}
+	// The agent's own report, where it made one, tells waiting on Paul apart
+	// from quiet: blocked is hot even beside a working agent, and a finished
+	// turn is warm once nothing in the rig is still working.
+	if as := s.AgentStatus; as != nil {
+		switch {
+		case as.State == "blocked":
+			return "●", radarHotStyle
+		case as.State == "done" && s.Agent != "working":
+			return "●", radarWarnStyle
 		}
 	}
 	switch s.Agent {

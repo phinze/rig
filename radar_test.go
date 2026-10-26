@@ -1287,6 +1287,30 @@ func TestAgentChildren(t *testing.T) {
 	}
 }
 
+// An agent's own status outranks output recency: a finished turn that is
+// still repainting isn't working, and a long quiet tool call still is.
+func TestAgentChildrenTrustsProgramStatus(t *testing.T) {
+	now := int64(1_000_000)
+	panes := []mux.Pane{
+		{Surface: "rex", Session: "s", WindowIdx: "0", Target: "s:0", Command: "claude", Activity: now - 5, Title: "✳ Done",
+			Status: mux.ProgramStatus{State: "done"}},
+		{Surface: "rex", Session: "s", WindowIdx: "1", Target: "s:1", Command: "claude", Activity: now - 3600, Title: "✳ Long build",
+			Status: mux.ProgramStatus{State: "working", Msg: "Building"}},
+		{Surface: "tmux", Session: "t", WindowIdx: "0", Target: "t:0", Command: "claude", Activity: now - 5, Title: "✳ No status"},
+	}
+	kids := agentChildren(panes, now)
+	rex := kids[sessionKey{"rex", "s"}]
+	if len(rex) != 2 || rex[0].Working || !rex[1].Working {
+		t.Errorf("rex children = %+v, want done not working and quiet working still working", rex)
+	}
+	if rex[1].Status.Msg != "Building" {
+		t.Errorf("child status = %+v, want the pane's carried through", rex[1].Status)
+	}
+	if tm := kids[sessionKey{"tmux", "t"}]; len(tm) != 1 || !tm[0].Working {
+		t.Errorf("tmux children = %+v, want recent output to read working", tm)
+	}
+}
+
 // A rig with several agents still gives an untitled child enough context to be
 // useful. The window labels distinguish destinations; the stable task title is
 // a better child label than a dash or repeated repo basename.

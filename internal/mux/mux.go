@@ -154,6 +154,24 @@ type Pane struct {
 	Path     string
 	Title    string
 	Activity int64
+
+	// Status is what the pane's program last said about itself, zero when
+	// the backend has no such channel or the program never reported.
+	Status ProgramStatus
+}
+
+// ProgramStatus is a program's own report of its state, as Rex carries it
+// (OSC 7501). The vocabulary is the program's, passed through unread: Rex
+// documents working, blocked, done and idle, and a value outside those is
+// kept rather than guessed at.
+type ProgramStatus struct {
+	State string
+	// Kind is what a blocked program waits for: permission, question, auth.
+	Kind string
+	// Msg is the program's one line about what it's doing.
+	Msg string
+	// Updated is when the program last reported, unix seconds.
+	Updated int64
 }
 
 // SessionName converts an absolute path into the session name session-wizard

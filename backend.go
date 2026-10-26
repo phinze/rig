@@ -343,7 +343,10 @@ type agentChild struct {
 	Window  string
 	Target  string
 	Context string
-	Working bool // window produced output within agentActiveWindow
+	Working bool // see paneWorking
+	// Status is the agent's own report of its state, zero where the backend
+	// carries none (tmux) or the agent never reported.
+	Status mux.ProgramStatus
 }
 
 // liveAgentChildren is the radar's one sweep of every pane on the given
@@ -365,10 +368,10 @@ func liveAgentChildren(backends []mux.Backend) map[sessionKey][]agentChild {
 // Claude Code's state glyph (so a wrapped agent is still caught). Some agents
 // set the title to cwd's basename instead of naming the task; that repeats the
 // repo and is treated like a placeholder so a rig can fall back to its durable
-// title. Activity is when the window last produced output — a stable working
-// signal that idles off after a few quiet minutes, unlike the animating title
-// glyph, which is why the glyph carries only the task text and never the
-// state. now is the current unix time.
+// title. The working signal is the agent's own status where it reports one,
+// and otherwise when the window last produced output, which idles off after a
+// few quiet minutes. The animating title glyph is never the signal, which is
+// why it carries only the task text. now is the current unix time.
 func agentChildren(panes []mux.Pane, now int64) map[sessionKey][]agentChild {
 	activeWithin := int64(agentActiveWindow / time.Second)
 	children := map[sessionKey][]agentChild{}
@@ -393,10 +396,21 @@ func agentChildren(panes []mux.Pane, now int64) map[sessionKey][]agentChild {
 			Window:  p.WindowName,
 			Target:  p.Target,
 			Context: ctx,
-			Working: p.Activity > 0 && now-p.Activity < activeWithin,
+			Working: paneWorking(p, now, activeWithin),
+			Status:  p.Status,
 		})
 	}
 	return children
+}
+
+// paneWorking trusts an agent's own report when it made one, since only the
+// agent can tell a finished turn from a quiet one. Without one, it's whether
+// the window produced output within the last activeWithin seconds.
+func paneWorking(p mux.Pane, now, activeWithin int64) bool {
+	if p.Status.State != "" {
+		return p.Status.State == "working"
+	}
+	return p.Activity > 0 && now-p.Activity < activeWithin
 }
 
 // isAgentPane is agentChildren's test for whether a pane holds an agent: a

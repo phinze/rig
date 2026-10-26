@@ -10,6 +10,8 @@ import (
 	"sync"
 	"text/tabwriter"
 	"time"
+
+	"github.com/phinze/rig/internal/mux"
 )
 
 // runAdd brings another repo into the rig you're currently in (cwd-derived).
@@ -121,7 +123,7 @@ func runLs(args []string) error {
 		return err
 	}
 	now := time.Now()
-	statuses := rigStatuses(rigs, home, now)
+	statuses := boardStatuses(rigs, home, now)
 
 	// Other hosts answer their own boards while this one builds its own: a
 	// full read is a gh fan-out on each side, and there's no reason to pay
@@ -281,6 +283,10 @@ type rigStatus struct {
 	Agent       string     `json:"agent"`
 	Parked      bool       `json:"parked"`
 	LastActive  *time.Time `json:"last_active,omitempty"`
+	// AgentStatus is the agent's own report of where it stands, set only by
+	// the boards that list panes (see applyAgentStatuses). Agent stays the
+	// working/idle answer for readers that only want that.
+	AgentStatus *agentStatus `json:"agent_status,omitempty"`
 
 	// Disposition is parkedDisposition's vocabulary ("waiting", "approved",
 	// ...) computed over every rig, not just parked ones: it is the "what does
@@ -481,6 +487,82 @@ func agentState(lastActive *time.Time, now time.Time) string {
 	return "idle"
 }
 
+// agentStatus is a rig's agent speaking for itself: its state in the agent's
+// vocabulary (working, blocked, done, idle), what a blocked agent waits for,
+// its one-line message, and when it last reported. done means the turn ended
+// and the next move is Paul's, which is what the mtime guess can't see.
+type agentStatus struct {
+	State string     `json:"state"`
+	Kind  string     `json:"kind,omitempty"`
+	Msg   string     `json:"msg,omitempty"`
+	Since *time.Time `json:"since,omitempty"`
+}
+
+// agentStatusRank orders states by how much they need Paul, lowest first.
+func agentStatusRank(state string) int {
+	switch state {
+	case "blocked":
+		return 0
+	case "done":
+		return 1
+	case "working":
+		return 2
+	default:
+		return 3
+	}
+}
+
+// applyAgentStatuses lays each live rig's agent reports over the guess
+// rigStatuses made from transcript mtimes. When a rig runs several agents,
+// the one that most needs Paul speaks for it, and the rig reads working if
+// any of them is. A rig whose agents report nothing keeps the guess.
+func applyAgentStatuses(statuses []rigStatus, agents map[sessionKey][]agentChild) {
+	for i := range statuses {
+		s := &statuses[i]
+		if s.remote != nil || !s.SessionLive {
+			continue
+		}
+		var best *mux.ProgramStatus
+		working := false
+		for _, c := range agents[rigKey(s.Path, s.Backend)] {
+			if c.Status.State == "" {
+				continue
+			}
+			working = working || c.Status.State == "working"
+			if best == nil || agentStatusRank(c.Status.State) < agentStatusRank(best.State) {
+				st := c.Status
+				best = &st
+			}
+		}
+		if best == nil {
+			continue
+		}
+		s.AgentStatus = &agentStatus{State: best.State, Kind: best.Kind, Msg: best.Msg}
+		if best.Updated > 0 {
+			t := time.Unix(best.Updated, 0)
+			s.AgentStatus.Since = &t
+		}
+		s.Agent = "idle"
+		if working {
+			s.Agent = "working"
+		}
+		s.State = boardState(*s)
+	}
+}
+
+// boardStatuses is rigStatuses with the agents' own reports applied, for
+// the boards that say what each rig wants. This machine's panes are listed
+// while the rigs are probed, as the radar's scan does.
+func boardStatuses(rigs []rigInfo, home string, now time.Time) []rigStatus {
+	var statuses []rigStatus
+	var wg sync.WaitGroup
+	wg.Go(func() { statuses = rigStatuses(rigs, home, now) })
+	_, panes := boardListing(localBackends())
+	wg.Wait()
+	applyAgentStatuses(statuses, agentChildren(panes, now.Unix()))
+	return statuses
+}
+
 // agentMarker renders the agent column for the table. A parked rig reads
 // "parked" (it's deliberately dormant, session killed); otherwise it's the live
 // agent state, or a dash when there's no session so the column stays scannable.
@@ -497,6 +579,14 @@ func agentMarker(s rigStatus) string {
 	// every agent, and the writes they make on the way out read as a turn.
 	if s.Agent == "" || !s.SessionLive {
 		return "-"
+	}
+	// An agent waiting on Paul says so; working and idle read the same either
+	// way. A blocked agent names what it's blocked on when it said.
+	if as := s.AgentStatus; as != nil && (as.State == "blocked" || as.State == "done") {
+		if as.State == "blocked" && as.Kind != "" {
+			return "blocked:" + as.Kind
+		}
+		return as.State
 	}
 	return s.Agent
 }

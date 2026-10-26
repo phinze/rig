@@ -1,5 +1,6 @@
--- Every session's view and every tiled block's process and title, from one
--- connection: what Backend.Snapshot otherwise asks for a CLI call at a time.
+-- Every session's view and every tiled block's process, title and program
+-- status, from one connection: what Backend.Snapshot otherwise asks for a CLI
+-- call at a time.
 -- A call into a session needs the connection attached to it, and attaching
 -- answers with the view, so each session is attach, probes, detach.
 --
@@ -21,6 +22,8 @@ for _, s in ipairs(list.sessions or {}) do
       local facts = { process = rex.block.call(terminal, "process", args) }
       if with_title then
         facts.title = rex.block.call(terminal, "title", args)
+        -- nil on a server too old to have it, like any failed call here.
+        facts.status = rex.block.call(terminal, "program_status", args)
       end
       entry.probes[block_id] = facts
     end

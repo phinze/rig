@@ -181,6 +181,7 @@ func (b servedBackend) lift(doc serveDoc) remoteBoard {
 			Surface: surface, Session: p.Session,
 			WindowIdx: p.WindowIdx, WindowName: p.WindowName, Target: p.Target,
 			Command: p.Command, Path: p.Path, Title: p.Title, Activity: p.Activity,
+			Status: p.Status.status(),
 		})
 	}
 	for _, r := range doc.Rigs {

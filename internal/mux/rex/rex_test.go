@@ -790,3 +790,33 @@ func TestSnapshotScriptKeepsAnUnattachedSession(t *testing.T) {
 		t.Errorf("snapshot = %+v, %+v; want the session alone", sessions, panes)
 	}
 }
+
+// A block's program status rides on its pane: the root record is the
+// program's own, and a child record (an id like build/test) doesn't speak
+// for it. A block whose server had no program_status keeps a zero Status.
+func TestSnapshotScriptReadsProgramStatus(t *testing.T) {
+	fakeRex(t)
+	probes := `{
+ "block:a":{"process":{"foreground":{"name":".claude-unwrapped","cwd":"/w/alpha"}},"title":{"title":"✳ Task A"},
+   "status":{"records":[{"id":"sub","state":"working","msg":"a subagent"},{"state":"blocked","kind":"permission","msg":"Run the tests","updated_at":"2026-10-26T10:00:00-05:00"}]}},
+ "block:r":{"process":{"foreground":{"name":"recto","cwd":"/w/x"}},"title":{"title":"recto"}},
+ "block:z":{"process":{"foreground":{"name":"recto","cwd":"/w/x"}},"title":{"title":"recto"}}}`
+	answer := filepath.Join(t.TempDir(), "answer.json")
+	doc := `{"sessions":[{"session_id":"session:1","label":"~-workspaces-alpha","view":` + fakeScriptView + `,"probes":` + probes + `}]}`
+	if err := os.WriteFile(answer, []byte(doc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("REX_FAKE_SCRIPT", answer)
+	_, panes := Backend{MarksDir: t.TempDir()}.Snapshot()
+	got := map[string]mux.ProgramStatus{}
+	for _, p := range panes {
+		got[p.PaneID] = p.Status
+	}
+	want := mux.ProgramStatus{State: "blocked", Kind: "permission", Msg: "Run the tests", Updated: 1793026800}
+	if got["block:a"] != want {
+		t.Errorf("block:a status = %+v, want %+v", got["block:a"], want)
+	}
+	if got["block:r"] != (mux.ProgramStatus{}) {
+		t.Errorf("block:r status = %+v, want none", got["block:r"])
+	}
+}
