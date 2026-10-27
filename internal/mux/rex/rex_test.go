@@ -425,6 +425,26 @@ func TestAttachToABlockElsewhereSelectsItsWindow(t *testing.T) {
 	}
 }
 
+// A client handed over by the action that started rig is the one told to
+// switch, without asking the server which apps are connected.
+func TestAttachSelectsTheClientThatAsked(t *testing.T) {
+	log := fakeRex(t)
+	t.Setenv("REX_SESSION", "session:1")
+	t.Setenv("REX_FAKE_SECOND", "1")
+	t.Setenv("RIG_REX_CLIENT", "client:phone")
+
+	if err := (Backend{}).Attach("~-workspaces-beta"); err != nil {
+		t.Fatal(err)
+	}
+	got := selects(t, log)
+	if len(got) != 1 || !strings.HasPrefix(got[0], "-C client:phone do session.select") {
+		t.Errorf("selects = %q, want client:phone told to show session:2", got)
+	}
+	if raw, _ := os.ReadFile(log); strings.Contains(string(raw), "client ls") {
+		t.Errorf("listed clients despite being handed one:\n%s", raw)
+	}
+}
+
 // With the app's Remote Control off, the switch is refused with the app's
 // own reason attached, as ErrNoClientSwitch so the radar keeps it on screen.
 func TestAttachReportsRemoteControlOff(t *testing.T) {

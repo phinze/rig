@@ -631,7 +631,16 @@ func (b Backend) selectSession(sessionID, windowID string) error {
 // would pick it alone when it's the only one, but naming it means a second
 // app (another window host, a paired device) is an error that says so rather
 // than whatever the CLI decides.
+//
+// An init.lua action that starts rig knows better than either: its ctx names
+// the client that pressed the key, and it hands that over as RIG_REX_CLIENT.
+// That is what lets the radar move a phone while a Mac is also connected.
+// It isn't REX_CLIENT because the CLI reads that one, and would point rig's
+// other rex commands at the app too.
 func (b Backend) appClient() (string, error) {
+	if id := os.Getenv("RIG_REX_CLIENT"); id != "" {
+		return id, nil
+	}
 	raw, err := b.command("client", "ls", "--json").Output()
 	if err != nil {
 		return "", fmt.Errorf("listing rex clients: %w", err)
