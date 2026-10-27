@@ -34,6 +34,10 @@ case "$*" in
   echo '{"session_id":"session:1","initial_windows":[{"window_id":"window:m","block_ids":["block:a"],"revision":1}]}'
   exit 0 ;;
 *"client ls --json"*)
+  if [ -n "$REX_FAKE_TWO_APPS" ]; then
+    echo '{"clients":[{"client_id":"client:app","info":{"kind":"app","label":"mac"},"connection_state":"connected"},{"client_id":"client:phone","info":{"kind":"app","label":"'"${REX_FAKE_PHONE_LABEL:-iPhone}"'"},"connection_state":"connected"}]}'
+    exit 0
+  fi
   # A relaunched app leaves its old client listed as lost, as preview.12 does.
   echo '{"clients":[{"client_id":"client:gone","info":{"kind":"app"},"connection_state":"lost"},{"client_id":"client:app","info":{"kind":"app"},"connection_state":"connected"},{"client_id":"client:cli","info":{"kind":"cli"},"connection_state":"connected"}]}'
   exit 0 ;;
@@ -431,6 +435,7 @@ func TestAttachSelectsTheClientThatAsked(t *testing.T) {
 	log := fakeRex(t)
 	t.Setenv("REX_SESSION", "session:1")
 	t.Setenv("REX_FAKE_SECOND", "1")
+	t.Setenv("REX_FAKE_TWO_APPS", "1")
 	t.Setenv("RIG_REX_CLIENT", "client:phone")
 
 	if err := (Backend{}).Attach("~-workspaces-beta"); err != nil {
@@ -440,8 +445,59 @@ func TestAttachSelectsTheClientThatAsked(t *testing.T) {
 	if len(got) != 1 || !strings.HasPrefix(got[0], "-C client:phone do session.select") {
 		t.Errorf("selects = %q, want client:phone told to show session:2", got)
 	}
-	if raw, _ := os.ReadFile(log); strings.Contains(string(raw), "client ls") {
-		t.Errorf("listed clients despite being handed one:\n%s", raw)
+}
+
+// An id this server never issued (an action in the Mac's own server naming
+// the Mac as that server knows it) falls back to the one connected app.
+func TestAttachIgnoresAClientFromAnotherServer(t *testing.T) {
+	log := fakeRex(t)
+	t.Setenv("REX_SESSION", "session:1")
+	t.Setenv("REX_FAKE_SECOND", "1")
+	t.Setenv("RIG_REX_CLIENT", "client:elsewhere")
+
+	if err := (Backend{}).Attach("~-workspaces-beta"); err != nil {
+		t.Fatal(err)
+	}
+	got := selects(t, log)
+	if len(got) != 1 || !strings.HasPrefix(got[0], "-C client:app do session.select") {
+		t.Errorf("selects = %q, want the one connected app told to show session:2", got)
+	}
+}
+
+// From an action in the Mac's own server, the Mac's id there means nothing
+// here, so its label picks it out from beside a connected phone.
+func TestAttachFindsTheClientByLabel(t *testing.T) {
+	log := fakeRex(t)
+	t.Setenv("REX_SESSION", "session:1")
+	t.Setenv("REX_FAKE_SECOND", "1")
+	t.Setenv("REX_FAKE_TWO_APPS", "1")
+	t.Setenv("RIG_REX_CLIENT", "client:elsewhere")
+	t.Setenv("RIG_REX_CLIENT_LABEL", "mac")
+
+	if err := (Backend{}).Attach("~-workspaces-beta"); err != nil {
+		t.Fatal(err)
+	}
+	got := selects(t, log)
+	if len(got) != 1 || !strings.HasPrefix(got[0], "-C client:app do session.select") {
+		t.Errorf("selects = %q, want the app labeled mac told to show session:2", got)
+	}
+}
+
+// Two apps sharing the label leave no way to tell which one asked.
+func TestAttachRefusesAnAmbiguousLabel(t *testing.T) {
+	log := fakeRex(t)
+	t.Setenv("REX_SESSION", "session:1")
+	t.Setenv("REX_FAKE_SECOND", "1")
+	t.Setenv("REX_FAKE_TWO_APPS", "1")
+	t.Setenv("REX_FAKE_PHONE_LABEL", "mac")
+	t.Setenv("RIG_REX_CLIENT_LABEL", "mac")
+
+	err := (Backend{}).Attach("~-workspaces-beta")
+	if !errors.Is(err, mux.ErrNoClientSwitch) || !strings.Contains(err.Error(), `connected as "mac"`) {
+		t.Errorf("attach = %v, want ErrNoClientSwitch naming the shared label", err)
+	}
+	if got := selects(t, log); len(got) != 0 {
+		t.Errorf("selected %v with an ambiguous label", got)
 	}
 }
 

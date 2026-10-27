@@ -636,11 +636,17 @@ func (b Backend) selectSession(sessionID, windowID string) error {
 // the client that pressed the key, and it hands that over as RIG_REX_CLIENT.
 // That is what lets the radar move a phone while a Mac is also connected.
 // It isn't REX_CLIENT because the CLI reads that one, and would point rig's
-// other rex commands at the app too.
+// other rex commands at the app too. A client id is only good on the server
+// that issued it, though, so it counts only when this server lists it.
+//
+// An action running in the Mac's own server, with the radar on another host,
+// can't hand over an id this host knows. It hands over the app's label
+// instead (RIG_REX_CLIENT_LABEL), which every server sees the same. Labels
+// aren't unique, so one shared by two connected apps is refused rather
+// than guessed at.
 func (b Backend) appClient() (string, error) {
-	if id := os.Getenv("RIG_REX_CLIENT"); id != "" {
-		return id, nil
-	}
+	asked := os.Getenv("RIG_REX_CLIENT")
+	label := os.Getenv("RIG_REX_CLIENT_LABEL")
 	raw, err := b.command("client", "ls", "--json").Output()
 	if err != nil {
 		return "", fmt.Errorf("listing rex clients: %w", err)
@@ -649,7 +655,8 @@ func (b Backend) appClient() (string, error) {
 		Clients []struct {
 			ID   string `json:"client_id"`
 			Info struct {
-				Kind string `json:"kind"`
+				Kind  string `json:"kind"`
+				Label string `json:"label"`
 			} `json:"info"`
 			State string `json:"connection_state"`
 		} `json:"clients"`
@@ -657,15 +664,27 @@ func (b Backend) appClient() (string, error) {
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return "", fmt.Errorf("listing rex clients: %w", err)
 	}
-	var apps []string
+	var apps, labeled []string
 	for _, c := range out.Clients {
 		// The server keeps a client it lost (the app relaunching, a Mac
 		// waking) listed as "lost" beside its replacement, so only a
 		// connected app counts. An empty state is a server that predates
 		// the field.
 		if c.Info.Kind == "app" && (c.State == "" || c.State == "connected") {
+			if c.ID == asked {
+				return asked, nil
+			}
+			if label != "" && c.Info.Label == label {
+				labeled = append(labeled, c.ID)
+			}
 			apps = append(apps, c.ID)
 		}
+	}
+	switch {
+	case len(labeled) == 1:
+		return labeled[0], nil
+	case len(labeled) > 1:
+		return "", fmt.Errorf("%d Rex apps are connected as %q, want exactly one", len(labeled), label)
 	}
 	switch len(apps) {
 	case 1:
