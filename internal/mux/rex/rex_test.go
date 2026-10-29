@@ -33,6 +33,9 @@ case "$*" in
   # Matched here because its params carry the block flavor, which has dots.
   echo '{"session_id":"session:1","initial_windows":[{"window_id":"window:m","block_ids":["block:a"],"revision":1}]}'
   exit 0 ;;
+*"block inspect "*)
+  echo '{"session_id":"session:1","block":{"block_id":"block:a","owner":"'"${REX_FAKE_BLOCK_OWNER:-client:cli}"'"}}'
+  exit 0 ;;
 *"client ls --json"*)
   if [ -n "$REX_FAKE_TWO_APPS" ]; then
     echo '{"clients":[{"client_id":"client:app","info":{"kind":"app","label":"mac"},"connection_state":"connected"},{"client_id":"client:phone","info":{"kind":"app","label":"'"${REX_FAKE_PHONE_LABEL:-iPhone}"'"},"connection_state":"connected"}]}'
@@ -480,6 +483,44 @@ func TestAttachFindsTheClientByLabel(t *testing.T) {
 	got := selects(t, log)
 	if len(got) != 1 || !strings.HasPrefix(got[0], "-C client:app do session.select") {
 		t.Errorf("selects = %q, want the app labeled mac told to show session:2", got)
+	}
+}
+
+// Typed at a prompt, with nothing handed over, rig switches the app that
+// owns the terminal it runs in, even while another app still counts as
+// connected.
+func TestAttachSelectsTheClientAtThisTerminal(t *testing.T) {
+	log := fakeRex(t)
+	t.Setenv("REX_SESSION", "session:1")
+	t.Setenv("REX_BLOCK", "block:a")
+	t.Setenv("REX_FAKE_SECOND", "1")
+	t.Setenv("REX_FAKE_TWO_APPS", "1")
+	t.Setenv("REX_FAKE_BLOCK_OWNER", "client:phone")
+
+	if err := (Backend{}).Attach("~-workspaces-beta"); err != nil {
+		t.Fatal(err)
+	}
+	got := selects(t, log)
+	if len(got) != 1 || !strings.HasPrefix(got[0], "-C client:phone do session.select") {
+		t.Errorf("selects = %q, want client:phone, which owns block:a, told to show session:2", got)
+	}
+}
+
+// A terminal owned by no connected app (rig's own CLI client made it) says
+// nothing about who asked, so two apps stay a refusal.
+func TestAttachRefusesTwoAppsWhenNeitherOwnsTheTerminal(t *testing.T) {
+	log := fakeRex(t)
+	t.Setenv("REX_SESSION", "session:1")
+	t.Setenv("REX_BLOCK", "block:a")
+	t.Setenv("REX_FAKE_SECOND", "1")
+	t.Setenv("REX_FAKE_TWO_APPS", "1")
+
+	err := (Backend{}).Attach("~-workspaces-beta")
+	if !errors.Is(err, mux.ErrNoClientSwitch) || !strings.Contains(err.Error(), "2 Rex apps are connected") {
+		t.Errorf("attach = %v, want ErrNoClientSwitch counting the apps", err)
+	}
+	if got := selects(t, log); len(got) != 0 {
+		t.Errorf("selected %v with no way to tell which app asked", got)
 	}
 }
 

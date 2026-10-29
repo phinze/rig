@@ -644,6 +644,11 @@ func (b Backend) selectSession(sessionID, windowID string) error {
 // instead (RIG_REX_CLIENT_LABEL), which every server sees the same. Labels
 // aren't unique, so one shared by two connected apps is refused rather
 // than guessed at.
+//
+// Typed at a prompt rather than started by an action, rig has neither. When
+// more than one app counts as connected (a Mac whose dropped link the server
+// hasn't noticed yet is enough), the app that owns the terminal rig runs in
+// is the one whose person typed the command.
 func (b Backend) appClient() (string, error) {
 	asked := os.Getenv("RIG_REX_CLIENT")
 	label := os.Getenv("RIG_REX_CLIENT_LABEL")
@@ -686,6 +691,11 @@ func (b Backend) appClient() (string, error) {
 	case len(labeled) > 1:
 		return "", fmt.Errorf("%d Rex apps are connected as %q, want exactly one", len(labeled), label)
 	}
+	if len(apps) > 1 {
+		if owner := b.blockOwner(b.CurrentPane()); owner != "" && slices.Contains(apps, owner) {
+			return owner, nil
+		}
+	}
 	switch len(apps) {
 	case 1:
 	case 0:
@@ -696,6 +706,28 @@ func (b Backend) appClient() (string, error) {
 		return "", fmt.Errorf("%d Rex apps are connected, want exactly one", len(apps))
 	}
 	return apps[0], nil
+}
+
+// blockOwner is the client that owns a terminal block: the one whose screen
+// sizes it, which follows whoever is looking at it and typing. Empty when
+// there's no block or it can't be read.
+func (b Backend) blockOwner(block string) string {
+	if block == "" {
+		return ""
+	}
+	raw, err := b.command("block", "inspect", block, "--json").Output()
+	if err != nil {
+		return ""
+	}
+	var out struct {
+		Block struct {
+			Owner string `json:"owner"`
+		} `json:"block"`
+	}
+	if json.Unmarshal(raw, &out) != nil {
+		return ""
+	}
+	return out.Block.Owner
 }
 
 // Popup opens a floating layer centred over the session's active window
