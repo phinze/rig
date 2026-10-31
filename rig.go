@@ -165,7 +165,8 @@ func addRepoWorkspace(basedir, rigID string, repo repoRef, startRev, branch stri
 }
 
 // sessionSpec captures the per-verb session layout: what runs in the right
-// (recto) pane, the agent in the left pane, and its opening prompt.
+// (recto) pane, if anything, the agent in the left pane, and its opening
+// prompt. An empty rectoCmd leaves the agent alone in the main window.
 type sessionSpec struct {
 	rectoCmd string
 	repo     string
@@ -207,12 +208,14 @@ func spawnSession(rs rigSession, paneCwd string, sess sessionSpec) error {
 	if err := rs.markPane(agentPane, rigPaneAgent, repo); err != nil {
 		return fmt.Errorf("marking agent pane: %w", err)
 	}
-	rectoPane, err := rs.b.SplitCommand(agentPane, paneCwd, sess.rectoCmd)
-	if err != nil {
-		return fmt.Errorf("tmux split-window: %w", err)
-	}
-	if err := rs.markPane(rectoPane, rigPaneRecto, repo); err != nil {
-		return fmt.Errorf("marking recto pane: %w", err)
+	if sess.rectoCmd != "" {
+		rectoPane, err := rs.b.SplitCommand(agentPane, paneCwd, sess.rectoCmd)
+		if err != nil {
+			return fmt.Errorf("tmux split-window: %w", err)
+		}
+		if err := rs.markPane(rectoPane, rigPaneRecto, repo); err != nil {
+			return fmt.Errorf("marking recto pane: %w", err)
+		}
 	}
 	if err := rs.b.SelectPane(agentPane); err != nil {
 		return fmt.Errorf("tmux select-pane: %w", err)

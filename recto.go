@@ -173,6 +173,15 @@ func rectoCommand() string {
 	return "recto"
 }
 
+// launchRectoCommand is what a new session puts in the hot seat: Recto for a
+// rig that opens with it, nothing for one that opens on demand.
+func launchRectoCommand(m manifest) string {
+	if !m.opensRecto() {
+		return ""
+	}
+	return rectoCommand()
+}
+
 func ensureRepoRecto(rs rigSession, basedir, repo string, panes []mux.Pane) ([]mux.Pane, error) {
 	if _, ok := findRectoPane(panes, repo); ok {
 		return panes, nil

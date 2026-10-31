@@ -10,7 +10,53 @@ import (
 	"time"
 )
 
+// A review rig opens with Recto, so upgrading its legacy bare session builds
+// the whole carousel: the main pair plus a background viewer per extra repo.
 func TestEnsureRigRuntimeUpgradesLegacyBareSession(t *testing.T) {
+	lines, out := upgradeLegacyBareSession(t, "review", "rig-resume-legacy-e2e")
+	if len(lines) != 3 {
+		t.Fatalf("upgraded layout has %d panes, want main pair + background Recto:\n%s", len(lines), out)
+	}
+	mainPanes := 0
+	background := false
+	for _, line := range lines {
+		switch {
+		case strings.HasPrefix(line, "main/alpha\t"+filepath.Join(out.basedir, "alpha")+"\tmain\talpha\t") && strings.HasSuffix(line, "\talpha"):
+			mainPanes++
+		case line == "zeta\t"+filepath.Join(out.basedir, "zeta")+"\trepo\tzeta\trecto\tzeta":
+			background = true
+		}
+	}
+	if mainPanes != 2 || !background {
+		t.Errorf("legacy session did not become the canonical sorted-first carousel:\n%s", out)
+	}
+}
+
+// Any other rig opens Recto on demand, so the upgrade leaves the agent alone
+// in a properly marked main window and builds no viewers nobody asked for.
+func TestEnsureRigRuntimeUpgradesLegacyAuthoringSessionWithoutRecto(t *testing.T) {
+	lines, out := upgradeLegacyBareSession(t, "", "rig-resume-legacy-authoring-e2e")
+	if len(lines) != 1 {
+		t.Fatalf("upgraded layout has %d panes, want the agent alone:\n%s", len(lines), out)
+	}
+	want := "main/alpha\t" + filepath.Join(out.basedir, "alpha") + "\tmain\talpha\tagent\talpha"
+	if lines[0] != want {
+		t.Errorf("agent pane = %q, want %q", lines[0], want)
+	}
+}
+
+type legacyLayout struct {
+	basedir string
+	raw     string
+}
+
+func (l legacyLayout) String() string { return l.raw }
+
+// upgradeLegacyBareSession stands up a pre-metadata bare tmux session for a
+// two-repo rig of the given kind, runs ensureRigRuntime over it, and returns
+// the resulting panes as window/path/role/repo lines.
+func upgradeLegacyBareSession(t *testing.T, kind, socket string) ([]string, legacyLayout) {
+	t.Helper()
 	realTmux, err := exec.LookPath("tmux")
 	if err != nil {
 		t.Skip("tmux not installed")
@@ -24,7 +70,6 @@ func TestEnsureRigRuntimeUpgradesLegacyBareSession(t *testing.T) {
 		mustMkdir(t, filepath.Join(basedir, repo))
 	}
 
-	socket := "rig-resume-legacy-e2e"
 	tmuxWrap := fmt.Sprintf("#!/bin/sh\nexec %s -L %s -f /dev/null \"$@\"\n", realTmux, socket)
 	mustWriteExec(t, filepath.Join(bin, "tmux"), tmuxWrap)
 	mustWriteExec(t, filepath.Join(bin, "recto"), "#!/bin/sh\nexec sleep infinity\n")
@@ -37,7 +82,7 @@ func TestEnsureRigRuntimeUpgradesLegacyBareSession(t *testing.T) {
 	t.Cleanup(func() { _ = exec.Command(realTmux, "-L", socket, "kill-server").Run() })
 
 	m := manifest{
-		ID: "legacy-rig", SessionID: "legacy-session",
+		ID: "legacy-rig", SessionID: "legacy-session", Kind: kind,
 		Repos: map[string]string{"zeta": "o/zeta", "alpha": "o/alpha"},
 	}
 	if err := writeManifest(basedir, m); err != nil {
@@ -61,21 +106,5 @@ func TestEnsureRigRuntimeUpgradesLegacyBareSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading upgraded layout: %v\n%s", err, out)
 	}
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	if len(lines) != 3 {
-		t.Fatalf("upgraded layout has %d panes, want main pair + background Recto:\n%s", len(lines), out)
-	}
-	mainPanes := 0
-	background := false
-	for _, line := range lines {
-		switch {
-		case strings.HasPrefix(line, "main/alpha\t"+filepath.Join(basedir, "alpha")+"\tmain\talpha\t") && strings.HasSuffix(line, "\talpha"):
-			mainPanes++
-		case line == "zeta\t"+filepath.Join(basedir, "zeta")+"\trepo\tzeta\trecto\tzeta":
-			background = true
-		}
-	}
-	if mainPanes != 2 || !background {
-		t.Errorf("legacy session did not become the canonical sorted-first carousel:\n%s", out)
-	}
+	return strings.Split(strings.TrimSpace(string(out)), "\n"), legacyLayout{basedir: basedir, raw: string(out)}
 }

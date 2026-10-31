@@ -201,14 +201,16 @@ func ensureRigRuntimeWithPrompt(basedir string, m manifest, prompt string) (rigS
 
 	if !rs.live() {
 		err := spawnSession(rs, paneCwd, sessionSpec{
-			rectoCmd: rectoCommand(), repo: repo, agent: m.agentKind(), command: command,
+			rectoCmd: launchRectoCommand(m), repo: repo, agent: m.agentKind(), command: command,
 			rigID: m.ID, basedir: basedir,
 		})
 		if err != nil {
 			return rigSession{}, err
 		}
-		if err := ensureBackgroundRectos(rs, basedir, repo, m); err != nil {
-			return rigSession{}, err
+		if m.opensRecto() {
+			if err := ensureBackgroundRectos(rs, basedir, repo, m); err != nil {
+				return rigSession{}, err
+			}
 		}
 		return rs, nil
 	}
@@ -260,19 +262,20 @@ func ensureRigRuntimeWithPrompt(basedir string, m manifest, prompt string) (rigS
 		return rigSession{}, err
 	}
 
-	panes, err = rs.panes()
-	if err != nil {
-		return rigSession{}, err
-	}
-	panes, err = ensureRepoRecto(rs, basedir, repo, panes)
-	if err != nil {
-		return rigSession{}, fmt.Errorf("starting %s recto: %w", repo, err)
-	}
-	if err := promoteRecto(rs, basedir, repo, m); err != nil {
-		return rigSession{}, err
-	}
-	if err := ensureBackgroundRectos(rs, basedir, repo, m); err != nil {
-		return rigSession{}, err
+	if m.opensRecto() {
+		panes, err = rs.panes()
+		if err != nil {
+			return rigSession{}, err
+		}
+		if _, err = ensureRepoRecto(rs, basedir, repo, panes); err != nil {
+			return rigSession{}, fmt.Errorf("starting %s recto: %w", repo, err)
+		}
+		if err := promoteRecto(rs, basedir, repo, m); err != nil {
+			return rigSession{}, err
+		}
+		if err := ensureBackgroundRectos(rs, basedir, repo, m); err != nil {
+			return rigSession{}, err
+		}
 	}
 
 	// When resume is invoked from the stopped agent's own pane, replace this

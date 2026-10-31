@@ -178,7 +178,7 @@ func createNewRig(target newRigTarget, context string, repo repoRef, extras []st
 	}
 
 	sess := sessionSpec{
-		rectoCmd: rectoCommand(),
+		rectoCmd: launchRectoCommand(m),
 		repo:     repo.Name,
 		agent:    agent,
 		prompt:   kickoffPrompt(target.Kickoff, context != ""),
@@ -189,8 +189,10 @@ func createNewRig(target newRigTarget, context string, repo repoRef, extras []st
 	if err := spawnSession(rs, repoDest, sess); err != nil {
 		return newRigResult{}, err
 	}
-	for i, ref := range extraRefs {
-		addRectoWindow(rs, ref.Name, extraDests[i])
+	if m.opensRecto() {
+		for i, ref := range extraRefs {
+			addRectoWindow(rs, ref.Name, extraDests[i])
+		}
 	}
 	return newRigResult{ID: target.ID, Basedir: target.Basedir, Session: rs}, nil
 }

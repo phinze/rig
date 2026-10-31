@@ -64,7 +64,9 @@ func runAdd(args []string) error {
 		return err
 	}
 
-	addRectoWindow(sessionFor(basedir, m), repo, repoDest)
+	if m.opensRecto() {
+		addRectoWindow(sessionFor(basedir, m), repo, repoDest)
+	}
 
 	fmt.Fprintf(os.Stderr, "rig: added %s → %s\n", ref.nameWithOwner(), repoDest)
 	return nil

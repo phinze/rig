@@ -144,6 +144,13 @@ func (m manifest) isCoordinator() bool { return m.isProject() || m.isCoS() }
 // non-review rig owns commits; coordinator rigs deliberately own no workspace.
 func (m manifest) isAuthoring() bool { return !m.isReview() && !m.isCoordinator() }
 
+// opensRecto reports whether the rig's layout includes Recto from the start.
+// A review rig's job is the diff, so it gets the hot seat and a viewer per
+// repo. Every other rig starts with the agent alone, and Recto appears when
+// someone asks for it with `rig recto <repo>`, which creates the viewer on
+// demand.
+func (m manifest) opensRecto() bool { return m.isReview() }
+
 func writeManifest(basedir string, m manifest) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "id    = %q\n", m.ID)

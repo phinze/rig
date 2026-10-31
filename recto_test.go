@@ -208,3 +208,78 @@ func TestForgetRectoWorkspaceAllowsRectoToBeAbsent(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// An authoring rig starts with the agent alone, so `rig recto <repo>` is how a
+// viewer first appears: it creates the repo's Recto beside the agent, and a
+// second repo's request parks the first into its own tab.
+func TestRectoOpensOnDemandInAgentOnlyRig(t *testing.T) {
+	realTmux, err := exec.LookPath("tmux")
+	if err != nil {
+		t.Skip("tmux not installed")
+	}
+	home := t.TempDir()
+	bin := filepath.Join(home, "bin")
+	basedir := filepath.Join(home, "workspaces", "mir-2")
+	mustMkdir(t, bin)
+	for _, repo := range []string{"runtime", "cloud"} {
+		mustMkdir(t, filepath.Join(basedir, repo))
+	}
+	tmuxWrap := fmt.Sprintf("#!/bin/sh\nexec %s -L rig-recto-ondemand-e2e -f /dev/null \"$@\"\n", realTmux)
+	mustWriteExec(t, filepath.Join(bin, "tmux"), tmuxWrap)
+	mustWriteExec(t, filepath.Join(bin, "recto"), "#!/bin/sh\nexec sleep infinity\n")
+	mustWriteExec(t, filepath.Join(bin, "claude"), "#!/bin/sh\nexec sleep infinity\n")
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	t.Setenv("SHELL", "/bin/sh")
+	t.Setenv("HISTFILE", "/dev/null")
+	t.Cleanup(func() { _ = exec.Command(realTmux, "-L", "rig-recto-ondemand-e2e", "kill-server").Run() })
+
+	m := manifest{ID: "mir-2", Repos: map[string]string{
+		"runtime": "mirendev/runtime",
+		"cloud":   "mirendev/cloud",
+	}}
+	if err := writeManifest(basedir, m); err != nil {
+		t.Fatal(err)
+	}
+	if launchRectoCommand(m) != "" {
+		t.Fatal("an authoring rig should launch without Recto")
+	}
+	session := sessionFor(basedir, m)
+	if err := spawnSession(session, filepath.Join(basedir, "runtime"), sessionSpec{
+		rectoCmd: launchRectoCommand(m), repo: "runtime", agent: agentClaude, prompt: "test",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	panes, err := session.panes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(panes) != 1 || panes[0].Role != rigPaneAgent {
+		t.Fatalf("fresh authoring rig should hold the agent alone: %+v", panes)
+	}
+
+	t.Chdir(basedir)
+	if err := runRecto([]string{"cloud"}); err != nil {
+		t.Fatal(err)
+	}
+	panes, err = session.panes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertMainRecto(t, panes, "cloud")
+	if len(panes) != 2 {
+		t.Errorf("want agent + cloud recto, got %d panes: %+v", len(panes), panes)
+	}
+
+	if err := runRecto([]string{"runtime"}); err != nil {
+		t.Fatal(err)
+	}
+	panes, err = session.panes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertMainRecto(t, panes, "runtime")
+	if _, ok := findRepoWindow(panes, "cloud", ""); !ok {
+		t.Error("cloud recto was not parked into its own tab")
+	}
+}

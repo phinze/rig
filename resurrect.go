@@ -204,7 +204,7 @@ func prepareResurrect(id string, nonblocking bool, report io.Writer) (rigSession
 		agent = agentClaude
 	}
 	sess := sessionSpec{
-		rectoCmd: rectoCommand(),
+		rectoCmd: launchRectoCommand(m),
 		repo:     filepath.Base(primary),
 		agent:    agent,
 		rigID:    t.ID,

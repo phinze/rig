@@ -158,10 +158,10 @@ func runUp(args []string) error {
 		return err
 	}
 
-	// Layout: recto on the right, the selected agent on the left with an issue-pickup
-	// prompt phrased for wherever the issue lives.
+	// Layout: the selected agent with an issue-pickup prompt phrased for
+	// wherever the issue lives; Recto opens later, on demand.
 	sess := sessionSpec{
-		rectoCmd: rectoCommand(),
+		rectoCmd: launchRectoCommand(m),
 		repo:     repo.Name,
 		agent:    pick.kind,
 		prompt:   pickupPrompt(tk, context != ""),

@@ -532,11 +532,11 @@ func TestUpDown(t *testing.T) {
 		t.Errorf("expected tmux session %s: %v", session, err)
 	}
 
-	// Two panes: claude on the left, recto on the right.
+	// One pane: the agent alone. Recto opens on demand with `rig recto`.
 	panes := mustOutput(t, "", env, realTmux, "-u", "-L", "rig-e2e", "list-panes", "-t", session+":0", "-F", "#{pane_current_command}")
 	paneLines := strings.Split(strings.TrimSpace(panes), "\n")
-	if len(paneLines) != 2 {
-		t.Errorf("expected 2 panes after up, got %d:\n%s", len(paneLines), panes)
+	if len(paneLines) != 1 {
+		t.Errorf("expected the agent alone after up, got %d panes:\n%s", len(paneLines), panes)
 	}
 
 	// Workspace registered on source repo.
@@ -1220,17 +1220,18 @@ func TestParkWake(t *testing.T) {
 		return strings.Contains(string(raw), "--resume resume-me")
 	})
 
-	// Wake rebuilds the same repo-rooted carousel as creation, not the old bare
-	// shell at the rig root. The metadata is part of the contract: recto relies
-	// on it when promoting repos later.
+	// Wake rebuilds the same repo-rooted layout as creation (the agent alone,
+	// for an authoring rig), not the old bare shell at the rig root. The
+	// metadata is part of the contract: recto relies on it when promoting repos
+	// later.
 	layout, err := exec.Command(realTmux, "-u", "-L", socket, "list-panes", "-s", "-t", session, "-F",
 		"#{window_name}\t#{pane_current_path}\t#{@rig-window-role}\t#{@rig-pane-role}\t#{@rig-pane-repo}").CombinedOutput()
 	if err != nil {
 		t.Fatalf("reading wake layout: %v\n%s", err, layout)
 	}
 	lines := strings.Split(strings.TrimSpace(string(layout)), "\n")
-	if len(lines) != 2 {
-		t.Fatalf("wake layout has %d panes, want agent + recto:\n%s", len(lines), layout)
+	if len(lines) != 1 {
+		t.Fatalf("wake layout has %d panes, want the agent alone:\n%s", len(lines), layout)
 	}
 	for _, line := range lines {
 		if !strings.Contains(line, "main/fakerepo\t"+workspace+"\tmain\t") || !strings.HasSuffix(line, "\tfakerepo") {

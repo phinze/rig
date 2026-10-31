@@ -130,12 +130,20 @@ func renderRigInstructions(basedir string, m manifest) string {
 		}
 	}
 
-	b.WriteString("- The main tmux window holds the task-level agent plus the currently relevant\n")
-	b.WriteString("  Recto diff. Every repo has one persistent Recto; inactive ones are full-window\n")
-	b.WriteString("  tabs. Use `rig recto <repo>` to pull one beside the agent, or combine the\n")
-	b.WriteString("  promotion with a Recto command, e.g. `rig recto cloud focus src/app.go:42`.\n")
-	b.WriteString("  Do not manipulate tmux panes directly. For an ad hoc shell, split from a\n")
-	b.WriteString("  repo's Recto so tmux inherits the correct working directory.\n")
+	if m.opensRecto() {
+		b.WriteString("- The main window holds the task-level agent plus the currently relevant\n")
+		b.WriteString("  Recto diff. Every repo has one persistent Recto; inactive ones are full-window\n")
+		b.WriteString("  tabs. Use `rig recto <repo>` to pull one beside the agent, or combine the\n")
+		b.WriteString("  promotion with a Recto command, e.g. `rig recto cloud focus src/app.go:42`.\n")
+		b.WriteString("  For an ad hoc shell, split from a repo's Recto so it inherits the right\n")
+		b.WriteString("  working directory.\n")
+	} else {
+		b.WriteString("- The main window holds you alone. When Paul should look at a diff, open it\n")
+		b.WriteString("  beside you with `rig recto <repo>`, which starts that repo's Recto if it\n")
+		b.WriteString("  isn't running, or combine it with a Recto command, e.g.\n")
+		b.WriteString("  `rig recto cloud focus src/app.go:42`. Repos you only read need no Recto.\n")
+	}
+	b.WriteString("  Do not manipulate panes directly.\n")
 	// relay refuses a rig with no Linear identity, so a GitHub or personal-task
 	// rig is spared a bullet about a command that would only tell it no.
 	if m.Tracker == "" || m.Tracker == "linear" {
