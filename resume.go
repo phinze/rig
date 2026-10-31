@@ -215,6 +215,8 @@ func ensureRigRuntimeWithPrompt(basedir string, m manifest, prompt string) (rigS
 		return rs, nil
 	}
 
+	rs.present()
+
 	// The spawn branch above wraps via sessionSpec; the live rebuild below
 	// sends the same line by hand, so it folds messaging in here instead.
 	command = claudeLaunchLine(basedir, m.ID, m.agentKind(), command)
@@ -255,7 +257,7 @@ func ensureRigRuntimeWithPrompt(basedir string, m manifest, prompt string) (rigS
 	if err := rs.markMainWindow(mainWindow, repo); err != nil {
 		return rigSession{}, err
 	}
-	if err := rs.b.RenameWindow(mainWindow, mainWindowName(repo)); err != nil {
+	if err := rs.b.RenameWindow(mainWindow, rs.mainWindowLabel(repo)); err != nil {
 		return rigSession{}, err
 	}
 	if err := rs.markPane(agentPane.PaneID, rigPaneAgent, repo); err != nil {
@@ -313,6 +315,7 @@ func ensureCoordinatorRuntime(basedir string, m manifest, prompt string) (rigSes
 	if !rs.live() {
 		return rs, spawnCoordinatorSession(rs, basedir, sessionSpec{agent: m.agentKind(), command: command, rigID: m.ID, basedir: basedir})
 	}
+	rs.present()
 
 	command = claudeLaunchLine(basedir, m.ID, m.agentKind(), command)
 
@@ -350,7 +353,7 @@ func ensureCoordinatorRuntime(basedir string, m manifest, prompt string) (rigSes
 	if err := rs.markMainWindow(mainWindow.WindowID, ""); err != nil {
 		return rigSession{}, err
 	}
-	if err := rs.b.RenameWindow(mainWindow.WindowID, mainWindowName("")); err != nil {
+	if err := rs.b.RenameWindow(mainWindow.WindowID, rs.mainWindowLabel("")); err != nil {
 		return rigSession{}, err
 	}
 	if err := rs.markPane(agentPane.PaneID, rigPaneAgent, ""); err != nil {

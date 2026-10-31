@@ -152,13 +152,61 @@ func defaultBackendWithSource() (name string, src agentSource, raw string) {
 type rigSession struct {
 	name string
 	b    mux.Backend
+	// show is how the session presents on a backend that keeps a display
+	// label apart from the name (mux.SessionPresenter). It's empty for a
+	// session built from a board row rather than a manifest, which never
+	// relabels anything.
+	show rigShow
+}
+
+// rigShow is what a rig's session displays where the backend lets it: the
+// session labelled with the rig's kind glyph and id, the agent's window with
+// the rig's title, and a chief of staff at the top of the list.
+type rigShow struct {
+	label string
+	title string
+	first bool
+}
+
+func showFor(m manifest) rigShow {
+	kind := manifestKind(m)
+	label := m.ID
+	if g := rigKindGlyph(kind); g != "" {
+		label = g + " " + label
+	}
+	return rigShow{label: label, title: m.Title, first: kind == rigKindCoS}
 }
 
 // sessionFor is the session a rig's basedir maps to, on the backend its
 // manifest records. Empty means tmux, as it does for every rig made before the
 // field existed.
 func sessionFor(basedir string, m manifest) rigSession {
-	return rigSession{name: rigSessionName(basedir), b: backendNamed(m.Backend)}
+	rs := rigSession{name: rigSessionName(basedir), b: backendNamed(m.Backend)}
+	if _, ok := rs.b.(mux.SessionPresenter); ok && m.ID != "" {
+		rs.show = showFor(m)
+	}
+	return rs
+}
+
+// mainWindowLabel names the agent's window. A presenting backend lists
+// windows under the session, so the rig's title says what the rig is for
+// there. Elsewhere the name is main/<repo>, the repo whose Recto sits beside
+// the agent.
+func (rs rigSession) mainWindowLabel(repo string) string {
+	if rs.show.title != "" {
+		return rs.show.title
+	}
+	return mainWindowName(repo)
+}
+
+// present applies rs.show. It's cosmetic, so a failure is dropped rather than
+// failing whatever built or repaired the session.
+func (rs rigSession) present() {
+	p, ok := rs.b.(mux.SessionPresenter)
+	if !ok || rs.show.label == "" {
+		return
+	}
+	_ = p.PresentSession(rs.name, rs.show.label, rs.show.first)
 }
 
 // sessionKey is a session's identity on a board that lists more than one

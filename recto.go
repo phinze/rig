@@ -94,7 +94,7 @@ func adoptLegacyRigPanes(rs rigSession, basedir string, m manifest) ([]mux.Pane,
 		}
 	}
 	_ = rs.markMainWindow(mainWindow, mainRepo)
-	_ = rs.b.RenameWindow(mainWindow, mainWindowName(mainRepo))
+	_ = rs.b.RenameWindow(mainWindow, rs.mainWindowLabel(mainRepo))
 	for _, p := range panes {
 		if p.WindowID == mainWindow || p.WindowRole != "" {
 			continue
@@ -229,7 +229,7 @@ func promoteRecto(rs rigSession, basedir, repo string, m manifest) error {
 	}
 	if target.WindowID == main.WindowID {
 		_ = rs.markMainWindow(main.WindowID, repo)
-		return rs.b.RenameWindow(main.WindowID, mainWindowName(repo))
+		return rs.b.RenameWindow(main.WindowID, rs.mainWindowLabel(repo))
 	}
 
 	if current.PaneID != "" {
@@ -260,7 +260,7 @@ func promoteRecto(rs rigSession, basedir, repo string, m manifest) error {
 	if err := rs.markMainWindow(main.WindowID, repo); err != nil {
 		return err
 	}
-	if err := rs.b.RenameWindow(main.WindowID, mainWindowName(repo)); err != nil {
+	if err := rs.b.RenameWindow(main.WindowID, rs.mainWindowLabel(repo)); err != nil {
 		return err
 	}
 	return rs.b.SelectPane(agent.PaneID)

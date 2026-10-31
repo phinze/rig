@@ -838,6 +838,36 @@ func (b Backend) createSession(name, windowName string, layout obj) (string, str
 	return out.Windows[0].BlockIDs[0], out.Windows[0].WindowID, nil
 }
 
+// PresentSession relabels a session rig made and, when first, moves it to the
+// front of the session order. Only a session with a recorded id is touched:
+// for one without, the label is the only handle rig has on it, and changing
+// it would lose the session.
+func (b Backend) PresentSession(name, label string, first bool) error {
+	id := b.target(name)
+	if id == name {
+		return nil
+	}
+	sessions, err := b.listSessions()
+	if err != nil {
+		return err
+	}
+	for i, s := range sessions {
+		if s.ID != id {
+			continue
+		}
+		if s.Label != label {
+			if err := b.call(name, "session.set_label", obj{"session_id": id, "label": label}, nil); err != nil {
+				return err
+			}
+		}
+		if first && i > 0 {
+			return b.call("", "session.move", obj{"session_id": id, "before_session_id": sessions[0].ID}, nil)
+		}
+		return nil
+	}
+	return nil
+}
+
 func (b Backend) split(target, cwd string, cmdline []string, label string) (string, error) {
 	session, err := b.sessionOfBlock(target)
 	if err != nil {

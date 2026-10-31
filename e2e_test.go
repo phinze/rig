@@ -100,7 +100,7 @@ func TestSpawnSessionAgents(t *testing.T) {
 		}
 		raw, err := os.ReadFile(marker)
 		if err != nil {
-			t.Fatalf("%s did not launch in %s: %v", c.agent, session, err)
+			t.Fatalf("%s did not launch in %s: %v", c.agent, session.name, err)
 		}
 		args := string(raw)
 		if !strings.Contains(args, c.flag) || !strings.Contains(args, "test prompt") {

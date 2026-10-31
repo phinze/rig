@@ -198,7 +198,7 @@ func spawnSession(rs rigSession, paneCwd string, sess sessionSpec) error {
 	if repo == "" {
 		repo = filepath.Base(paneCwd)
 	}
-	agentPane, mainWindow, err := rs.b.NewSession(rs.name, mainWindowName(repo), paneCwd)
+	agentPane, mainWindow, err := rs.b.NewSession(rs.name, rs.mainWindowLabel(repo), paneCwd)
 	if err != nil {
 		return fmt.Errorf("tmux new-session: %w", err)
 	}
@@ -228,6 +228,7 @@ func spawnSession(rs rigSession, paneCwd string, sess sessionSpec) error {
 	if err := rs.b.SendKeys(agentPane, agentLine); err != nil {
 		return fmt.Errorf("tmux send-keys: %w", err)
 	}
+	rs.present()
 	return nil
 }
 
@@ -239,7 +240,7 @@ func spawnCoordinatorSession(rs rigSession, basedir string, sess sessionSpec) er
 	if rs.live() {
 		return nil
 	}
-	agentPane, mainWindow, err := rs.b.NewSession(rs.name, mainWindowName(""), basedir)
+	agentPane, mainWindow, err := rs.b.NewSession(rs.name, rs.mainWindowLabel(""), basedir)
 	if err != nil {
 		return fmt.Errorf("tmux new-session: %w", err)
 	}
@@ -257,6 +258,7 @@ func spawnCoordinatorSession(rs rigSession, basedir string, sess sessionSpec) er
 	if err := rs.b.SendKeys(agentPane, agentLine); err != nil {
 		return fmt.Errorf("tmux send-keys: %w", err)
 	}
+	rs.present()
 	return nil
 }
 

@@ -18,8 +18,14 @@ const (
 	rigKindCoS
 )
 
-func rigKindOf(s rigStatus) rigKind {
-	switch s.Kind {
+func rigKindOf(s rigStatus) rigKind { return rigKindFor(s.Kind, s.Tracker, s.ID) }
+
+// manifestKind is rigKindOf for a rig read from its manifest, which is what a
+// session being built or repaired has in hand instead of a board row.
+func manifestKind(m manifest) rigKind { return rigKindFor(m.Kind, m.Tracker, m.ID) }
+
+func rigKindFor(kind, tracker, id string) rigKind {
+	switch kind {
 	case "review":
 		return rigKindReview
 	case "project":
@@ -27,7 +33,7 @@ func rigKindOf(s rigStatus) rigKind {
 	case "cos":
 		return rigKindCoS
 	}
-	if s.Tracker != "" {
+	if tracker != "" {
 		return rigKindTicket
 	}
 	// Rigs made before the manifest recorded a tracker have none, and several
@@ -37,7 +43,7 @@ func rigKindOf(s rigStatus) rigKind {
 	// rig's own reserved id for a PR-derived rig rather than a team prefix, so
 	// it's the one shape this must not read as an issue.
 	// A bare session has no id, and would otherwise match as the empty one.
-	if s.ID != "" && !strings.HasPrefix(s.ID, "pr-") && leadingIssueID(s.ID) == s.ID {
+	if id != "" && !strings.HasPrefix(id, "pr-") && leadingIssueID(id) == id {
 		return rigKindTicket
 	}
 	return rigKindLoose

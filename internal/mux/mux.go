@@ -100,6 +100,17 @@ type Backend interface {
 // fetched a dozen times and every session viewed twice. Backends whose calls
 // are cheap needn't bother; callers fall back to the Backend methods.
 
+// SessionPresenter is optional, for a backend whose UI shows a session by a
+// label it keeps apart from the name callers address it by. Rex's sidebar
+// lists each session's label with its windows' labels beneath, so a rig can
+// show what it is there instead of a path. tmux shows the session name, which
+// is also its address, so it leaves this out.
+type SessionPresenter interface {
+	// PresentSession sets the label a person sees for session. first moves
+	// the session to the front of the server's session order.
+	PresentSession(session, label string, first bool) error
+}
+
 // SessionNamer lists live session names without describing them, which is
 // all a liveness check needs. ok is false when the server can't be listed,
 // which callers read as nothing live, the way HasSession does.
