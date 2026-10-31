@@ -142,8 +142,11 @@ func TestRigInstructionsNameTheCoSAddress(t *testing.T) {
 		"loose":   {ID: "local-thing", Repos: map[string]string{"rig": "phinze/rig"}},
 		"project": {ID: "project-byoi", Kind: "project", Tracker: "linear"},
 	} {
-		if got := renderRigInstructions(dir, m); !strings.Contains(got, "rig send cos") {
-			t.Errorf("%s rig should be told about rig send cos:\n%s", name, got)
+		got := renderRigInstructions(dir, m)
+		for _, want := range []string{"rig send cos", "`DECIDE`", "`VISIT`", "`DONE`"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("%s rig should be told about %s:\n%s", name, want, got)
+			}
 		}
 	}
 	got := renderRigInstructions(dir, manifest{ID: "cos-2026-10-02", Title: "chief of staff 2026-10-02", Kind: "cos"})

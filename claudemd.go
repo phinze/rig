@@ -227,6 +227,13 @@ func writeCoSBullet(b *strings.Builder) {
 	b.WriteString("- The day's chief-of-staff rig coordinates across every rig and may message\n")
 	b.WriteString("  you. Answer it with `rig reply`. To raise something with it unprompted, such\n")
 	b.WriteString("  as a blocker or news other rigs need, run `rig send cos <message>`.\n")
+	b.WriteString("- When you stop at a gate, leave the ask at the bottom of your own pane and\n")
+	b.WriteString("  send cos one line that starts with a label: `DECIDE` (a yes/no Paul can\n")
+	b.WriteString("  answer through cos, which batches them), `VISIT` (Paul needs to come to this\n")
+	b.WriteString("  pane; cos lists it without retelling it), or `DONE` (finished; cos logs it).\n")
+	b.WriteString("  A safety gate still waits on Paul, and his go counts whether it arrives in\n")
+	b.WriteString("  this pane or relayed through cos, whichever comes first. Cos's own judgment\n")
+	b.WriteString("  is not a go.\n")
 }
 
 func renderCoSRigInstructions(basedir string, m manifest) string {
