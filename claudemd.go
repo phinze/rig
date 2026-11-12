@@ -137,13 +137,10 @@ func renderRigInstructions(basedir string, m manifest) string {
 		b.WriteString("  promotion with a Recto command, e.g. `rig recto cloud focus src/app.go:42`.\n")
 		b.WriteString("  For an ad hoc shell, split from a repo's Recto so it inherits the right\n")
 		b.WriteString("  working directory.\n")
+		b.WriteString("  Do not manipulate panes directly.\n")
 	} else {
-		b.WriteString("- The main window holds you alone. When Paul should look at a diff, open it\n")
-		b.WriteString("  beside you with `rig recto <repo>`, which starts that repo's Recto if it\n")
-		b.WriteString("  isn't running, or combine it with a Recto command, e.g.\n")
-		b.WriteString("  `rig recto cloud focus src/app.go:42`. Repos you only read need no Recto.\n")
+		writeWebWindowBullets(&b)
 	}
-	b.WriteString("  Do not manipulate panes directly.\n")
 	// relay refuses a rig with no Linear identity, so a GitHub or personal-task
 	// rig is spared a bullet about a command that would only tell it no.
 	if m.Tracker == "" || m.Tracker == "linear" {
@@ -231,6 +228,28 @@ func renderProjectRigInstructions(basedir string, m manifest) string {
 // Messages from it arrive at a turn boundary like any send, so the reply path
 // is the one worth naming; `cos` is the address that survives the daily
 // turnover, which a rig id from this morning's message would not.
+// writeWebWindowBullets is how an authoring rig's agent reaches Paul: the web
+// window rig serve shows beside Rex, written to with plain recto commands.
+// Comments come back through rig, and answers gather in the briefing.
+func writeWebWindowBullets(b *strings.Builder) {
+	b.WriteString("- The main window holds you alone. Paul reads this rig in a web window beside\n")
+	b.WriteString("  Rex that follows whichever session he's looking at and re-renders live. Write\n")
+	b.WriteString("  to it with plain `recto` commands; no viewer needs to be running:\n")
+	b.WriteString("  `recto tour` from a repo for its own story, `recto tour --group\n")
+	b.WriteString("  \"$RIG_BASEDIR\"` for one across repos, `recto focus PATH:START-END` to\n")
+	b.WriteString("  point at code. The recto skill has the details.\n")
+	b.WriteString("- Keep a briefing there with `recto brief`: what needs Paul (each question an\n")
+	b.WriteString("  `ask ID` block he answers in place), what his comments turned into, and where\n")
+	b.WriteString("  things stand. Rewrite it rather than append to it, whenever you finish\n")
+	b.WriteString("  something he asked for or reach a decision that's his.\n")
+	b.WriteString("- His comments from the window arrive as one message, an id per comment. Mark\n")
+	b.WriteString("  each with `rig ack ID start`, then `rig ack ID done`. What he should read\n")
+	b.WriteString("  goes in the briefing, gathered, not in a reply per comment.\n")
+	b.WriteString("- The terminal Recto is the escape hatch: `rig recto <repo>` opens one beside\n")
+	b.WriteString("  you, for when Paul asks for it or for what the window can't do yet\n")
+	b.WriteString("  (retargeting the base, review drafts). Do not manipulate panes directly.\n")
+}
+
 func writeCoSBullet(b *strings.Builder) {
 	b.WriteString("- The day's chief-of-staff rig coordinates across every rig and may message\n")
 	b.WriteString("  you. Answer it with `rig reply`. To raise something with it unprompted, such\n")

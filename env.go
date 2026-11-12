@@ -5,6 +5,7 @@ import (
 	"hash/fnv"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -62,6 +63,21 @@ func rigExports(basedir, cwd string) []string {
 	}
 	if m.ID != "" {
 		out = append(out, "export RIG_ID="+shellQuote(m.ID))
+	}
+	// Where each repo's work started, so recto run without a viewer anchors
+	// its diff where the web window does. Recorded starts only: recovering
+	// one walks jj's op log, too slow for every directory change.
+	if len(m.Starts) > 0 {
+		subs := make([]string, 0, len(m.Starts))
+		for sub := range m.Starts {
+			subs = append(subs, sub)
+		}
+		slices.Sort(subs)
+		pairs := make([]string, len(subs))
+		for i, sub := range subs {
+			pairs[i] = sub + "=" + m.Starts[sub]
+		}
+		out = append(out, "export RIG_STARTS="+shellQuote(strings.Join(pairs, " ")))
 	}
 
 	rel, err := filepath.Rel(basedir, cwd)

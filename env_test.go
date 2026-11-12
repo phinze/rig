@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -107,5 +108,23 @@ func TestHashPort(t *testing.T) {
 		if p2 := hashPort(key); p2 != p {
 			t.Errorf("hashPort(%q) not stable: %d then %d", key, p, p2)
 		}
+	}
+}
+
+// Recto run without a viewer anchors its diff where the web window does, so
+// the rig's recorded starts ride along in the environment.
+func TestEnvExportsRecordedStarts(t *testing.T) {
+	basedir := filepath.Join(t.TempDir(), "workspaces", "alpha")
+	if err := os.MkdirAll(filepath.Join(basedir, "one"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := manifest{ID: "alpha", Repos: map[string]string{"one": "o/one", "two": "o/two"},
+		Starts: map[string]string{"two": "bbb", "one": "aaa"}}
+	if err := writeManifest(basedir, m); err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(rigExports(basedir, basedir), "\n")
+	if !strings.Contains(got, "export RIG_STARTS='one=aaa two=bbb'") {
+		t.Fatalf("exports:\n%s", got)
 	}
 }
