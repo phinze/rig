@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="rig">
+<meta name="theme-color" content="#181825">
+<title>rig</title>
+<style>
+:root {
+  --base: #1e1e2e; --mantle: #181825; --crust: #11111b;
+  --surface0: #313244; --surface1: #45475a; --overlay0: #6c7086;
+  --text: #cdd6f4; --subtext: #a6adc8;
+  --red: #f38ba8; --green: #a6e3a1; --yellow: #f9e2af; --mauve: #cba6f7; --blue: #89b4fa;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--base); color: var(--text); font: 13px var(--sans); overflow: hidden; }
+header { height: 34px; display: flex; align-items: center; gap: 10px; padding: 0 12px;
+  background: var(--mantle); border-bottom: 1px solid var(--surface0); -webkit-user-select: none; user-select: none; }
+#dot { width: 8px; height: 8px; border-radius: 50%; background: var(--overlay0); flex: none; transition: background .3s; }
+#dot.on { background: var(--green); }
+#dot.err { background: var(--red); }
+#where { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#where .id { font: 600 13px var(--mono); color: var(--mauve); }
+#where .title { color: var(--subtext); margin-left: 8px; }
+#where .muted { color: var(--overlay0); }
+#meta { font: 11px var(--mono); color: var(--overlay0); white-space: nowrap; }
+button { font: 11px var(--mono); color: var(--subtext); background: var(--surface0); border: 0; border-radius: 10px;
+  padding: 3px 9px; cursor: pointer; }
+button:hover { background: var(--surface1); }
+button.paused { background: var(--yellow); color: var(--crust); }
+#moved { display: none; background: var(--blue); color: var(--crust); }
+#banner { display: none; padding: 6px 12px; font: 12px var(--mono); color: var(--red); background: #3a262e; border-bottom: 1px solid var(--surface0); }
+#stage { position: absolute; top: 34px; left: 0; right: 0; bottom: 0; }
+body.banner #stage { top: 62px; }
+#stage iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: var(--base); visibility: hidden; }
+#stage iframe.shown { visibility: visible; }
+#idle { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center;
+  color: var(--overlay0); font-size: 14px; line-height: 1.6; padding: 24px; }
+#idle b { color: var(--subtext); font-weight: 600; }
+</style>
+</head>
+<body>
+<header>
+  <div id="dot" title="focus stream"></div>
+  <div id="where"><span class="muted">connecting…</span></div>
+  <div id="meta"></div>
+  <button id="moved" title="focus moved while paused; click to go there"></button>
+  <button id="pin" title="stop following focus and stay on this rig">follow</button>
+</header>
+<div id="banner"></div>
+<div id="stage"><div id="idle">Waiting to see where you're looking.<br>Pick a session in Rex.</div></div>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const stage = $('stage'), idle = $('idle'), where = $('where'), meta = $('meta');
+  const dot = $('dot'), pin = $('pin'), moved = $('moved'), banner = $('banner');
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+  // A few rigs stay loaded so hopping back keeps scroll and open files. Each
+  // one holds an event stream, and a browser allows six connections per host,
+  // so the cache stays small enough to leave room for the focus stream.
+  const KEEP = 3;
+  const frames = new Map(); // rig slug -> iframe, most recent last
+  let shown = null;          // focus currently displayed
+  let latest = null;         // focus most recently reported
+  let paused = false;
+
+  function show(f) {
+    shown = f;
+    for (const fr of frames.values()) fr.classList.remove('shown');
+    if (!f || !f.rig) {
+      idle.style.display = 'flex';
+      idle.innerHTML = !f || !f.session
+        ? "Waiting to see where you're looking.<br>Pick a session in Rex."
+        : `<div><b>${esc(f.session)}</b> isn't a rig on this host.<br>Nothing to show while you're there.</div>`;
+      document.title = 'rig';
+      renderHeader();
+      return;
+    }
+    idle.style.display = 'none';
+    let fr = frames.get(f.rig);
+    if (fr) {
+      frames.delete(f.rig);
+    } else {
+      fr = document.createElement('iframe');
+      fr.src = 'v1/surface/' + encodeURIComponent(f.rig) + '/';
+      stage.appendChild(fr);
+    }
+    frames.set(f.rig, fr);
+    fr.classList.add('shown');
+    while (frames.size > KEEP) {
+      const [slug, old] = frames.entries().next().value;
+      old.remove();
+      frames.delete(slug);
+    }
+    document.title = f.id || f.rig;
+    renderHeader();
+  }
+
+  function age(ms) {
+    const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+    if (s < 60) return 'just now';
+    if (s < 3600) return Math.floor(s / 60) + 'm';
+    return Math.floor(s / 3600) + 'h' + String(Math.floor((s % 3600) / 60)).padStart(2, '0');
+  }
+
+  function renderHeader() {
+    const f = shown;
+    if (f && f.rig) {
+      where.innerHTML = `<span class="id">${esc(f.id || f.rig)}</span><span class="title">${esc(f.title || '')}</span>`;
+    } else if (f && f.session) {
+      where.innerHTML = `<span class="muted">${esc(f.session)}</span>`;
+    } else {
+      where.innerHTML = '<span class="muted">no focus yet</span>';
+    }
+    const src = latest && latest.client ? latest.client + ' · ' : '';
+    meta.textContent = latest && latest.since ? src + age(latest.since) : '';
+    pin.textContent = paused ? 'paused' : 'follow';
+    pin.classList.toggle('paused', paused);
+    const elsewhere = paused && latest && (latest.rig || latest.session) && (latest.rig !== (shown && shown.rig));
+    moved.style.display = elsewhere ? 'inline-block' : 'none';
+    if (elsewhere) moved.textContent = '→ ' + (latest.id || latest.rig || latest.session);
+    if (latest && latest.error) {
+      banner.textContent = latest.error;
+      banner.style.display = 'block';
+      document.body.classList.add('banner');
+      dot.className = 'err';
+    } else {
+      banner.style.display = 'none';
+      document.body.classList.remove('banner');
+    }
+  }
+
+  function onFocus(f) {
+    latest = f;
+    if (!f.error) dot.className = 'on';
+    if (!paused) {
+      const same = shown && shown.rig === f.rig && shown.session === f.session;
+      if (!same) { show(f); return; }
+      shown = f;
+    }
+    renderHeader();
+  }
+
+  pin.addEventListener('click', () => {
+    paused = !paused;
+    if (!paused && latest) show(latest); else renderHeader();
+  });
+  moved.addEventListener('click', () => { paused = false; if (latest) show(latest); });
+
+  const es = new EventSource('v1/focus');
+  es.addEventListener('focus', (e) => { try { onFocus(JSON.parse(e.data)); } catch {} });
+  es.addEventListener('open', () => { if (!(latest && latest.error)) dot.className = 'on'; });
+  es.addEventListener('error', () => { dot.className = ''; });
+  setInterval(renderHeader, 15000);
+})();
+</script>
+</body>
+</html>

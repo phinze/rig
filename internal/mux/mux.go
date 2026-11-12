@@ -15,6 +15,7 @@
 package mux
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -116,6 +117,22 @@ type SessionPresenter interface {
 // which callers read as nothing live, the way HasSession does.
 type SessionNamer interface {
 	SessionNames() (names []string, ok bool)
+}
+
+// FocusWatcher is optional, for a backend that can tell which session a
+// person's app is showing. WatchFocus calls seen each time an app puts a
+// session on screen, in order, and returns when ctx ends or the backend's
+// stream fails; the caller decides whether to start it again.
+type FocusWatcher interface {
+	WatchFocus(ctx context.Context, seen func(Focus)) error
+}
+
+// Focus is one "this app is now showing that session" observation. Session
+// is the name callers address the session by, as Sessions reports it; Client
+// is the app's own label, so a page can say whose screen it follows.
+type Focus struct {
+	Session string
+	Client  string
 }
 
 // Snapshotter answers Sessions and AllPanes from one pass, exactly as the two

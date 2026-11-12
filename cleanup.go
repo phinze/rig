@@ -309,6 +309,10 @@ func prepareTeardownJob(basedir string, m manifest) (*teardownJob, error) {
 	for source := range job.ReviewBookmarks {
 		sort.Strings(job.ReviewBookmarks[source])
 	}
+	// The basedir is Recto's key for a tour written across the rig's repos
+	// (recto tour --group), which would otherwise outlive the rig and greet
+	// the next one created at the same path.
+	job.RectoWorkspaces = append(job.RectoWorkspaces, resolvePath(basedir))
 	sort.Strings(job.RectoWorkspaces)
 
 	if _, err := exec.LookPath("docker"); err == nil {

@@ -383,6 +383,14 @@ those hosts at POST /v1/exec: send, messages, ls, waiting, history, sweep,
 dispatch, wake, resume, park, down, resurrect, up, new, review, project, cos,
 and notify list. Nothing else is accepted.
 
+It also serves a web window that follows your focus. Open / in a browser
+(pinned as a Safari web app, say) and it shows the rig your Rex app is
+looking at, re-rendered live as its tour and diff change. GET /v1/focus
+streams which rig that is, read from this host's Rex events, and
+/v1/surface/RIG/ shows that rig's repos as a running ` + "`recto serve`" + ` renders them.
+Serve starts recto serve itself, on a socket under $XDG_RUNTIME_DIR/rig.
+Sessions on other hosts aren't seen, so the window keeps the last rig here.
+
 WHO is a tailnet login (you@github), a node's short name, or tag:NAME; each
 request's peer is checked with tailscale whois. A tagged node never matches
 by login. --listen defaults to this host's tailnet IPv4 on port 7744. --icon is

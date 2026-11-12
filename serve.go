@@ -10,9 +10,11 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/phinze/rig/internal/mux"
@@ -157,7 +159,9 @@ func runServe(args []string) error {
 		return err
 	}
 	g := newServeGate(allow, tailscaleWhois, isLoopbackAddr(ln.Addr()))
-	ctx, stop := context.WithCancel(context.Background())
+	// A signal cancels ctx, which takes recto serve and the focus stream down
+	// with this process instead of leaving them orphaned.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go refreshServedPRs(ctx, home, servePRCheckEvery)
 	go pollServedSurfaces(ctx, servePollEvery)
@@ -168,11 +172,32 @@ func runServe(args []string) error {
 		doc.Icon = icon
 		return doc
 	}
-	srv := &http.Server{Handler: serveHandler(g, build), ReadHeaderTimeout: 5 * time.Second}
-	return srv.Serve(ln)
+	h := serveHandler(g, build)
+	rectoSock, err := rectoSocketPath()
+	if err != nil {
+		return err
+	}
+	web := newServeWeb(rectoSock)
+	web.restoreFocus()
+	go web.runRecto(ctx)
+	web.follow(ctx, localBackends())
+	web.mount(h, g)
+	srv := &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second}
+	go func() {
+		<-ctx.Done()
+		_ = srv.Close()
+	}()
+	if err := srv.Serve(ln); ctx.Err() == nil {
+		return err
+	}
+	select {
+	case <-web.rectoDone:
+	case <-time.After(3 * time.Second):
+	}
+	return nil
 }
 
-func serveHandler(g *serveGate, build func() serveDoc) http.Handler {
+func serveHandler(g *serveGate, build func() serveDoc) *http.ServeMux {
 	h := http.NewServeMux()
 	h.HandleFunc("POST /v1/show", func(w http.ResponseWriter, r *http.Request) {
 		if _, err := g.check(r.Context(), r.RemoteAddr); err != nil {
