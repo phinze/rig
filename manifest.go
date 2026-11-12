@@ -120,6 +120,12 @@ type manifest struct {
 	// absent on rigs that predate the field or never got swept. Absent means
 	// "unknown", never "never had one" — callers must degrade, not conclude.
 	PRs map[string]int
+	// Starts maps a repo's subdir to the commit its work began from: where its
+	// workspace forked off trunk when the rig made it. Unlike a branch point,
+	// it neither moves on a rebase nor empties out once work lands, so a
+	// viewer can keep showing this rig's work after it ships. Absent on repos
+	// added before the field existed; repoStart recovers those from jj.
+	Starts map[string]string
 }
 
 // isReview reports whether this rig is a `rig review` pickup, whose terminal
@@ -195,6 +201,7 @@ func writeManifest(basedir string, m manifest) error {
 	writeTable(&b, "review_prs", m.ReviewPRs)
 	writeBranchTable(&b, "branches", m.Branches)
 	writeIntTable(&b, "prs", m.PRs)
+	writeTable(&b, "starts", m.Starts)
 	path := filepath.Join(basedir, manifestName)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
@@ -328,6 +335,7 @@ func readManifest(basedir string) (manifest, error) {
 	m := manifest{
 		Repos: map[string]string{}, ReviewPRs: map[string]string{},
 		Branches: map[string][]string{}, PRs: map[string]int{},
+		Starts: map[string]string{},
 	}
 	section := ""
 	sc := bufio.NewScanner(f)
@@ -398,6 +406,8 @@ func readManifest(basedir string) (manifest, error) {
 			}
 		case "review_prs":
 			m.ReviewPRs[key] = parseTOMLString(val)
+		case "starts":
+			m.Starts[key] = parseTOMLString(val)
 		case "branches":
 			// Array form is the current shape; a bare scalar is a legacy
 			// single-branch manifest, read as a one-element list.

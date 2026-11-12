@@ -389,7 +389,10 @@ looking at, re-rendered live as its tour and diff change. GET /v1/focus
 streams which rig that is, read from this host's Rex events, and
 /v1/surface/RIG/ shows that rig's repos as a running ` + "`recto serve`" + ` renders them.
 Serve starts recto serve itself, on a socket under $XDG_RUNTIME_DIR/rig.
-Sessions on other hosts aren't seen, so the window keeps the last rig here.
+Each repo is passed with the commit its workspace started from, so once a
+rig's work lands on trunk the page shows it from there rather than going
+blank. Sessions on other hosts aren't seen, so the window keeps the last rig
+here.
 
 WHO is a tailnet login (you@github), a node's short name, or tag:NAME; each
 request's peer is checked with tailscale whois. A tagged node never matches

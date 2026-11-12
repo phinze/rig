@@ -26,7 +26,11 @@ func webRig(t *testing.T) string {
 	if err := os.MkdirAll(basedir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	m := manifest{ID: "ALPHA-1", Title: "Alpha things", Repos: map[string]string{"two": "o/two", "one": "o/one"}}
+	m := manifest{
+		ID: "ALPHA-1", Title: "Alpha things",
+		Repos:  map[string]string{"two": "o/two", "one": "o/one"},
+		Starts: map[string]string{"one": "abc123"},
+	}
 	if err := writeManifest(basedir, m); err != nil {
 		t.Fatal(err)
 	}
@@ -80,8 +84,9 @@ func TestSurfaceProxiesTheRigsReposToRecto(t *testing.T) {
 	sock, asked := fakeRecto(t)
 	srv := webServer(t, newServeWeb(sock))
 
-	// A caller's own root and group are dropped: the rig decides the page.
-	req, _ := http.NewRequest("GET", srv.URL+"/v1/surface/alpha/fragment?keep=1&root=/etc&group=/", nil)
+	// A caller's own root, group, and start are dropped: the rig decides the
+	// page.
+	req, _ := http.NewRequest("GET", srv.URL+"/v1/surface/alpha/fragment?keep=1&root=/etc&group=/&start=/etc:feed", nil)
 	req.Header.Set("Accept-Encoding", "gzip")
 	resp, err := http.DefaultTransport.RoundTrip(req)
 	if err != nil {
@@ -114,6 +119,11 @@ func TestSurfaceProxiesTheRigsReposToRecto(t *testing.T) {
 	}
 	if q.Get("group") != basedir {
 		t.Fatalf("group = %q, want the basedir %q", q.Get("group"), basedir)
+	}
+	// "two" isn't a real workspace, so its start can't be recovered and the
+	// page falls back to its branch point.
+	if got := strings.Join(q["start"], ","); got != filepath.Join(basedir, "one")+":abc123" {
+		t.Fatalf("starts = %q", got)
 	}
 	if q.Get("label") != "ALPHA-1" || q.Get("keep") != "1" {
 		t.Fatalf("query = %v", q)

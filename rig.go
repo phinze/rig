@@ -154,6 +154,12 @@ func addRepoWorkspace(basedir, rigID string, repo repoRef, startRev, branch stri
 	if err := addRepoToManifest(basedir, repo.Name, repo.nameWithOwner(), branch); err != nil {
 		return "", err
 	}
+	// Best-effort: without a start a viewer falls back to the branch point.
+	if start, err := workspaceStart(repoDest); err != nil {
+		fmt.Fprintf(os.Stderr, "rig: warning: couldn't record where %s started: %v\n", repo.Name, err)
+	} else if err := recordRepoStart(basedir, repo.Name, start); err != nil {
+		fmt.Fprintf(os.Stderr, "rig: warning: couldn't record where %s started: %v\n", repo.Name, err)
+	}
 
 	// Refresh each agent-facing breadcrumb so its repo list reflects the repo we
 	// just added. Best-effort: missing guidance shouldn't fail the add.

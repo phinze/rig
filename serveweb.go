@@ -61,10 +61,21 @@ type serveWeb struct {
 	cur      webFocus
 	rectoErr string
 	subs     map[chan webFocus]struct{}
+
+	// starts caches recovered workspace starts by root. Recovery walks jj's
+	// operation log, and the page asks on every refresh. Failures are cached too: a workspace whose
+	// creation has left the op log won't grow it back.
+	startsMu sync.Mutex
+	starts   map[string]string
 }
 
 func newServeWeb(rectoSock string) *serveWeb {
-	return &serveWeb{rectoSock: rectoSock, rectoDone: make(chan struct{}), subs: map[chan webFocus]struct{}{}}
+	return &serveWeb{
+		rectoSock: rectoSock,
+		rectoDone: make(chan struct{}),
+		subs:      map[chan webFocus]struct{}{},
+		starts:    map[string]string{},
+	}
 }
 
 // rectoSocketPath is serve's own recto socket, apart from the default one so
@@ -257,7 +268,7 @@ func (w *serveWeb) mount(h *http.ServeMux, g *serveGate) {
 	h.HandleFunc("GET /v1/focus", gated(w.serveFocus))
 	proxy := w.rectoProxy()
 	h.HandleFunc("GET /v1/surface/{rig}/{rest...}", gated(func(rw http.ResponseWriter, r *http.Request) {
-		roots, group, label, err := surfaceRoots(r.PathValue("rig"))
+		roots, group, label, m, err := surfaceRoots(r.PathValue("rig"))
 		if err != nil {
 			surfaceError(rw, http.StatusNotFound, err.Error())
 			return
@@ -266,8 +277,14 @@ func (w *serveWeb) mount(h *http.ServeMux, g *serveGate) {
 		q := r.URL.Query()
 		q.Del("root")
 		q.Del("group")
+		q.Del("start")
 		for _, root := range roots {
 			q.Add("root", root)
+			// Where each repo's work began, so a page whose branch point has
+			// emptied out (work pushed straight to trunk) still shows it.
+			if start := w.start(group, m, filepath.Base(root)); start != "" {
+				q.Add("start", root+":"+start)
+			}
 		}
 		// The basedir binds the repos together, so a tour written across
 		// them (recto tour --group) lives there.
@@ -331,18 +348,18 @@ func (w *serveWeb) serveFocus(rw http.ResponseWriter, r *http.Request) {
 // surfaceRoots is the set of workspace roots recto should show for a rig, one
 // per repo in subdir order, the basedir that groups them, and the label the
 // page should carry.
-func surfaceRoots(slug string) (roots []string, group, label string, err error) {
+func surfaceRoots(slug string) (roots []string, group, label string, m manifest, err error) {
 	rigs, err := listRigs()
 	if err != nil {
-		return nil, "", "", err
+		return nil, "", "", m, err
 	}
 	for _, r := range rigs {
 		if r.Slug != slug {
 			continue
 		}
-		m, err := readManifest(r.Path)
+		m, err = readManifest(r.Path)
 		if err != nil {
-			return nil, "", "", err
+			return nil, "", "", m, err
 		}
 		dirs := make([]string, 0, len(m.Repos))
 		for dir := range m.Repos {
@@ -357,9 +374,28 @@ func surfaceRoots(slug string) (roots []string, group, label string, err error) 
 		if label == "" {
 			label = r.Slug
 		}
-		return roots, r.Path, label, nil
+		return roots, r.Path, label, m, nil
 	}
-	return nil, "", "", fmt.Errorf("no rig %q on this host", slug)
+	return nil, "", "", m, fmt.Errorf("no rig %q on this host", slug)
+}
+
+// start is a rig repo's start, or "" when it can't be known.
+func (w *serveWeb) start(basedir string, m manifest, subdir string) string {
+	if c := m.Starts[subdir]; c != "" {
+		return c
+	}
+	root := filepath.Join(basedir, subdir)
+	w.startsMu.Lock()
+	defer w.startsMu.Unlock()
+	if c, ok := w.starts[root]; ok {
+		return c
+	}
+	c, err := repoStart(basedir, m, subdir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "rig serve: no start for %s: %v\n", root, err)
+	}
+	w.starts[root] = c
+	return c
 }
 
 func (w *serveWeb) rectoProxy() *httputil.ReverseProxy {
