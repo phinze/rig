@@ -194,6 +194,17 @@ so an agent's cheap path is also the right one. A message from another host
 is answered there.`,
 	},
 	{
+		name:    "ack",
+		group:   "work",
+		usage:   []string{"ack ID start|done"},
+		summary: "mark where a comment from the web window stands",
+		details: `Run inside the rig the comment came to. Comments arrive as one message
+with an id per comment; start says you've taken it up, done that it's
+handled, and the person sees that beside the comment. Acks carry no text:
+what they should read goes in the rig's briefing (recto brief --group
+"$RIG_BASEDIR"), gathered in one place rather than scattered across replies.`,
+	},
+	{
 		name:    "messages",
 		group:   "work",
 		usage:   []string{"messages [RIG[@PLACE]] [--format=json|table]"},
@@ -393,6 +404,12 @@ Each repo is passed with the commit its workspace started from, so once a
 rig's work lands on trunk the page shows it from there rather than going
 blank. Sessions on other hosts aren't seen, so the window keeps the last rig
 here.
+
+Select anything on a page to comment on it. Comments wait in the window's
+tray until sent, then go to the rig's agent as one message, logged in the
+rig's .rig/comments.jsonl; the agent marks each with ` + "`rig ack`" + `. The
+comment routes under /v1/comments/RIG take JSON from the window's own origin
+only, so another site open in the same browser can't post as you.
 
 WHO is a tailnet login (you@github), a node's short name, or tag:NAME; each
 request's peer is checked with tailscale whois. A tagged node never matches

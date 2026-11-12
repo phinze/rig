@@ -41,6 +41,27 @@ body.banner #stage { top: 62px; }
 #idle { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center;
   color: var(--overlay0); font-size: 14px; line-height: 1.6; padding: 24px; }
 #idle b { color: var(--subtext); font-weight: 600; }
+#needs { display: none; background: var(--yellow); color: var(--crust); }
+#trayBtn.held { background: var(--mauve); color: var(--crust); }
+#tray { position: absolute; top: 0; right: 0; bottom: 0; width: min(360px, 100vw); z-index: 5; display: none; flex-direction: column;
+  background: var(--mantle); border-left: 1px solid var(--surface1); box-shadow: -8px 0 30px rgba(0,0,0,.4); }
+body.tray #tray { display: flex; }
+#tray .head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--surface0); }
+#tray .head b { flex: 1; font: 600 12px var(--mono); color: var(--subtext); }
+#tray .list { flex: 1; overflow-y: auto; padding: 4px 0 16px; }
+#tray h3 { font: 11px var(--mono); text-transform: uppercase; letter-spacing: .05em; color: var(--overlay0); margin: 12px 12px 4px; }
+.cm { padding: 7px 12px; border-bottom: 1px solid var(--surface0); }
+.cm .a { font: 11px var(--mono); color: var(--mauve); display: flex; gap: 6px; align-items: center; }
+.cm .a > span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cm .b { white-space: pre-wrap; margin-top: 3px; color: var(--text); line-height: 1.4; }
+.cm .e { color: var(--red); font: 11px var(--mono); margin-top: 3px; }
+.cm .x { padding: 0 6px; background: none; color: var(--overlay0); }
+.st { font: 10px var(--mono); padding: 1px 7px; border-radius: 8px; border: 1px solid var(--overlay0); color: var(--subtext); white-space: nowrap; }
+.st.sent, .st.start { border-color: var(--mauve); color: var(--mauve); }
+.st.done { border-color: var(--green); color: var(--green); }
+.st.failed { border-color: var(--red); color: var(--red); }
+#tray .empty { color: var(--overlay0); padding: 16px 12px; line-height: 1.5; }
+#trayErr { display: none; color: var(--red); font: 11px var(--mono); padding: 6px 12px; }
 </style>
 </head>
 <body>
@@ -48,11 +69,15 @@ body.banner #stage { top: 62px; }
   <div id="dot" title="focus stream"></div>
   <div id="where"><span class="muted">connecting…</span></div>
   <div id="meta"></div>
+  <button id="needs" title="questions in the briefing waiting on you"></button>
+  <button id="trayBtn" title="comments you've left for this rig">comments</button>
   <button id="moved" title="focus moved while paused; click to go there"></button>
   <button id="pin" title="stop following focus and stay on this rig">follow</button>
 </header>
 <div id="banner"></div>
-<div id="stage"><div id="idle">Waiting to see where you're looking.<br>Pick a session in Rex.</div></div>
+<div id="stage"><div id="idle">Waiting to see where you're looking.<br>Pick a session in Rex.</div>
+<aside id="tray"><div class="head"><b>comments</b><button id="sendAll"></button><button id="trayClose">close</button></div>
+<div id="trayErr"></div><div class="list"></div></aside></div>
 <script>
 (() => {
   const $ = (id) => document.getElementById(id);
@@ -157,6 +182,120 @@ body.banner #stage { top: 62px; }
   es.addEventListener('open', () => { if (!(latest && latest.error)) dot.className = 'on'; });
   es.addEventListener('error', () => { dot.className = ''; });
   setInterval(renderHeader, 15000);
+
+  // Comments. A page selects and words them; this frame holds them for the
+  // shown rig and sends a batch as one message through rig serve, which
+  // delivers it and tracks each one to the agent's ack. The page gets the
+  // list back so it can mark each comment's spot.
+  const trayBtn = $('trayBtn'), tray = $('tray'), sendAll = $('sendAll'), trayErr = $('trayErr'), needs = $('needs');
+  const lists = new Map(); // rig slug -> comments
+  const asks = new Map();  // rig slug -> open asks on its page
+  const words = { held: 'held', failed: 'not delivered', sent: 'sent', start: 'on it', done: 'handled' };
+
+  function rigOf(source) {
+    for (const [slug, fr] of frames) if (fr.contentWindow === source) return slug;
+    return null;
+  }
+
+  async function api(method, path, body) {
+    const res = await fetch(path, {
+      method, cache: 'no-store',
+      headers: body ? { 'Content-Type': 'application/json' } : {},
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    return data;
+  }
+
+  function fail(err, kind) {
+    trayErr.dataset.kind = kind || '';
+    trayErr.textContent = String(err.message || err);
+    trayErr.style.display = 'block';
+    document.body.classList.add('tray');
+  }
+
+  async function load(slug) {
+    try {
+      const data = await api('GET', 'v1/comments/' + encodeURIComponent(slug));
+      lists.set(slug, data.comments || []);
+    } catch { return; }
+    const fr = frames.get(slug);
+    if (fr && fr.contentWindow) fr.contentWindow.postMessage({ comments: lists.get(slug) }, location.origin);
+    if (shown && shown.rig === slug) renderTray();
+  }
+
+  function renderTray() {
+    const slug = shown && shown.rig;
+    const cs = (slug && lists.get(slug)) || [];
+    const held = cs.filter((c) => c.state === 'held' || c.state === 'failed');
+    // A send error stands until a send gets through.
+    if (!cs.some((c) => c.state === 'failed') && trayErr.dataset.kind === 'send') trayErr.style.display = 'none';
+    trayBtn.textContent = held.length ? held.length + ' held' : 'comments';
+    trayBtn.classList.toggle('held', held.length > 0);
+    trayBtn.style.display = slug ? 'inline-block' : 'none';
+    const open = (slug && asks.get(slug)) || 0;
+    needs.style.display = open ? 'inline-block' : 'none';
+    needs.textContent = open + (open === 1 ? ' needs you' : ' need you');
+    sendAll.textContent = held.length > 1 ? 'send ' + held.length : 'send';
+    sendAll.style.display = held.length ? 'inline-block' : 'none';
+    const list = tray.querySelector('.list');
+    if (!cs.length) {
+      list.innerHTML = '<div class="empty">Select anything on the page and press <b>comment</b>. Comments wait here until you send them, so a pass can go out as one message.</div>';
+      return;
+    }
+    const groups = [
+      ['waiting to send', held],
+      ['with the agent', cs.filter((c) => c.state === 'sent' || c.state === 'start')],
+      ['handled', cs.filter((c) => c.state === 'done').slice(-10).reverse()],
+    ];
+    list.innerHTML = groups.filter(([, g]) => g.length).map(([title, g]) => `<h3>${title}</h3>` + g.map((c) => `
+      <div class="cm" data-id="${esc(c.id)}">
+        <div class="a"><span title="${esc(c.anchor.label)}">${esc(c.anchor.label)}</span><span class="st ${esc(c.state)}">${esc(words[c.state] || c.state)}</span>
+        ${c.state === 'held' || c.state === 'failed' ? '<button class="x" data-discard title="discard">✕</button>' : ''}</div>
+        <div class="b">${esc(c.body)}</div>
+        ${c.error ? `<div class="e">${esc(c.error)}</div>` : ''}
+      </div>`).join('')).join('');
+  }
+
+  window.addEventListener('message', async (e) => {
+    if (e.origin !== location.origin) return;
+    const slug = rigOf(e.source);
+    if (!slug) return;
+    if (e.data && typeof e.data.asks === 'number') { asks.set(slug, e.data.asks); renderTray(); }
+    if (e.data && e.data.comment) {
+      trayErr.style.display = 'none';
+      try {
+        await api('POST', 'v1/comments/' + encodeURIComponent(slug), { ...e.data.comment, client: (latest && latest.client) || 'web' });
+      } catch (err) { fail(err); }
+      load(slug);
+    }
+  });
+
+  sendAll.addEventListener('click', async () => {
+    const slug = shown && shown.rig;
+    if (!slug) return;
+    trayErr.style.display = 'none';
+    try { await api('POST', 'v1/comments/' + encodeURIComponent(slug) + '/send', { ids: [] }); } catch (err) { fail(err, 'send'); }
+    load(slug);
+  });
+  tray.addEventListener('click', async (e) => {
+    const x = e.target.closest('[data-discard]');
+    const slug = shown && shown.rig;
+    if (!x || !slug) return;
+    try { await api('POST', 'v1/comments/' + encodeURIComponent(slug) + '/' + encodeURIComponent(x.closest('.cm').dataset.id) + '/discard', {}); } catch (err) { fail(err); }
+    load(slug);
+  });
+  trayBtn.addEventListener('click', () => document.body.classList.toggle('tray'));
+  $('trayClose').addEventListener('click', () => document.body.classList.remove('tray'));
+
+  // A newly loaded page needs the list too, and acks arrive from the agent,
+  // not from here, so the shown rig is polled while the window is visible.
+  stage.addEventListener('load', (e) => { const slug = rigOf(e.target.contentWindow); if (slug) load(slug); }, true);
+  setInterval(() => { if (!document.hidden && shown && shown.rig) load(shown.rig); }, 3000);
+  const show0 = show;
+  show = (f) => { show0(f); if (f && f.rig) load(f.rig); renderTray(); };
+  renderTray();
 })();
 </script>
 </body>

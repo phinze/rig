@@ -266,6 +266,10 @@ func (w *serveWeb) mount(h *http.ServeMux, g *serveGate) {
 		_, _ = rw.Write(serveFrameHTML)
 	}))
 	h.HandleFunc("GET /v1/focus", gated(w.serveFocus))
+	h.HandleFunc("GET /v1/comments/{rig}", gated(serveComments))
+	h.HandleFunc("POST /v1/comments/{rig}", gated(sameOrigin(postComment)))
+	h.HandleFunc("POST /v1/comments/{rig}/send", gated(sameOrigin(postSendComments)))
+	h.HandleFunc("POST /v1/comments/{rig}/{id}/discard", gated(sameOrigin(postDiscardComment)))
 	proxy := w.rectoProxy()
 	h.HandleFunc("GET /v1/surface/{rig}/{rest...}", gated(func(rw http.ResponseWriter, r *http.Request) {
 		roots, group, label, m, err := surfaceRoots(r.PathValue("rig"))
@@ -377,6 +381,131 @@ func surfaceRoots(slug string) (roots []string, group, label string, m manifest,
 		return roots, r.Path, label, m, nil
 	}
 	return nil, "", "", m, fmt.Errorf("no rig %q on this host", slug)
+}
+
+// rigBySlug finds a rig on this host by its basedir name.
+func rigBySlug(slug string) (rigInfo, error) {
+	rigs, err := listRigs()
+	if err != nil {
+		return rigInfo{}, err
+	}
+	for _, r := range rigs {
+		if r.Slug == slug {
+			return r, nil
+		}
+	}
+	return rigInfo{}, fmt.Errorf("no rig %q on this host", slug)
+}
+
+// sameOrigin refuses a write a page on some other site sent from the
+// person's own browser. The whois gate can't tell those apart, since they
+// come from the same tailnet peer. Requiring JSON makes a browser ask first
+// (and this server never says yes), and a stated Origin has to be this one.
+func sameOrigin(next http.HandlerFunc) http.HandlerFunc {
+	return func(rw http.ResponseWriter, r *http.Request) {
+		if ct, _, _ := strings.Cut(r.Header.Get("Content-Type"), ";"); strings.TrimSpace(ct) != "application/json" {
+			http.Error(rw, "writes take application/json", http.StatusUnsupportedMediaType)
+			return
+		}
+		if o := r.Header.Get("Origin"); o != "" {
+			u, err := url.Parse(o)
+			if err != nil || u.Host != r.Host {
+				http.Error(rw, "cross-origin write refused", http.StatusForbidden)
+				return
+			}
+		}
+		next(rw, r)
+	}
+}
+
+func writeJSON(rw http.ResponseWriter, code int, v any) {
+	rw.Header().Set("Content-Type", "application/json")
+	rw.Header().Set("Cache-Control", "no-store")
+	rw.WriteHeader(code)
+	_ = json.NewEncoder(rw).Encode(v)
+}
+
+func jsonError(rw http.ResponseWriter, code int, err error) {
+	writeJSON(rw, code, map[string]string{"error": err.Error()})
+}
+
+func serveComments(rw http.ResponseWriter, r *http.Request) {
+	rig, err := rigBySlug(r.PathValue("rig"))
+	if err != nil {
+		jsonError(rw, http.StatusNotFound, err)
+		return
+	}
+	cs := readComments(rig.Path)
+	if cs == nil {
+		cs = []rigComment{}
+	}
+	writeJSON(rw, http.StatusOK, map[string]any{"comments": cs})
+}
+
+func postComment(rw http.ResponseWriter, r *http.Request) {
+	rig, err := rigBySlug(r.PathValue("rig"))
+	if err != nil {
+		jsonError(rw, http.StatusNotFound, err)
+		return
+	}
+	var in struct {
+		Anchor commentAnchor `json:"anchor"`
+		Quote  string        `json:"quote"`
+		Body   string        `json:"body"`
+		Client string        `json:"client"`
+		Send   bool          `json:"send"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(rw, r.Body, 64<<10)).Decode(&in); err != nil {
+		jsonError(rw, http.StatusBadRequest, err)
+		return
+	}
+	c, err := addComment(rig.Path, in.Anchor, in.Quote, in.Body, in.Client)
+	if err != nil {
+		jsonError(rw, http.StatusBadRequest, err)
+		return
+	}
+	if in.Send {
+		if _, err := sendComments(rig, []string{c.ID}); err != nil {
+			// Kept and marked failed, so it can be sent again.
+			jsonError(rw, http.StatusBadGateway, err)
+			return
+		}
+	}
+	writeJSON(rw, http.StatusOK, c)
+}
+
+func postSendComments(rw http.ResponseWriter, r *http.Request) {
+	rig, err := rigBySlug(r.PathValue("rig"))
+	if err != nil {
+		jsonError(rw, http.StatusNotFound, err)
+		return
+	}
+	var in struct {
+		IDs []string `json:"ids"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(rw, r.Body, 64<<10)).Decode(&in); err != nil {
+		jsonError(rw, http.StatusBadRequest, err)
+		return
+	}
+	sent, err := sendComments(rig, in.IDs)
+	if err != nil {
+		jsonError(rw, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(rw, http.StatusOK, map[string]any{"sent": len(sent)})
+}
+
+func postDiscardComment(rw http.ResponseWriter, r *http.Request) {
+	rig, err := rigBySlug(r.PathValue("rig"))
+	if err != nil {
+		jsonError(rw, http.StatusNotFound, err)
+		return
+	}
+	if err := discardComment(rig.Path, r.PathValue("id")); err != nil {
+		jsonError(rw, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(rw, http.StatusOK, map[string]any{})
 }
 
 // start is a rig repo's start, or "" when it can't be known.

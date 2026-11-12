@@ -73,6 +73,8 @@ func main() {
 		err = runSend(args)
 	case "reply":
 		err = runReply(args)
+	case "ack":
+		err = runAck(args)
 	case "messages":
 		err = runMessages(args)
 	case "review":

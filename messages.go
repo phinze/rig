@@ -853,6 +853,9 @@ func runReply(args []string) error {
 		// rig:<id> is a rig on this host; rig:<id>@<place> is one on the host
 		// the tailnet said the message came from, which resolveTarget reaches
 		// through that place's surface.
+		if m.FromAddr == webSender.addr {
+			return fmt.Errorf("the last message was comments from the web window: mark each with `rig ack ID start|done`, and put what to read in the briefing (recto brief)")
+		}
 		rigID, ok := strings.CutPrefix(m.FromAddr, "rig:")
 		if !ok || rigID == "" {
 			return fmt.Errorf("last message came from %s, which isn't a rig address I can deliver a reply to", m.From)
