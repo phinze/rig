@@ -283,19 +283,33 @@ body.tray #tray { display: flex; }
       if (was !== e.data.peers.join(' ')) loadPeers(slug);
     }
     if (e.data && e.data.comment) {
-      // An answer to an ask gathered from another rig goes to that rig, sent
-      // at once; this tray only holds the shown rig's comments.
+      // An answer to an ask gathered from another rig is held in that rig's
+      // log; the page sends a rig's answers together.
       const { rig, ...comment } = e.data.comment;
       const to = rig || slug;
       trayErr.style.display = 'none';
       try {
-        await api('POST', 'v1/comments/' + encodeURIComponent(to), { ...comment, send: rig ? true : comment.send, client: (latest && latest.client) || 'web' });
+        await api('POST', 'v1/comments/' + encodeURIComponent(to), { ...comment, client: (latest && latest.client) || 'web' });
       } catch (err) { fail(err); }
       if (rig) loadPeers(slug); else load(slug);
     }
+    // A page's held answers to another rig's asks, sent as one message.
+    if (e.data && typeof e.data.sendRig === 'string' && Array.isArray(e.data.ids)) {
+      try {
+        await api('POST', 'v1/comments/' + encodeURIComponent(e.data.sendRig) + '/send', { ids: e.data.ids });
+      } catch (err) { fail(err, 'send'); }
+      loadPeers(slug);
+    }
     if (e.data && typeof e.data.showRig === 'string') {
-      trayErr.style.display = 'none';
-      try { await api('POST', 'v1/show/' + encodeURIComponent(e.data.showRig), {}); } catch (err) { fail(err); }
+      // The window goes there itself: on a phone it's the screen in use, and
+      // no Rex app may be awake to follow. Rex switches too when it can.
+      const label = String(e.data.label || '');
+      show({ rig: e.data.showRig, id: label || e.data.showRig, title: '' });
+      try {
+        await api('POST', 'v1/show/' + encodeURIComponent(e.data.showRig), {});
+      } catch (err) {
+        meta.textContent = 'shown here only · Rex: ' + String(err.message || err);
+      }
     }
   });
 
