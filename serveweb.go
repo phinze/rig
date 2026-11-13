@@ -5,6 +5,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"io"
@@ -270,6 +271,7 @@ func (w *serveWeb) mount(h *http.ServeMux, g *serveGate) {
 	h.HandleFunc("POST /v1/comments/{rig}", gated(sameOrigin(postComment)))
 	h.HandleFunc("POST /v1/comments/{rig}/send", gated(sameOrigin(postSendComments)))
 	h.HandleFunc("POST /v1/comments/{rig}/{id}/discard", gated(sameOrigin(postDiscardComment)))
+	h.HandleFunc("POST /v1/show/{rig}", gated(sameOrigin(postShowRig)))
 	proxy := w.rectoProxy()
 	h.HandleFunc("GET /v1/surface/{rig}/{rest...}", gated(func(rw http.ResponseWriter, r *http.Request) {
 		roots, group, label, m, err := surfaceRoots(r.PathValue("rig"))
@@ -294,6 +296,14 @@ func (w *serveWeb) mount(h *http.ServeMux, g *serveGate) {
 		// them (recto tour --group) lives there.
 		q.Set("group", group)
 		q.Set("label", label)
+		// A chief of staff organizes attention across every rig, so its page
+		// gathers what each one is asking.
+		q.Del("peer")
+		if m.isCoS() {
+			for _, p := range rigPeers(group) {
+				q.Add("peer", p)
+			}
+		}
 		out := r.Clone(r.Context())
 		out.URL = &url.URL{Path: "/" + r.PathValue("rest"), RawQuery: q.Encode()}
 		proxy.ServeHTTP(rw, out)
@@ -381,6 +391,53 @@ func surfaceRoots(slug string) (roots []string, group, label string, m manifest,
 		return roots, r.Path, label, m, nil
 	}
 	return nil, "", "", m, fmt.Errorf("no rig %q on this host", slug)
+}
+
+// rigPeers is every other rig on this host whose asks a chief of staff's page
+// gathers, as recto's `peer` values: slug, basedir, label. Other chiefs of
+// staff are left out; they coordinate, they don't ask.
+func rigPeers(self string) []string {
+	rigs, err := listRigs()
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, r := range rigs {
+		if r.Path == self || r.Kind == "cos" || r.Building != "" {
+			continue
+		}
+		// The tracker id and title when there is one, else the title alone;
+		// a slug is only a last resort, since it's usually the title again.
+		label := r.Title
+		if r.ID != "" && r.ID != r.Slug {
+			label = r.ID + " · " + r.Title
+		}
+		if strings.TrimSpace(strings.Trim(label, " ·")) == "" {
+			label = r.Slug
+		}
+		out = append(out, r.Slug+"\t"+r.Path+"\t"+label)
+	}
+	return out
+}
+
+// postShowRig puts a rig's session on screen, for a link on a page that names
+// another rig. The window follows the screen, so it lands there too. Only a
+// session the board lists can be shown, the same as /v1/show.
+func postShowRig(rw http.ResponseWriter, r *http.Request) {
+	rig, err := rigBySlug(r.PathValue("rig"))
+	if err != nil {
+		jsonError(rw, http.StatusNotFound, err)
+		return
+	}
+	s := rig.session()
+	if err := show(showRequest{Kind: s.b.Name(), Target: s.name}); err != nil {
+		if errors.Is(err, errNotListed) {
+			err = fmt.Errorf("%s has no live session to show (wake it first)", rig.Slug)
+		}
+		jsonError(rw, http.StatusConflict, err)
+		return
+	}
+	writeJSON(rw, http.StatusOK, map[string]string{"shown": rig.Slug})
 }
 
 // rigBySlug finds a rig on this host by its basedir name.

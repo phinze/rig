@@ -190,6 +190,7 @@ body.tray #tray { display: flex; }
   const trayBtn = $('trayBtn'), tray = $('tray'), sendAll = $('sendAll'), trayErr = $('trayErr'), needs = $('needs');
   const lists = new Map(); // rig slug -> comments
   const asks = new Map();  // rig slug -> open asks on its page
+  const peers = new Map(); // rig slug -> other rigs whose asks its page gathers
   const words = { held: 'held', failed: 'not delivered', sent: 'sent', start: 'on it', done: 'handled' };
 
   function rigOf(source) {
@@ -223,6 +224,19 @@ body.tray #tray { display: flex; }
     const fr = frames.get(slug);
     if (fr && fr.contentWindow) fr.contentWindow.postMessage({ comments: lists.get(slug) }, location.origin);
     if (shown && shown.rig === slug) renderTray();
+  }
+
+  // The comments of the rigs a page gathers asks from, so it can tell which
+  // are answered.
+  async function loadPeers(slug) {
+    const names = peers.get(slug) || [];
+    if (!names.length) return;
+    const got = {};
+    await Promise.all(names.map(async (p) => {
+      try { got[p] = (await api('GET', 'v1/comments/' + encodeURIComponent(p))).comments || []; } catch {}
+    }));
+    const fr = frames.get(slug);
+    if (fr && fr.contentWindow) fr.contentWindow.postMessage({ peerComments: got }, location.origin);
   }
 
   function renderTray() {
@@ -263,12 +277,25 @@ body.tray #tray { display: flex; }
     const slug = rigOf(e.source);
     if (!slug) return;
     if (e.data && typeof e.data.asks === 'number') { asks.set(slug, e.data.asks); renderTray(); }
+    if (e.data && Array.isArray(e.data.peers)) {
+      const was = (peers.get(slug) || []).join(' ');
+      peers.set(slug, e.data.peers);
+      if (was !== e.data.peers.join(' ')) loadPeers(slug);
+    }
     if (e.data && e.data.comment) {
+      // An answer to an ask gathered from another rig goes to that rig, sent
+      // at once; this tray only holds the shown rig's comments.
+      const { rig, ...comment } = e.data.comment;
+      const to = rig || slug;
       trayErr.style.display = 'none';
       try {
-        await api('POST', 'v1/comments/' + encodeURIComponent(slug), { ...e.data.comment, client: (latest && latest.client) || 'web' });
+        await api('POST', 'v1/comments/' + encodeURIComponent(to), { ...comment, send: rig ? true : comment.send, client: (latest && latest.client) || 'web' });
       } catch (err) { fail(err); }
-      load(slug);
+      if (rig) loadPeers(slug); else load(slug);
+    }
+    if (e.data && typeof e.data.showRig === 'string') {
+      trayErr.style.display = 'none';
+      try { await api('POST', 'v1/show/' + encodeURIComponent(e.data.showRig), {}); } catch (err) { fail(err); }
     }
   });
 
@@ -292,7 +319,7 @@ body.tray #tray { display: flex; }
   // A newly loaded page needs the list too, and acks arrive from the agent,
   // not from here, so the shown rig is polled while the window is visible.
   stage.addEventListener('load', (e) => { const slug = rigOf(e.target.contentWindow); if (slug) load(slug); }, true);
-  setInterval(() => { if (!document.hidden && shown && shown.rig) load(shown.rig); }, 3000);
+  setInterval(() => { if (!document.hidden && shown && shown.rig) { load(shown.rig); loadPeers(shown.rig); } }, 3000);
   const show0 = show;
   show = (f) => { show0(f); if (f && f.rig) load(f.rig); renderTray(); };
   renderTray();

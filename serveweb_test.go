@@ -221,3 +221,84 @@ func TestNoFocusSourceSaysSo(t *testing.T) {
 		t.Fatalf("with nothing to watch, focus should say so; got %+v", w.cur)
 	}
 }
+
+// A chief of staff's page gathers every other working rig's asks; any other
+// rig's page gathers none, and a caller can't add peers of its own.
+func TestCoSPageGathersTheOtherRigs(t *testing.T) {
+	alpha := webRig(t)
+	home := filepath.Dir(filepath.Dir(alpha))
+	mk := func(slug string, m manifest) string {
+		dir := filepath.Join(home, "workspaces", slug)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeManifest(dir, m); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+	mk("cos-today", manifest{Kind: "cos", Title: "Chief of staff"})
+	mk("cos-yesterday", manifest{Kind: "cos", Title: "Chief of staff"})
+	untracked := mk("loose-idea", manifest{Title: "Loose idea"})
+	sock, asked := fakeRecto(t)
+	srv := webServer(t, newServeWeb(sock))
+
+	get := func(slug string) []string {
+		resp, err := http.Get(srv.URL + "/v1/surface/" + slug + "/fragment?peer=x%09%2Fetc%09evil")
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return asked().URL.Query()["peer"]
+	}
+	got := get("cos-today")
+	want := []string{
+		"alpha\t" + alpha + "\tALPHA-1 · Alpha things",
+		"loose-idea\t" + untracked + "\tLoose idea",
+	}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("peers = %q, want %q", got, want)
+	}
+	if got := get("alpha"); len(got) != 0 {
+		t.Fatalf("a working rig's page got peers %q", got)
+	}
+}
+
+// A rig link puts that rig's session on screen through the same guarded
+// path as the board's, and says so when the rig has nothing to show.
+func TestShowRigPutsItsSessionOnScreen(t *testing.T) {
+	basedir := webRig(t)
+	srv := webServer(t, newServeWeb(""))
+	var got showRequest
+	old := show
+	t.Cleanup(func() { show = old })
+	show = func(req showRequest) error { got = req; return nil }
+
+	post := func(slug, origin string) int {
+		req, _ := http.NewRequest("POST", srv.URL+"/v1/show/"+slug, strings.NewReader(`{}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Origin", origin)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if code := post("alpha", "https://evil.example"); code != http.StatusForbidden {
+		t.Fatalf("a cross-origin show got %d", code)
+	}
+	if code := post("alpha", srv.URL); code != http.StatusOK {
+		t.Fatalf("show got %d", code)
+	}
+	if got.Target != rigSessionName(basedir) || got.Kind != localTmux().Name() {
+		t.Fatalf("showed %+v", got)
+	}
+	if code := post("nope", srv.URL); code != http.StatusNotFound {
+		t.Fatalf("an unknown rig got %d", code)
+	}
+	show = func(showRequest) error { return errNotListed }
+	if code := post("alpha", srv.URL); code != http.StatusConflict {
+		t.Fatalf("a rig with no session got %d", code)
+	}
+}

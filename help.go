@@ -411,6 +411,11 @@ rig's .rig/comments.jsonl; the agent marks each with ` + "`rig ack`" + `. The
 comment routes under /v1/comments/RIG take JSON from the window's own origin
 only, so another site open in the same browser can't post as you.
 
+A chief of staff's page also gathers the asks from every other rig's
+briefing here, each under a link to its rig; an answer goes straight to the
+rig that asked. A link to a rig on any page (rig:SLUG) puts that rig's
+session on screen, through POST /v1/show/RIG, and the window follows it.
+
 WHO is a tailnet login (you@github), a node's short name, or tag:NAME; each
 request's peer is checked with tailscale whois. A tagged node never matches
 by login. --listen defaults to this host's tailnet IPv4 on port 7744. --icon is
