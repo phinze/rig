@@ -108,3 +108,16 @@ func upgradeLegacyBareSession(t *testing.T, kind, socket string) ([]string, lega
 	}
 	return strings.Split(strings.TrimSpace(string(out)), "\n"), legacyLayout{basedir: basedir, raw: string(out)}
 }
+
+func TestIsShellCommandLoginShell(t *testing.T) {
+	for _, cmd := range []string{"fish", "-fish", "-bash", "/bin/zsh", "-zsh"} {
+		if !isShellCommand(cmd) {
+			t.Errorf("isShellCommand(%q) = false, want true", cmd)
+		}
+	}
+	for _, cmd := range []string{"claude", "-claude", "recto", "rig"} {
+		if isShellCommand(cmd) {
+			t.Errorf("isShellCommand(%q) = true, want false", cmd)
+		}
+	}
+}

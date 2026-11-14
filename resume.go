@@ -403,8 +403,13 @@ func ensureBackgroundRectos(rs rigSession, basedir, mainRepo string, m manifest)
 	return nil
 }
 
+// isShellCommand reports whether a pane's foreground command is a bare shell.
+// A login shell's argv0 carries a leading dash ("-fish"), and Rex reports
+// argv0 where tmux reports the process name, so the dash is dropped. Rex
+// restarts every surviving block as a login shell after its server bounces,
+// and resume has to recognize that seat as empty to relaunch the agent in it.
 func isShellCommand(command string) bool {
-	command = filepath.Base(strings.TrimSpace(command))
+	command = strings.TrimPrefix(filepath.Base(strings.TrimSpace(command)), "-")
 	switch command {
 	case "", "sh", "bash", "dash", "zsh", "fish", "nu":
 		return true
