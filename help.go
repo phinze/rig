@@ -264,10 +264,17 @@ this side enters.`,
 	{
 		name:    "resume",
 		group:   "navigate",
-		usage:   []string{"resume [QUERY]"},
+		usage:   []string{"resume [QUERY]", "resume --all [--dry-run]"},
 		summary: "rebuild a live rig's agent and Recto panes",
 		details: `Default: the rig containing cwd. Does not change parked state. A rig on
-another host (ID@PLACE) is repaired there and entered from here.`,
+another host (ID@PLACE) is repaired there and entered from here.
+
+--all repairs every rig on this host that should have an agent and doesn't
+(the state a Rex server restart or a reboot leaves): not parked, and either
+its session is gone or its agent pane is a bare shell. It attaches to
+nothing, so it runs without a tty. It prints one line per rig, waits for
+each agent to appear, and exits nonzero if any did not. --dry-run lists
+the rigs it would repair and stops.`,
 	},
 	{
 		name:    "backend",

@@ -1145,7 +1145,25 @@ func TestParkWake(t *testing.T) {
 	mustWriteExec(t, filepath.Join(bin, "tmux"), tmuxWrap)
 
 	mustWriteExec(t, filepath.Join(bin, "recto"), rectoStub)
-	claude := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$*\" >> %s\nwhile :; do sleep 60; done\n", shellQuote(agentMarker))
+	// The agent has to look like one to the board: a script reads as `sh` in
+	// its pane, the same as the shell a dead agent leaves. So the stub records
+	// its args and then becomes a process named as Nix names the real binary.
+	// It's compiled here because a symlink to sleep won't do: coreutils is
+	// often one multicall binary that refuses to run under another name.
+	agentSrc := filepath.Join(home, "fakeagent")
+	mustMkdir(t, agentSrc)
+	if err := os.WriteFile(filepath.Join(agentSrc, "main.go"), []byte("package main\n\nimport \"time\"\n\nfunc main() { time.Sleep(time.Duration(1<<62)) }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentSrc, "go.mod"), []byte("module fakeagent\n\ngo 1.21\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	build := exec.Command("go", "build", "-o", filepath.Join(bin, ".claude-wrapped"), ".")
+	build.Dir = agentSrc
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("building fake agent: %v\n%s", err, out)
+	}
+	claude := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$*\" >> %s\nexec %s\n", shellQuote(agentMarker), shellQuote(filepath.Join(bin, ".claude-wrapped")))
 	mustWriteExec(t, filepath.Join(bin, "claude"), claude)
 
 	t.Cleanup(func() {
@@ -1268,6 +1286,50 @@ func TestParkWake(t *testing.T) {
 		raw, _ := os.ReadFile(agentMarker)
 		return strings.Count(string(raw), "--resume resume-me") >= 2
 	})
+
+	// A server bounce leaves the session up with a bare shell in the agent
+	// seat. The board has to say so rather than guess from the transcript,
+	// and `resume --all` has to bring the agent back with nobody attached.
+	waitFor(t, 3*time.Second, "resumed agent in its seat", func() bool {
+		out, _ := exec.Command(realTmux, "-L", socket, "display-message", "-p", "-t", agentPane, "#{pane_current_command}").Output()
+		return !isShellCommand(strings.TrimSpace(string(out)))
+	})
+	mustRun(t, home, env, realTmux, "-L", socket, "send-keys", "-t", agentPane, "C-c")
+	waitFor(t, 3*time.Second, "agent returning to its shell again", func() bool {
+		out, _ := exec.Command(realTmux, "-L", socket, "display-message", "-p", "-t", agentPane, "#{pane_current_command}").Output()
+		return isShellCommand(strings.TrimSpace(string(out)))
+	})
+	var board struct {
+		Rigs []struct {
+			ID          string `json:"id"`
+			State       string `json:"state"`
+			Agent       string `json:"agent"`
+			SessionLive bool   `json:"session_live"`
+		} `json:"rigs"`
+	}
+	if err := json.Unmarshal([]byte(mustOutput(t, home, env, rigBin, "ls", "--format=json")), &board); err != nil {
+		t.Fatal(err)
+	}
+	if len(board.Rigs) != 1 || board.Rigs[0].Agent != agentNone || board.Rigs[0].State != "stopped" || !board.Rigs[0].SessionLive {
+		t.Errorf("board after the agent died = %+v, want one live session with agent none, state stopped", board.Rigs)
+	}
+	if out := mustOutput(t, home, env, rigBin, "resume", "--all", "--dry-run"); !strings.Contains(out, "session up, no agent") {
+		t.Errorf("resume --all --dry-run should list the rig:\n%s", out)
+	}
+	allCmd := exec.Command(rigBin, "resume", "--all")
+	allCmd.Dir = home
+	allCmd.Env = env
+	allCmd.Stdin = nil // no tty, as from a script or an agent's shell
+	out, err := allCmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "resumed") {
+		t.Fatalf("resume --all: %v\n%s", err, out)
+	}
+	if raw, _ := os.ReadFile(agentMarker); strings.Count(string(raw), "--resume resume-me") < 3 {
+		t.Errorf("resume --all did not relaunch the recorded conversation:\n%s", raw)
+	}
+	if out := mustOutput(t, home, env, rigBin, "resume", "--all"); !strings.Contains(out, "every rig that should have an agent has one") {
+		t.Errorf("second resume --all should find nothing to do:\n%s", out)
+	}
 }
 
 func mustReadFile(t *testing.T, path string) []byte {

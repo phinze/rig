@@ -15,6 +15,28 @@ import (
 // the rig containing cwd; an explicit query uses the ordinary rig picker. It
 // deliberately does not change lifecycle state: a parked rig still needs wake.
 func runResume(args []string) error {
+	all, dryRun := false, false
+	var rest []string
+	for _, a := range args {
+		switch a {
+		case "--all":
+			all = true
+		case "--dry-run", "-n":
+			dryRun = true
+		default:
+			rest = append(rest, a)
+		}
+	}
+	if all {
+		if len(rest) > 0 {
+			return fmt.Errorf("usage: rig resume --all [--dry-run]")
+		}
+		return runResumeAll(dryRun, os.Stdout)
+	}
+	if dryRun {
+		return fmt.Errorf("--dry-run only applies to --all")
+	}
+	args = rest
 	var basedir string
 	if len(args) == 0 {
 		cwd, err := os.Getwd()
