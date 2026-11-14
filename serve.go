@@ -252,7 +252,7 @@ func buildServeDoc(home string, backends []mux.Backend) serveDoc {
 	if rigs, err := listRigs(); err == nil {
 		cache := loadRadarCache()
 		statuses := rigStatuses(rigs, home, now)
-		applyAgentStatuses(statuses, agentChildren(panes, now.Unix()))
+		applyPanes(statuses, panes, now)
 		for _, s := range statuses {
 			e, looked := cache[s.Slug]
 			s.PRs = e.PRs

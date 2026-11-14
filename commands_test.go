@@ -235,3 +235,43 @@ func TestApplyAgentStatuses(t *testing.T) {
 		t.Errorf("dead session = %+v, want no report", s.AgentStatus)
 	}
 }
+
+func TestApplyPanesEmptyAgentSeat(t *testing.T) {
+	surface := backendNamed("rex").Surface()
+	pane := func(path, role, command string) mux.Pane {
+		return mux.Pane{Surface: surface, Session: rigSessionName(path), Role: role, Command: command}
+	}
+	rig := func(path string) rigStatus {
+		return rigStatus{Path: path, Backend: "rex", Agent: "idle", SessionLive: true, State: "idle"}
+	}
+	statuses := []rigStatus{
+		rig("/w/bounced"),   // agent seat is the login shell Rex respawned
+		rig("/w/running"),   // agent seat holds claude
+		rig("/w/unmarked"),  // a shell, but nothing says it is the agent seat
+		rig("/w/elsewhere"), // seat is a shell, but an agent runs in another pane
+		{Path: "/w/parked", Backend: "rex", Parked: true, State: "parked"},
+	}
+	panes := []mux.Pane{
+		pane("/w/bounced", rigPaneAgent, "-fish"),
+		pane("/w/running", rigPaneAgent, "claude"),
+		pane("/w/unmarked", "", "fish"),
+		pane("/w/elsewhere", rigPaneAgent, "zsh"),
+		pane("/w/elsewhere", "", "claude"),
+	}
+	applyPanes(statuses, panes, time.Unix(1_700_000_000, 0))
+
+	if s := statuses[0]; s.Agent != agentNone || s.State != "stopped" || !s.SessionLive {
+		t.Errorf("bounced = agent %q state %q live %v, want none/stopped with the session still live", s.Agent, s.State, s.SessionLive)
+	}
+	if got := agentMarker(statuses[0]); got != "no agent" {
+		t.Errorf("bounced marker = %q, want %q", got, "no agent")
+	}
+	for _, s := range statuses[1:4] {
+		if s.Agent == agentNone || s.State == "stopped" {
+			t.Errorf("%s = agent %q state %q, want it left alone", s.Path, s.Agent, s.State)
+		}
+	}
+	if s := statuses[4]; s.State != "parked" {
+		t.Errorf("parked = %q, want parked", s.State)
+	}
+}

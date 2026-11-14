@@ -277,7 +277,8 @@ type rigStatus struct {
 	// SessionLive is whether the rig's multiplexer session exists at all, and
 	// Backend names the multiplexer hosting it (empty means tmux). AgentType is
 	// the manifest's agent (claude | codex | antigravity | pi). Agent is the
-	// attention bucket — working | idle, or "" with no session — and Parked is
+	// attention bucket — working | idle, none when the session is live but its
+	// agent seat holds a bare shell, or "" with no session — and Parked is
 	// dormant-awaiting-review, which outranks attention the way State says.
 	SessionLive bool       `json:"session_live"`
 	Backend     string     `json:"backend,omitempty"`
@@ -465,7 +466,7 @@ func boardState(s rigStatus) string {
 		return "parked"
 	case s.Building != "":
 		return "building"
-	case !s.SessionLive:
+	case !s.SessionLive, s.Agent == agentNone:
 		return "stopped"
 	case s.Agent == "working":
 		return "working"
@@ -552,6 +553,51 @@ func applyAgentStatuses(statuses []rigStatus, agents map[sessionKey][]agentChild
 	}
 }
 
+// agentNone is the Agent value for a live session whose agent seat holds a
+// bare shell: the session survived but nothing is running in it, which is
+// what a Rex server bounce leaves behind. boardState reads it as stopped,
+// since resume is the fix either way; session_live still tells the two apart.
+const agentNone = "none"
+
+// applyPanes lays everything a pane listing knows over the statuses
+// rigStatuses guessed, and hands back the agent children for callers that
+// draw them.
+func applyPanes(statuses []rigStatus, panes []mux.Pane, now time.Time) map[sessionKey][]agentChild {
+	agents := agentChildren(panes, now.Unix())
+	applyAgentStatuses(statuses, agents)
+	applyEmptySeats(statuses, emptyAgentSeats(panes, agents))
+	return agents
+}
+
+// emptyAgentSeats is the sessions whose agent-marked pane runs a bare shell
+// while no pane in the session holds an agent. It needs that positive
+// evidence: a session with no agent mark, or an agent rig doesn't recognize
+// in the seat, is left alone rather than declared dead.
+func emptyAgentSeats(panes []mux.Pane, agents map[sessionKey][]agentChild) map[sessionKey]bool {
+	empty := map[sessionKey]bool{}
+	for _, p := range panes {
+		sk := sessionKey{p.Surface, p.Session}
+		if p.Role == rigPaneAgent && isShellCommand(p.Command) && len(agents[sk]) == 0 {
+			empty[sk] = true
+		}
+	}
+	return empty
+}
+
+// applyEmptySeats marks rigs whose agent seat is empty. A status the agent
+// reported before it died describes nothing now, so it goes too.
+func applyEmptySeats(statuses []rigStatus, empty map[sessionKey]bool) {
+	for i := range statuses {
+		s := &statuses[i]
+		if s.remote != nil || !s.SessionLive || !empty[rigKey(s.Path, s.Backend)] {
+			continue
+		}
+		s.Agent = agentNone
+		s.AgentStatus = nil
+		s.State = boardState(*s)
+	}
+}
+
 // boardStatuses is rigStatuses with the agents' own reports applied, for
 // the boards that say what each rig wants. This machine's panes are listed
 // while the rigs are probed, as the radar's scan does.
@@ -561,7 +607,7 @@ func boardStatuses(rigs []rigInfo, home string, now time.Time) []rigStatus {
 	wg.Go(func() { statuses = rigStatuses(rigs, home, now) })
 	_, panes := boardListing(localBackends())
 	wg.Wait()
-	applyAgentStatuses(statuses, agentChildren(panes, now.Unix()))
+	applyPanes(statuses, panes, now)
 	return statuses
 }
 
@@ -581,6 +627,9 @@ func agentMarker(s rigStatus) string {
 	// every agent, and the writes they make on the way out read as a turn.
 	if s.Agent == "" || !s.SessionLive {
 		return "-"
+	}
+	if s.Agent == agentNone {
+		return "no agent"
 	}
 	// An agent waiting on Paul says so; working and idle read the same either
 	// way. A blocked agent names what it's blocked on when it said.

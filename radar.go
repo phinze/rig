@@ -538,8 +538,7 @@ func radarScanNow(home string) radarScanMsg {
 	wg.Go(func() { statuses = rigStatuses(rigs, home, time.Now()) })
 	sessions, panes := boardListing(localBackends())
 	wg.Wait()
-	agents := agentChildren(panes, time.Now().Unix())
-	applyAgentStatuses(statuses, agents)
+	agents := applyPanes(statuses, panes, time.Now())
 	return radarScanMsg{
 		statuses: statuses,
 		sessions: sessions,
@@ -2244,6 +2243,10 @@ func radarGlyph(s rigStatus, fetched bool) (string, lipgloss.Style) {
 		return "●", radarGoodStyle
 	case "idle":
 		return "●", radarFaintStyle
+	case agentNone:
+		// The session is up but nothing is in the agent seat: Enter resumes
+		// it, and it shouldn't hide among the quiet rigs until someone does.
+		return "◌", radarWarnStyle
 	default:
 		return "·", radarFaintStyle
 	}
