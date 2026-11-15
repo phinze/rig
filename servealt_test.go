@@ -8,6 +8,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -155,5 +157,27 @@ func TestLiveServeProxiesTheAlternatesWindowUnderItsOrigin(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode == http.StatusForbidden {
 		t.Fatal("a same-origin write through the proxy was refused")
+	}
+}
+
+// A socket path has to fit in sun_path, which on macOS is 104 bytes. A deep
+// runtime dir (a build sandbox's temp dir, say) won't, so the alternate's
+// socket falls back somewhere short rather than failing to listen.
+func TestAlternateSocketFitsUnderALongRuntimeDir(t *testing.T) {
+	deep := filepath.Join(t.TempDir(), strings.Repeat("d", 60), strings.Repeat("e", 60))
+	if err := os.MkdirAll(deep, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_RUNTIME_DIR", deep)
+	closeSock, sock, err := serveAltSocket(context.Background(), http.NewServeMux())
+	if err != nil {
+		t.Fatalf("listening under a long runtime dir: %v", err)
+	}
+	if len(sock) >= maxSocketPath {
+		t.Fatalf("socket path %q is %d bytes", sock, len(sock))
+	}
+	closeSock()
+	if _, err := os.Stat(filepath.Dir(sock)); !os.IsNotExist(err) {
+		t.Fatalf("closing removes the fallback dir: %v", err)
 	}
 }

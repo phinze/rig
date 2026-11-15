@@ -130,9 +130,23 @@ func serveAltSocket(ctx context.Context, h http.Handler) (func(), string, error)
 		return nil, "", err
 	}
 	path := filepath.Join(dir, "serve-alt-web.sock")
+	// A socket path has to fit sun_path: 104 bytes on macOS, 108 on Linux.
+	// A long runtime dir (a deep $HOME, a build sandbox) won't, so fall back
+	// to a private directory under /tmp, which always does.
+	var tmpDir string
+	if len(path) >= maxSocketPath {
+		tmpDir, err = os.MkdirTemp("/tmp", "rig-alt-")
+		if err != nil {
+			return nil, "", err
+		}
+		path = filepath.Join(tmpDir, "web.sock")
+	}
 	_ = os.Remove(path)
 	ln, err := net.Listen("unix", path)
 	if err != nil {
+		if tmpDir != "" {
+			_ = os.RemoveAll(tmpDir)
+		}
 		return nil, "", err
 	}
 	if err := os.Chmod(path, 0o600); err != nil {
@@ -150,8 +164,15 @@ func serveAltSocket(ctx context.Context, h http.Handler) (func(), string, error)
 	return func() {
 		_ = srv.Close()
 		_ = os.Remove(path)
+		if tmpDir != "" {
+			_ = os.RemoveAll(tmpDir)
+		}
 	}, path, nil
 }
+
+// maxSocketPath is the longest unix socket path every platform rig runs on
+// accepts, with room for the terminating NUL: macOS's sun_path is 104 bytes.
+const maxSocketPath = 103
 
 // windowRoutesOnly lets the proxied socket answer the web window and nothing
 // else. Everything else a serve answers (the radar's document, /v1/exec)
