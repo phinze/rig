@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/phinze/rig/internal/mux"
@@ -228,6 +229,10 @@ func resolveFocus(f mux.Focus) webFocus {
 
 // runRecto keeps `recto serve` running on serve's socket. A recto that won't
 // start is recorded so the surface route can say why instead of a bare 502.
+// A recto that's replaced underneath it (a sync switching the profile to a
+// new build) is restarted onto the new binary: rig serve itself only restarts
+// when rig changes, and without this its window would keep serving the old
+// recto until then.
 func (w *serveWeb) runRecto(ctx context.Context) {
 	defer close(w.rectoDone)
 	if err := os.MkdirAll(filepath.Dir(w.rectoSock), 0o700); err != nil {
@@ -235,17 +240,69 @@ func (w *serveWeb) runRecto(ctx context.Context) {
 		return
 	}
 	for ctx.Err() == nil {
-		cmd := exec.CommandContext(ctx, "recto", "serve", "--socket", w.rectoSock)
+		bin := rectoBinary()
+		child, cancel := context.WithCancel(ctx)
+		cmd := exec.CommandContext(child, "recto", "serve", "--socket", w.rectoSock)
 		cmd.Stderr = os.Stderr
+		// A clean stop, so recto can let its socket go.
+		cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+		cmd.WaitDelay = 3 * time.Second
+		swapped := make(chan struct{})
+		go watchRecto(child, bin, cancel, swapped)
 		started := time.Now()
 		err := cmd.Run()
+		cancel()
 		if ctx.Err() != nil {
 			return
+		}
+		select {
+		case <-swapped:
+			fmt.Fprintf(os.Stderr, "rig serve: recto changed to %s; restarting it\n", rectoBinary())
+			continue
+		default:
 		}
 		w.setRectoErr(fmt.Sprintf("recto serve exited after %s: %v", time.Since(started).Round(time.Second), err))
 		select {
 		case <-ctx.Done():
 		case <-time.After(5 * time.Second):
+		}
+	}
+}
+
+// rectoCheckEvery is how often a running recto is checked against the one a
+// fresh start would run.
+var rectoCheckEvery = 10 * time.Second
+
+// rectoBinary is the recto a fresh start would run: the PATH entry with its
+// symlinks resolved, so a profile switch that repoints the same PATH entry
+// at a new store path reads as a new binary.
+func rectoBinary() string {
+	p, err := exec.LookPath("recto")
+	if err != nil {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		return resolved
+	}
+	return p
+}
+
+// watchRecto stops the running recto once the binary a fresh start would
+// run differs from the one it was started from, closing swapped first so
+// the restart isn't recorded as a failure.
+func watchRecto(ctx context.Context, bin string, stop context.CancelFunc, swapped chan<- struct{}) {
+	t := time.NewTicker(rectoCheckEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if now := rectoBinary(); now != "" && now != bin {
+				close(swapped)
+				stop()
+				return
+			}
 		}
 	}
 }

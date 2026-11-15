@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"compress/gzip"
+	"context"
 	"io"
 	"net"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/phinze/rig/internal/mux"
 )
@@ -300,5 +302,64 @@ func TestShowRigPutsItsSessionOnScreen(t *testing.T) {
 	show = func(showRequest) error { return errNotListed }
 	if code := post("alpha", srv.URL); code != http.StatusConflict {
 		t.Fatalf("a rig with no session got %d", code)
+	}
+}
+
+// A sync that switches the profile to a new recto repoints the PATH entry at
+// a new store path. The running recto is stopped and started again from the
+// new binary, without waiting for rig serve itself to restart.
+func TestRunRectoRestartsOntoAReplacedBinary(t *testing.T) {
+	dir := t.TempDir()
+	log := filepath.Join(dir, "starts.log")
+	for _, v := range []string{"v1", "v2"} {
+		script := "#!/bin/sh\necho " + v + " >> " + log + "\nexec sleep 30\n"
+		if err := os.WriteFile(filepath.Join(dir, v), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bin := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(bin, "recto")
+	if err := os.Symlink(filepath.Join(dir, "v1"), link); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	old := rectoCheckEvery
+	rectoCheckEvery = 50 * time.Millisecond
+	t.Cleanup(func() { rectoCheckEvery = old })
+
+	w := newServeWeb(filepath.Join(dir, "run", "recto.sock"))
+	ctx, cancel := context.WithCancel(context.Background())
+	go w.runRecto(ctx)
+	t.Cleanup(func() { cancel(); <-w.rectoDone })
+
+	waitFor := func(want string) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			if raw, _ := os.ReadFile(log); strings.TrimSpace(string(raw)) == want {
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		raw, _ := os.ReadFile(log)
+		t.Fatalf("starts: %q, want %q", raw, want)
+	}
+	waitFor("v1")
+
+	tmp := filepath.Join(bin, "recto.new")
+	if err := os.Symlink(filepath.Join(dir, "v2"), tmp); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(tmp, link); err != nil {
+		t.Fatal(err)
+	}
+	waitFor("v1\nv2")
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.rectoErr != "" {
+		t.Fatalf("a replaced binary isn't a failure: %q", w.rectoErr)
 	}
 }
