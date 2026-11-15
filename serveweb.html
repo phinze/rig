@@ -2,8 +2,10 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="rig">
 <meta name="theme-color" content="#181825">
 <title>rig</title>
@@ -17,8 +19,15 @@
   --sans: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
 }
 * { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; background: var(--base); color: var(--text); font: 13px var(--sans); overflow: hidden; }
-header { height: 34px; display: flex; align-items: center; gap: 10px; padding: 0 12px;
+/* Home-screen mode draws the page under a translucent status bar, so the
+   header carries the inset itself: its own background fills the notch area
+   instead of the page's content blurring through it. */
+:root { --bar: 34px; --safe-t: env(safe-area-inset-top, 0px);
+  --safe-l: env(safe-area-inset-left, 0px); --safe-r: env(safe-area-inset-right, 0px); --top: calc(var(--bar) + var(--safe-t)); }
+html, body { margin: 0; height: 100%; background: var(--base); color: var(--text); font: 13px var(--sans); overflow: hidden;
+  -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+header { height: var(--top); display: flex; align-items: center; gap: 10px;
+  padding: var(--safe-t) calc(12px + var(--safe-r)) 0 calc(12px + var(--safe-l));
   background: var(--mantle); border-bottom: 1px solid var(--surface0); -webkit-user-select: none; user-select: none; }
 #dot { width: 8px; height: 8px; border-radius: 50%; background: var(--overlay0); flex: none; transition: background .3s; }
 #dot.on { background: var(--green); }
@@ -28,14 +37,17 @@ header { height: 34px; display: flex; align-items: center; gap: 10px; padding: 0
 #where .title { color: var(--subtext); margin-left: 8px; }
 #where .muted { color: var(--overlay0); }
 #meta { font: 11px var(--mono); color: var(--overlay0); white-space: nowrap; }
-button { font: 11px var(--mono); color: var(--subtext); background: var(--surface0); border: 0; border-radius: 10px;
-  padding: 3px 9px; cursor: pointer; }
-button:hover { background: var(--surface1); }
+button { align-items: center; font: 11px var(--mono); color: var(--subtext); background: var(--surface0); border: 0; border-radius: 10px;
+  padding: 3px 9px; cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+@media (hover: hover) { button:hover { background: var(--surface1); } }
+button:active { background: var(--surface1); }
 button.paused { background: var(--yellow); color: var(--crust); }
+button .short { display: none; }
+button .short svg { display: block; }
 #moved { display: none; background: var(--blue); color: var(--crust); }
 #banner { display: none; padding: 6px 12px; font: 12px var(--mono); color: var(--red); background: #3a262e; border-bottom: 1px solid var(--surface0); }
-#stage { position: absolute; top: 34px; left: 0; right: 0; bottom: 0; }
-body.banner #stage { top: 62px; }
+#stage { position: absolute; top: var(--top); left: 0; right: 0; bottom: 0; }
+body.banner #stage { top: calc(var(--top) + 28px); }
 #stage iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: var(--base); visibility: hidden; }
 #stage iframe.shown { visibility: visible; }
 #idle { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center;
@@ -48,7 +60,7 @@ body.banner #stage { top: 62px; }
 body.tray #tray { display: flex; }
 #tray .head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--surface0); }
 #tray .head b { flex: 1; font: 600 12px var(--mono); color: var(--subtext); }
-#tray .list { flex: 1; overflow-y: auto; padding: 4px 0 16px; }
+#tray .list { flex: 1; overflow-y: auto; padding: 4px 0 calc(16px + env(safe-area-inset-bottom, 0px)); }
 #tray h3 { font: 11px var(--mono); text-transform: uppercase; letter-spacing: .05em; color: var(--overlay0); margin: 12px 12px 4px; }
 .cm { padding: 7px 12px; border-bottom: 1px solid var(--surface0); }
 .cm .a { font: 11px var(--mono); color: var(--mauve); display: flex; gap: 6px; align-items: center; }
@@ -62,6 +74,30 @@ body.tray #tray { display: flex; }
 .st.failed { border-color: var(--red); color: var(--red); }
 #tray .empty { color: var(--overlay0); padding: 16px 12px; line-height: 1.5; }
 #trayErr { display: none; color: var(--red); font: 11px var(--mono); padding: 6px 12px; }
+/* A finger, not a pointer: a taller bar and controls at least 44px to the
+   touch, the rig's id alone (its title is in the briefing), and the focus
+   source and age only where there's room for them. */
+@media (pointer: coarse), (max-width: 600px) {
+  :root { --bar: 48px; }
+  header { gap: 6px; }
+  #where .id { font-size: 15px; }
+  #where .title { display: none; }
+  #dot { width: 10px; height: 10px; }
+  button { font-size: 13px; min-height: 34px; padding: 0 14px; border-radius: 17px; position: relative; }
+  /* The visible pill stays compact; the touch area around it doesn't. */
+  button::after { content: ""; position: absolute; inset: -5px -3px; }
+  header button .long { display: none; }
+  header button .short { display: flex; align-items: center; gap: 4px; }
+  header button .short b { font: 600 13px var(--mono); }
+  header button { min-width: 36px; height: 36px; padding: 0 9px; justify-content: center; display: inline-flex; align-items: center; }
+  #needs { font: 700 15px var(--mono); }
+  #moved { max-width: 38vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #tray .head { min-height: 52px; }
+  .cm { padding: 10px 14px; }
+  .cm .b { font-size: 15px; }
+  .cm .x { min-height: 36px; min-width: 36px; padding: 0; font-size: 15px; }
+}
+@media (max-width: 520px) { #meta { display: none; } }
 </style>
 </head>
 <body>
@@ -126,6 +162,19 @@ body.tray #tray { display: flex; }
     renderHeader();
   }
 
+  // Each header button has a word for a wide screen and a glyph for a
+  // phone's, where the rig's id needs the room more than the labels do.
+  const svg = (d) => `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+  const ICON = {
+    comments: svg('<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/>'),
+    follow: svg('<circle cx="12" cy="12" r="4"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>'),
+    paused: svg('<path d="M9 5v14M15 5v14"/>'),
+  };
+  function label(btn, long, short) {
+    btn.innerHTML = `<span class="long">${esc(long)}</span><span class="short">${short}</span>`;
+    btn.setAttribute('aria-label', long);
+  }
+
   function age(ms) {
     const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
     if (s < 60) return 'just now';
@@ -144,7 +193,7 @@ body.tray #tray { display: flex; }
     }
     const src = latest && latest.client ? latest.client + ' · ' : '';
     meta.textContent = latest && latest.since ? src + age(latest.since) : '';
-    pin.textContent = paused ? 'paused' : 'follow';
+    label(pin, paused ? 'paused' : 'follow', paused ? ICON.paused : ICON.follow);
     pin.classList.toggle('paused', paused);
     const elsewhere = paused && latest && (latest.rig || latest.session) && (latest.rig !== (shown && shown.rig));
     moved.style.display = elsewhere ? 'inline-block' : 'none';
@@ -245,12 +294,12 @@ body.tray #tray { display: flex; }
     const held = cs.filter((c) => c.state === 'held' || c.state === 'failed');
     // A send error stands until a send gets through.
     if (!cs.some((c) => c.state === 'failed') && trayErr.dataset.kind === 'send') trayErr.style.display = 'none';
-    trayBtn.textContent = held.length ? held.length + ' held' : 'comments';
+    label(trayBtn, held.length ? held.length + ' held' : 'comments', ICON.comments + (held.length ? '<b>' + held.length + '</b>' : ''));
     trayBtn.classList.toggle('held', held.length > 0);
-    trayBtn.style.display = slug ? 'inline-block' : 'none';
+    trayBtn.style.display = slug ? 'inline-flex' : 'none';
     const open = (slug && asks.get(slug)) || 0;
-    needs.style.display = open ? 'inline-block' : 'none';
-    needs.textContent = open + (open === 1 ? ' needs you' : ' need you');
+    needs.style.display = open ? 'inline-flex' : 'none';
+    label(needs, open + (open === 1 ? ' needs you' : ' need you'), String(open));
     sendAll.textContent = held.length > 1 ? 'send ' + held.length : 'send';
     sendAll.style.display = held.length ? 'inline-block' : 'none';
     const list = tray.querySelector('.list');
@@ -328,6 +377,11 @@ body.tray #tray { display: flex; }
     load(slug);
   });
   trayBtn.addEventListener('click', () => document.body.classList.toggle('tray'));
+  // What needs you is in the briefing; take the reader there.
+  needs.addEventListener('click', () => {
+    const fr = shown && shown.rig && frames.get(shown.rig);
+    if (fr && fr.contentWindow) fr.contentWindow.postMessage({ brief: true }, location.origin);
+  });
   $('trayClose').addEventListener('click', () => document.body.classList.remove('tray'));
 
   // A newly loaded page needs the list too, and acks arrive from the agent,
