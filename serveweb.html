@@ -229,10 +229,25 @@ body.tray #tray { display: flex; }
   });
   moved.addEventListener('click', () => { paused = false; if (latest) show(latest); });
 
-  const es = new EventSource('v1/focus');
-  es.addEventListener('focus', (e) => { try { onFocus(JSON.parse(e.data)); } catch {} });
-  es.addEventListener('open', () => { if (!(latest && latest.error)) dot.className = 'on'; });
-  es.addEventListener('error', () => { dot.className = ''; });
+  // EventSource retries a dropped connection by itself, but gives up for good
+  // on an error response (a whois hiccup at the gate, a restart), so a closed
+  // stream is reopened here. A phone suspends the page whenever the person
+  // switches to Rex to pick a session, and WebKit can hand back a stream that
+  // looks open on a dead socket, so coming back into view reopens it too. The
+  // server sends the current focus on every new stream, which catches up.
+  let es = null;
+  function listen() {
+    if (es) es.close();
+    const s = es = new EventSource('v1/focus');
+    s.addEventListener('focus', (e) => { try { onFocus(JSON.parse(e.data)); } catch {} });
+    s.addEventListener('open', () => { if (!(latest && latest.error)) dot.className = 'on'; });
+    s.addEventListener('error', () => {
+      dot.className = '';
+      if (s === es && s.readyState === EventSource.CLOSED) setTimeout(() => { if (s === es) listen(); }, 3000);
+    });
+  }
+  listen();
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') listen(); });
   setInterval(renderHeader, 15000);
 
   // Comments. A page selects and words them; this frame holds them for the
