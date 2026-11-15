@@ -46,7 +46,9 @@ button .short { display: none; }
 button .short svg { display: block; }
 #moved { display: none; background: var(--blue); color: var(--crust); }
 #banner { display: none; padding: 6px 12px; font: 12px var(--mono); color: var(--red); background: #3a262e; border-bottom: 1px solid var(--surface0); }
-#stage { position: absolute; top: var(--top); left: 0; right: 0; bottom: 0; }
+/* Inset sideways too: in landscape the notch is on the left or right. */
+#stage { position: absolute; top: var(--top); left: var(--safe-l); right: var(--safe-r); bottom: 0; }
+#insets { position: fixed; left: 0; bottom: 0; width: 0; height: env(safe-area-inset-bottom, 0px); visibility: hidden; pointer-events: none; }
 body.banner #stage { top: calc(var(--top) + 28px); }
 #stage iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: var(--base); visibility: hidden; }
 #stage iframe.shown { visibility: visible; }
@@ -111,6 +113,7 @@ body.tray #tray { display: flex; }
   <button id="pin" title="stop following focus and stay on this rig">follow</button>
 </header>
 <div id="banner"></div>
+<div id="insets"></div>
 <div id="stage"><div id="idle">Waiting to see where you're looking.<br>Pick a session in Rex.</div>
 <aside id="tray"><div class="head"><b>comments</b><button id="sendAll"></button><button id="trayClose">close</button></div>
 <div id="trayErr"></div><div class="list"></div></aside></div>
@@ -386,7 +389,18 @@ body.tray #tray { display: flex; }
 
   // A newly loaded page needs the list too, and acks arrive from the agent,
   // not from here, so the shown rig is polled while the window is visible.
-  stage.addEventListener('load', (e) => { const slug = rigOf(e.target.contentWindow); if (slug) load(slug); }, true);
+  stage.addEventListener('load', (e) => { const slug = rigOf(e.target.contentWindow); if (slug) { load(slug); sendInsets(e.target); } }, true);
+  // A page in an iframe sees every safe-area inset as zero, so the bottom
+  // one, which its floating controls need to clear the home indicator, is
+  // measured here and handed down.
+  const insetsProbe = $('insets');
+  function sendInsets(fr) {
+    const bottom = insetsProbe.offsetHeight;
+    for (const f of fr ? [fr] : frames.values()) {
+      if (f.contentWindow) f.contentWindow.postMessage({ insets: { bottom } }, location.origin);
+    }
+  }
+  window.addEventListener('resize', () => sendInsets());
   setInterval(() => { if (!document.hidden && shown && shown.rig) { load(shown.rig); loadPeers(shown.rig); } }, 3000);
   const show0 = show;
   show = (f) => { show0(f); if (f && f.rig) load(f.rig); renderTray(); };
