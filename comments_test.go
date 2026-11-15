@@ -132,7 +132,7 @@ func TestADiffCommentIsStampedWhenMade(t *testing.T) {
 	basedir := t.TempDir()
 	was := stampDiffAnchor
 	t.Cleanup(func() { stampDiffAnchor = was })
-	stampDiffAnchor = func(_ string, a *commentAnchor) {
+	stampDiffAnchor = func(_ string, a *commentAnchor, _ string) {
 		if a.Kind == "diff" {
 			a.Stamp = json.RawMessage(`{"change":"kxyzabcdefghijkl","commit":"abc","start":3,"end":4}`)
 		}
@@ -154,5 +154,23 @@ func TestADiffCommentIsStampedWhenMade(t *testing.T) {
 	tour, _ := addComment(basedir, commentAnchor{Kind: "tour", Section: "Why", Label: "tour"}, "", "hm", "")
 	if len(tour.Anchor.Stamp) != 0 {
 		t.Fatal("only diff anchors are stamped")
+	}
+}
+
+// A stamp is kept only when its lines hold what was selected; the code
+// moving while the comment was written would otherwise point it elsewhere.
+func TestAStampMustHoldTheSelection(t *testing.T) {
+	stamp := []byte(`{"snippet":["func retry() {","\treturn nil"]}`)
+	if !stampMatchesQuote(stamp, "12 13 + func retry() {\n14 + \treturn nil") {
+		t.Fatal("the selected lines match")
+	}
+	if !stampMatchesQuote(stamp, "retry() {\n\treturn nil") {
+		t.Fatal("a selection may start mid-line")
+	}
+	if stampMatchesQuote(stamp, "something else entirely") {
+		t.Fatal("other code doesn't match")
+	}
+	if !stampMatchesQuote(stamp, "") {
+		t.Fatal("with nothing selected there's nothing to contradict")
 	}
 }

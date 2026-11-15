@@ -50,7 +50,7 @@ type commentAnchor struct {
 	Path    string `json:"path,omitempty"`    // file, for a diff anchor
 	Start   int    `json:"start,omitempty"`   // new-side lines, for a diff anchor
 	End     int    `json:"end,omitempty"`     //
-	Section string `json:"section,omitempty"` // heading, for a tour anchor
+	Section string `json:"section,omitempty"` // heading, for a tour anchor; the view shown, for a diff anchor
 	Label   string `json:"label"`
 	// Stamp is Recto's record of a diff anchor's lines (the change that owns
 	// them, the commit it was, the lines there, their text), taken when the
@@ -59,10 +59,13 @@ type commentAnchor struct {
 	Stamp json.RawMessage `json:"stamp,omitempty"`
 }
 
-// stampDiffAnchor asks Recto to stamp a diff anchor's lines in its repo,
-// best effort: a git repository, an older recto, or lines that aren't there
-// leave the comment as plain lines, which is how every comment used to work.
-var stampDiffAnchor = func(basedir string, a *commentAnchor) {
+// stampDiffAnchor asks Recto to stamp a diff anchor's lines in its repo, in
+// the view the page showed them in, best effort: a git repository, an older
+// recto, or lines that aren't there leave the comment as plain lines, which
+// is how every comment used to work. A stamp whose lines don't hold what was
+// selected (the code moved while the comment was being written) is dropped
+// rather than kept pointing at something else.
+var stampDiffAnchor = func(basedir string, a *commentAnchor, quote string) {
 	if a.Kind != "diff" || a.Repo == "" || a.Path == "" || a.Start <= 0 || strings.Contains(a.Repo, "/") {
 		return
 	}
@@ -72,13 +75,38 @@ var stampDiffAnchor = func(basedir string, a *commentAnchor) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "recto", "stamp", fmt.Sprintf("%s:%d-%d", a.Path, a.Start, end))
+	args := []string{"stamp", fmt.Sprintf("%s:%d-%d", a.Path, a.Start, end)}
+	if a.Section != "" {
+		args = append(args, "--at", a.Section)
+	}
+	cmd := exec.CommandContext(ctx, "recto", args...)
 	cmd.Dir = filepath.Join(basedir, a.Repo)
 	out, err := cmd.Output()
-	if err != nil || !json.Valid(out) {
+	if err != nil || !json.Valid(out) || !stampMatchesQuote(out, quote) {
 		return
 	}
 	a.Stamp = json.RawMessage(strings.TrimSpace(string(out)))
+}
+
+// stampMatchesQuote says whether a stamp's lines are the ones selected: some
+// line of its snippet, of any substance, appears in the selection. A
+// selection can start or end mid-line, so not every line has to.
+func stampMatchesQuote(raw []byte, quote string) bool {
+	var s struct {
+		Snippet []string `json:"snippet"`
+	}
+	if json.Unmarshal(raw, &s) != nil {
+		return false
+	}
+	if strings.TrimSpace(quote) == "" {
+		return true
+	}
+	for _, line := range s.Snippet {
+		if line = strings.TrimSpace(line); len(line) >= 4 && strings.Contains(quote, line) {
+			return true
+		}
+	}
+	return false
 }
 
 // stampChange is the change a stamped anchor's lines belong to, short.
@@ -233,7 +261,7 @@ func addComment(basedir string, anchor commentAnchor, quote, body, client string
 	if err != nil {
 		return rigComment{}, err
 	}
-	stampDiffAnchor(basedir, &anchor)
+	stampDiffAnchor(basedir, &anchor, quote)
 	ev := commentEvent{Type: "comment", ID: id, Anchor: &anchor, Quote: quote, Body: body, Client: client, At: time.Now()}
 	if err := appendCommentEvent(basedir, ev); err != nil {
 		return rigComment{}, err
