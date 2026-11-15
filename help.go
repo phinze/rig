@@ -393,7 +393,7 @@ in every rig+http surface's history.`,
 	{
 		name:    "serve",
 		group:   "plumbing",
-		usage:   []string{"serve --allow WHO [--allow WHO...] [--listen ADDR] [--icon GLYPH]"},
+		usage:   []string{"serve --allow WHO [--allow WHO...] [--listen ADDR] [--icon GLYPH] [--alt]"},
 		summary: "answer and run rig verbs for other hosts over the tailnet",
 		details: `Serves this host's rigs, sessions, and agent panes at GET /v1/board, for a
 radar elsewhere with a rig+http surface pointing here, and runs rig verbs for
@@ -426,7 +426,10 @@ session on screen, through POST /v1/show/RIG, and the window follows it.
 WHO is a tailnet login (you@github), a node's short name, or tag:NAME; each
 request's peer is checked with tailscale whois. A tagged node never matches
 by login. --listen defaults to this host's tailnet IPv4 on port 7744. --icon is
-the glyph other radars draw in front of this host's rows instead of its name.`,
+the glyph other radars draw in front of this host's rows instead of its name.
+--alt runs a second serve beside the live one, usually a dev build on another
+--listen port: it keeps its own sockets, and while it's up each web window
+offers a one-tap hop to the other.`,
 	},
 }
 

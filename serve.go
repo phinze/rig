@@ -118,6 +118,7 @@ func (s *serveStatus) status() mux.ProgramStatus {
 
 func runServe(args []string) error {
 	listen, icon := "", ""
+	alt := false
 	var allow []string
 	for i := 0; i < len(args); i++ {
 		name, val, hasVal := strings.Cut(args[i], "=")
@@ -135,8 +136,10 @@ func runServe(args []string) error {
 			allow = append(allow, val)
 		case "--icon":
 			icon = val
+		case "--alt":
+			alt = true
 		default:
-			return fmt.Errorf("usage: rig serve --allow LOGIN|NODE|tag:TAG [--allow ...] [--listen ADDR] [--icon GLYPH]")
+			return fmt.Errorf("usage: rig serve --allow LOGIN|NODE|tag:TAG [--allow ...] [--listen ADDR] [--icon GLYPH] [--alt]")
 		}
 	}
 	if len(allow) == 0 {
@@ -173,11 +176,17 @@ func runServe(args []string) error {
 		return doc
 	}
 	h := serveHandler(g, build)
-	rectoSock, err := rectoSocketPath()
+	rectoSock, err := rectoSocketPath(alt)
 	if err != nil {
 		return err
 	}
 	web := newServeWeb(rectoSock)
+	web.alt = alt
+	withdraw, err := registerServe(alt, ln.Addr().String())
+	if err != nil {
+		return err
+	}
+	defer withdraw()
 	web.restoreFocus()
 	go web.runRecto(ctx)
 	web.follow(ctx, localBackends())

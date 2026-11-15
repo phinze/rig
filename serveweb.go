@@ -54,6 +54,8 @@ type webFocus struct {
 
 type serveWeb struct {
 	rectoSock string
+	// alt marks the alternate serve beside the live one (servealt.go).
+	alt bool
 	// rectoDone closes once runRecto has returned and its child is gone, so
 	// shutdown can wait for it rather than exit with recto still running.
 	rectoDone chan struct{}
@@ -80,11 +82,15 @@ func newServeWeb(rectoSock string) *serveWeb {
 }
 
 // rectoSocketPath is serve's own recto socket, apart from the default one so
-// a recto serve someone runs by hand doesn't fight this one for the path.
-func rectoSocketPath() (string, error) {
+// a recto serve someone runs by hand doesn't fight this one for the path. An
+// alternate serve keeps its own, beside the live one's.
+func rectoSocketPath(alt bool) (string, error) {
 	dir, err := rigRuntimeDir()
 	if err != nil {
 		return "", err
+	}
+	if alt {
+		return filepath.Join(dir, "recto-serve-alt.sock"), nil
 	}
 	return filepath.Join(dir, "recto-serve.sock"), nil
 }
@@ -267,6 +273,7 @@ func (w *serveWeb) mount(h *http.ServeMux, g *serveGate) {
 		_, _ = rw.Write(serveFrameHTML)
 	}))
 	h.HandleFunc("GET /v1/focus", gated(w.serveFocus))
+	h.HandleFunc("GET /v1/sibling", gated(w.serveSibling))
 	h.HandleFunc("GET /v1/comments/{rig}", gated(serveComments))
 	h.HandleFunc("POST /v1/comments/{rig}", gated(sameOrigin(postComment)))
 	h.HandleFunc("POST /v1/comments/{rig}/send", gated(sameOrigin(postSendComments)))

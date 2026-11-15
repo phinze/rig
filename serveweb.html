@@ -14,7 +14,7 @@
   --base: #1e1e2e; --mantle: #181825; --crust: #11111b;
   --surface0: #313244; --surface1: #45475a; --overlay0: #6c7086;
   --text: #cdd6f4; --subtext: #a6adc8;
-  --red: #f38ba8; --green: #a6e3a1; --yellow: #f9e2af; --mauve: #cba6f7; --blue: #89b4fa;
+  --red: #f38ba8; --green: #a6e3a1; --yellow: #f9e2af; --mauve: #cba6f7; --blue: #89b4fa; --peach: #fab387;
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
   --sans: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
 }
@@ -45,6 +45,12 @@ button.paused { background: var(--yellow); color: var(--crust); }
 button .short { display: none; }
 button .short svg { display: block; }
 #moved { display: none; background: var(--blue); color: var(--crust); }
+/* The hop to the other serve on this host (rig serve --alt), present only
+   while there is one. The alternate's own header wears its colour, so it's
+   never mistaken for the live window. */
+#sib { display: none; font: 600 11px var(--mono); color: var(--crust); background: var(--peach); border-radius: 10px;
+  padding: 3px 9px; text-decoration: none; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+body.alt header { box-shadow: inset 0 -2px 0 var(--peach); }
 #banner { display: none; padding: 6px 12px; font: 12px var(--mono); color: var(--red); background: #3a262e; border-bottom: 1px solid var(--surface0); }
 /* Inset sideways too: in landscape the notch is on the left or right. */
 #stage { position: absolute; top: var(--top); left: var(--safe-l); right: var(--safe-r); bottom: 0; }
@@ -110,6 +116,7 @@ body.tray #tray { display: flex; }
   <button id="needs" title="questions in the briefing waiting on you"></button>
   <button id="trayBtn" title="comments you've left for this rig">comments</button>
   <button id="moved" title="focus moved while paused; click to go there"></button>
+  <a id="sib"></a>
   <button id="pin" title="stop following focus and stay on this rig">follow</button>
 </header>
 <div id="banner"></div>
@@ -122,6 +129,27 @@ body.tray #tray { display: flex; }
   const $ = (id) => document.getElementById(id);
   const stage = $('stage'), idle = $('idle'), where = $('where'), meta = $('meta');
   const dot = $('dot'), pin = $('pin'), moved = $('moved'), banner = $('banner');
+
+  // The other serve on this host, when there is one: a dev build running
+  // beside the live window (rig serve --alt). The link is built from this
+  // page's own hostname, the name this device already reaches the host by.
+  const sib = $('sib');
+  async function sibling() {
+    try {
+      const res = await fetch('v1/sibling', { cache: 'no-store' });
+      if (!res.ok) return;
+      const s = await res.json();
+      document.body.classList.toggle('alt', s.role === 'alt');
+      if (!s.port) { sib.style.display = 'none'; return; }
+      sib.href = location.protocol + '//' + location.hostname + ':' + s.port + '/';
+      sib.textContent = s.role === 'alt' ? 'live' : 'dev';
+      sib.title = s.role === 'alt' ? 'back to the live window' : 'a dev build is running beside this window';
+      sib.style.display = 'inline-block';
+    } catch {}
+  }
+  sibling();
+  setInterval(sibling, 15000);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') sibling(); });
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
   // A few rigs stay loaded so hopping back keeps scroll and open files. Each
@@ -161,7 +189,7 @@ body.tray #tray { display: flex; }
       old.remove();
       frames.delete(slug);
     }
-    document.title = f.id || f.rig;
+    document.title = (document.body.classList.contains('alt') ? 'dev · ' : '') + (f.id || f.rig);
     renderHeader();
   }
 
