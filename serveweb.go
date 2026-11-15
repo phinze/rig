@@ -274,6 +274,13 @@ func (w *serveWeb) mount(h *http.ServeMux, g *serveGate) {
 	}))
 	h.HandleFunc("GET /v1/focus", gated(w.serveFocus))
 	h.HandleFunc("GET /v1/sibling", gated(w.serveSibling))
+	if !w.alt {
+		alt := altProxy()
+		h.HandleFunc(altPrefix+"/", gated(alt.ServeHTTP))
+		h.HandleFunc("GET "+altPrefix, gated(func(rw http.ResponseWriter, r *http.Request) {
+			http.Redirect(rw, r, altPrefix+"/", http.StatusFound)
+		}))
+	}
 	h.HandleFunc("GET /v1/comments/{rig}", gated(serveComments))
 	h.HandleFunc("POST /v1/comments/{rig}", gated(sameOrigin(postComment)))
 	h.HandleFunc("POST /v1/comments/{rig}/send", gated(sameOrigin(postSendComments)))

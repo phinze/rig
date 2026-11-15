@@ -1,9 +1,14 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net"
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -29,7 +34,7 @@ func TestSiblingOffersTheOtherServeOnlyWhileItIsUp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	withdraw, err := registerServe(true, ln.Addr().String())
+	withdraw, err := registerServe(true, ln.Addr().String(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +65,7 @@ func TestSiblingOffersTheOtherServeOnlyWhileItIsUp(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer liveLn.Close()
-	withdrawLive, err := registerServe(false, liveLn.Addr().String())
+	withdrawLive, err := registerServe(false, liveLn.Addr().String(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,4 +83,77 @@ func mustRecordPath(t *testing.T, alt bool) string {
 		t.Fatal(err)
 	}
 	return p
+}
+
+// The live serve shows the alternate's window under its own origin, so an
+// installed app hops between them without leaving itself. The alternate's
+// private socket answers only the window, whatever the proxy is asked for,
+// and a write keeps its same-origin check against the page's own host.
+func TestLiveServeProxiesTheAlternatesWindowUnderItsOrigin(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	live := webServer(t, newServeWeb(""))
+
+	get := func(path string) (int, string) {
+		t.Helper()
+		resp, err := http.Get(live.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(body)
+	}
+	if code, _ := get("/alt/v1/sibling"); code != http.StatusBadGateway {
+		t.Fatalf("no alternate yet: got %d", code)
+	}
+
+	alt := newServeWeb("")
+	alt.alt = true
+	h := http.NewServeMux()
+	alt.mount(h, newServeGate([]string{"nobody"}, func(context.Context, string) (whoisIdentity, error) {
+		return whoisIdentity{}, errors.New("the alternate's tailnet gate must not be reached through the proxy")
+	}, false))
+	h.HandleFunc("GET /v1/exec", func(rw http.ResponseWriter, _ *http.Request) { rw.WriteHeader(http.StatusTeapot) })
+	closeSock, sock, err := serveAltSocket(context.Background(), h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeSock()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	withdraw, err := registerServe(true, ln.Addr().String(), sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer withdraw()
+
+	code, body := get("/alt/v1/sibling")
+	if code != http.StatusOK || !strings.Contains(body, `"role":"alt"`) {
+		t.Fatalf("the alternate answers under /alt/: %d %s", code, body)
+	}
+	if code, _ := get("/alt/v1/exec"); code != http.StatusNotFound {
+		t.Fatalf("only the window's routes pass the private socket: got %d", code)
+	}
+	_, body = get("/v1/sibling")
+	if !strings.Contains(body, `"path":"alt/"`) {
+		t.Fatalf("the live window links to the alternate on its own origin: %s", body)
+	}
+
+	// A write from the page passes the alternate's same-origin check, since
+	// the proxy keeps the page's Host.
+	req, _ := http.NewRequest("POST", live.URL+"/alt/v1/comments/nope/send", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", live.URL)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode == http.StatusForbidden {
+		t.Fatal("a same-origin write through the proxy was refused")
+	}
 }

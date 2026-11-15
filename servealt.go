@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -15,15 +19,32 @@ import (
 // is up, each frame offers a one-tap hop to the other, so trying a build
 // doesn't mean retyping a URL into a phone.
 //
+// The live serve shows the alternate's window under its own origin, at
+// /alt/, because an installed web app only keeps pages from its own origin
+// inside itself: a link to another port opens a browser instead. So the
+// alternate also listens on a private unix socket, the live serve proxies
+// /alt/ there, and the alternate trusts what arrives on that socket as
+// already admitted. The socket answers only the window's own routes, never
+// /v1/exec or the radar's.
+//
 // Each serve registers itself in rig's state directory by role, where the
 // other looks for it, and the alternate keeps its own runtime sockets so the
 // two never fight over a path.
 
-// altRecord is what a serve leaves for its sibling to find.
+// altRecord is what a serve leaves for its sibling to find. Sock is the
+// alternate's private socket for the live serve's proxy.
 type altRecord struct {
 	Addr string `json:"addr"`
 	PID  int    `json:"pid"`
+	Sock string `json:"sock,omitempty"`
 }
+
+// trustedPeerKey marks a request that arrived on the alternate's private
+// socket, carrying the identity the gate should take as admitted.
+type trustedPeerKey struct{}
+
+// altPrefix is where the live serve shows the alternate's window.
+const altPrefix = "/alt"
 
 func serveRecordPath(alt bool) (string, error) {
 	dir, err := rigStateDir()
@@ -39,12 +60,12 @@ func serveRecordPath(alt bool) (string, error) {
 // registerServe announces this process as the live or alternate serve at
 // addr. The returned func withdraws it, unless another serve in the same role
 // has since taken over.
-func registerServe(alt bool, addr string) (func(), error) {
+func registerServe(alt bool, addr, sock string) (func(), error) {
 	path, err := serveRecordPath(alt)
 	if err != nil {
 		return nil, err
 	}
-	raw, err := json.Marshal(altRecord{Addr: addr, PID: os.Getpid()})
+	raw, err := json.Marshal(altRecord{Addr: addr, PID: os.Getpid(), Sock: sock})
 	if err != nil {
 		return nil, err
 	}
@@ -73,44 +94,149 @@ func readAlt(path string) (altRecord, bool) {
 	return rec, true
 }
 
-// siblingPort is the port of the serve registered in the given role, while
-// its process is alive and its port answers. A record left by a serve that
-// was killed hard is simply ignored, so a pill never offers a dead server.
-func siblingPort(alt bool) string {
+// sibling is the serve registered in the given role, while its process is
+// alive and it answers. A record left by a serve that was killed hard is
+// simply ignored, so a pill never offers a dead server.
+func sibling(alt bool) (altRecord, bool) {
 	path, err := serveRecordPath(alt)
 	if err != nil {
-		return ""
+		return altRecord{}, false
 	}
 	rec, ok := readAlt(path)
 	if !ok || syscall.Kill(rec.PID, 0) != nil {
-		return ""
+		return altRecord{}, false
 	}
-	conn, err := net.DialTimeout("tcp", rec.Addr, 300*time.Millisecond)
+	network, target := "tcp", rec.Addr
+	if rec.Sock != "" {
+		network, target = "unix", rec.Sock
+	}
+	conn, err := net.DialTimeout(network, target, 300*time.Millisecond)
 	if err != nil {
-		return ""
+		return altRecord{}, false
 	}
 	_ = conn.Close()
-	_, port, err := net.SplitHostPort(rec.Addr)
+	return rec, true
+}
+
+// serveAltSocket listens on the alternate's private socket and answers the
+// window's routes there for the live serve's proxy. The socket sits in
+// rig's runtime directory and is the owner's alone.
+func serveAltSocket(ctx context.Context, h http.Handler) (func(), string, error) {
+	dir, err := rigRuntimeDir()
 	if err != nil {
-		return ""
+		return nil, "", err
 	}
-	return port
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, "", err
+	}
+	path := filepath.Join(dir, "serve-alt-web.sock")
+	_ = os.Remove(path)
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		return nil, "", err
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		_ = ln.Close()
+		return nil, "", err
+	}
+	srv := &http.Server{
+		Handler:           windowRoutesOnly(h),
+		ReadHeaderTimeout: 5 * time.Second,
+		BaseContext: func(net.Listener) context.Context {
+			return context.WithValue(ctx, trustedPeerKey{}, whoisIdentity{Node: "live serve"})
+		},
+	}
+	go func() { _ = srv.Serve(ln) }()
+	return func() {
+		_ = srv.Close()
+		_ = os.Remove(path)
+	}, path, nil
+}
+
+// windowRoutesOnly lets the proxied socket answer the web window and nothing
+// else. Everything else a serve answers (the radar's document, /v1/exec)
+// stays behind the tailnet gate on the TCP listener.
+func windowRoutesOnly(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		ok := p == "/" || p == "/v1/focus" || p == "/v1/sibling"
+		for _, prefix := range []string{"/v1/comments/", "/v1/show/", "/v1/surface/"} {
+			ok = ok || strings.HasPrefix(p, prefix)
+		}
+		if !ok {
+			http.NotFound(rw, r)
+			return
+		}
+		h.ServeHTTP(rw, r)
+	})
+}
+
+// altProxy shows the alternate's window under /alt/ on the live serve's
+// origin, for as long as an alternate is up.
+func altProxy() http.Handler {
+	proxy := &httputil.ReverseProxy{
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.Out.URL.Scheme = "http"
+			pr.Out.URL.Host = "alt"
+			pr.Out.URL.Path = strings.TrimPrefix(pr.In.URL.Path, altPrefix)
+			pr.Out.URL.RawPath = ""
+			// Keep the page's own Host, so the alternate's same-origin check
+			// on writes compares against the origin the page came from.
+			pr.Out.Host = pr.In.Host
+		},
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				rec, ok := sibling(true)
+				if !ok || rec.Sock == "" {
+					return nil, fmt.Errorf("no alternate serve is running")
+				}
+				var d net.Dialer
+				return d.DialContext(ctx, "unix", rec.Sock)
+			},
+			DisableCompression: true,
+		},
+		FlushInterval: -1, // the focus and page streams arrive as they're written
+		ErrorHandler: func(rw http.ResponseWriter, _ *http.Request, err error) {
+			surfaceError(rw, http.StatusBadGateway, "the dev window isn't running: "+err.Error())
+		},
+	}
+	return proxy
 }
 
 // serveSibling tells a frame which serve it came from and where the other
-// one is. The frame builds the link from its own hostname, since that's the
-// name the person's device already reaches this host by.
+// one is: a path on this origin when the live serve can proxy it, else a
+// port the frame pairs with its own hostname.
 type serveSibling struct {
 	Role string `json:"role"`           // "live" or "alt"
 	Port string `json:"port,omitempty"` // the other serve's port, when it's up
+	Path string `json:"path,omitempty"` // the other serve's window on this origin
 }
 
 func (w *serveWeb) serveSibling(rw http.ResponseWriter, _ *http.Request) {
-	s := serveSibling{Role: "live", Port: siblingPort(true)}
+	var s serveSibling
 	if w.alt {
-		s = serveSibling{Role: "alt", Port: siblingPort(false)}
+		s.Role = "alt"
+		if rec, ok := sibling(false); ok {
+			s.Port = portOf(rec.Addr)
+		}
+	} else {
+		s.Role = "live"
+		if rec, ok := sibling(true); ok {
+			s.Port = portOf(rec.Addr)
+			if rec.Sock != "" {
+				s.Path = strings.TrimPrefix(altPrefix, "/") + "/"
+			}
+		}
 	}
 	rw.Header().Set("Content-Type", "application/json")
 	rw.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(rw).Encode(s)
+}
+
+func portOf(addr string) string {
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return ""
+	}
+	return port
 }

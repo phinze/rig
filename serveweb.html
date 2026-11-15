@@ -140,8 +140,13 @@ body.tray #tray { display: flex; }
       if (!res.ok) return;
       const s = await res.json();
       document.body.classList.toggle('alt', s.role === 'alt');
-      if (!s.port) { sib.style.display = 'none'; return; }
-      sib.href = location.protocol + '//' + location.hostname + ':' + s.port + '/';
+      // Under the live origin the two windows are a path apart, which keeps
+      // an installed app inside itself; a port is a different origin, which
+      // opens a browser.
+      const proxied = s.role === 'alt' && location.pathname.startsWith('/alt/');
+      if (!proxied && !s.port && !s.path) { sib.style.display = 'none'; return; }
+      sib.href = proxied ? '../' : s.path ? s.path
+        : location.protocol + '//' + location.hostname + ':' + s.port + '/';
       sib.textContent = s.role === 'alt' ? 'live' : 'dev';
       sib.title = s.role === 'alt' ? 'back to the live window' : 'a dev build is running beside this window';
       sib.style.display = 'inline-block';

@@ -182,7 +182,19 @@ func runServe(args []string) error {
 	}
 	web := newServeWeb(rectoSock)
 	web.alt = alt
-	withdraw, err := registerServe(alt, ln.Addr().String())
+	web.mount(h, g)
+	sock := ""
+	if alt {
+		// The live serve proxies this alternate's window under its own
+		// origin, so an installed app can hop here without leaving itself.
+		closeSock, path, err := serveAltSocket(ctx, h)
+		if err != nil {
+			return err
+		}
+		defer closeSock()
+		sock = path
+	}
+	withdraw, err := registerServe(alt, ln.Addr().String(), sock)
 	if err != nil {
 		return err
 	}
@@ -190,7 +202,6 @@ func runServe(args []string) error {
 	web.restoreFocus()
 	go web.runRecto(ctx)
 	web.follow(ctx, localBackends())
-	web.mount(h, g)
 	srv := &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		<-ctx.Done()
@@ -502,6 +513,11 @@ func newServeGate(allow []string, whois whoisFunc, loopback bool) *serveGate {
 // /v1/exec stamps that identity onto the messages it delivers, so a sender's
 // host is the tailnet's word rather than the sender's.
 func (g *serveGate) check(ctx context.Context, remoteAddr string) (whoisIdentity, error) {
+	// A request the live serve already admitted and proxied to an alternate
+	// over its private socket (servealt.go) carries that admission.
+	if id, ok := ctx.Value(trustedPeerKey{}).(whoisIdentity); ok {
+		return id, nil
+	}
 	host, _, err := net.SplitHostPort(remoteAddr)
 	if err != nil {
 		return whoisIdentity{}, fmt.Errorf("unreadable peer address")
