@@ -67,10 +67,16 @@ branch.
 	{
 		name:    "review",
 		group:   "start",
-		usage:   []string{"review [PR-URL] [--agent AGENT] [--on PLACE]", "review --refresh PR-URL"},
+		usage:   []string{"review [PR-URL...] [--agent AGENT] [--on PLACE]", "review --refresh PR-URL"},
 		summary: "start or enter a review rig for someone else's PR",
 		details: `No argument: fzf picker over PRs awaiting your review plus existing review
 rigs. A URL for your own PR routes to "rig up".
+
+A PR in a stack is reviewed with its stack: rig follows GitHub's base
+branches down to trunk and up to the top, names the rig for the top PR,
+checks out the top head, and pins each lower head at a bookmark of its own.
+Several URLs, bottom first, name a stack outright. Any PR of the stack finds
+the rig again, and --refresh advances the whole stack.
 
   --refresh  advance an existing review rig to the PR's current head.
 

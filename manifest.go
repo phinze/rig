@@ -85,6 +85,11 @@ type manifest struct {
 	// combined review from making its first PR structurally special. Empty on
 	// authoring rigs and review rigs created before this field existed.
 	ReviewPRs map[string]string
+	// ReviewStack maps a repo's subdir to every PR a review rig holds there
+	// when the PR under review sits in a stack of them, bottom first. The top
+	// one is also its ReviewPRs entry, which is all a reader from before
+	// stacks knows about. Absent for a review of a single PR.
+	ReviewStack map[string][]string
 	// Parked, when non-zero, marks a rig as dormant: its work is done and up
 	// for human review, so it drops out of `rig switch` and its tmux session is
 	// killed, but the basedir (and its agent session history) stay on disk.
@@ -199,6 +204,7 @@ func writeManifest(basedir string, m manifest) error {
 	}
 	writeTable(&b, "repos", m.Repos)
 	writeTable(&b, "review_prs", m.ReviewPRs)
+	writeBranchTable(&b, "review_stack", m.ReviewStack)
 	writeBranchTable(&b, "branches", m.Branches)
 	writeIntTable(&b, "prs", m.PRs)
 	writeTable(&b, "starts", m.Starts)
@@ -334,7 +340,8 @@ func readManifest(basedir string) (manifest, error) {
 
 	m := manifest{
 		Repos: map[string]string{}, ReviewPRs: map[string]string{},
-		Branches: map[string][]string{}, PRs: map[string]int{},
+		ReviewStack: map[string][]string{},
+		Branches:    map[string][]string{}, PRs: map[string]int{},
 		Starts: map[string]string{},
 	}
 	section := ""
@@ -406,6 +413,8 @@ func readManifest(basedir string) (manifest, error) {
 			}
 		case "review_prs":
 			m.ReviewPRs[key] = parseTOMLString(val)
+		case "review_stack":
+			m.ReviewStack[key] = parseTOMLStringArray(val)
 		case "starts":
 			m.Starts[key] = parseTOMLString(val)
 		case "branches":

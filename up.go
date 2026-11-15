@@ -43,7 +43,7 @@ func runUp(args []string) error {
 			if contextFlag != "" {
 				fmt.Fprintln(os.Stderr, "rig: warning: --context is for issue pickups; a PR pickup resumes existing work and ignores it")
 			}
-			return pickupPR(pr, "up", pick)
+			return pickupPR(pr, "up", pick, nil)
 		}
 	}
 

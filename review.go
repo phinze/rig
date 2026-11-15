@@ -47,11 +47,17 @@ func runReview(args []string) error {
 		return refreshReviewRig(pr)
 	}
 	if len(args) >= 1 {
-		pr := parsePRURL(args[0])
-		if pr == nil {
-			return fmt.Errorf("usage: rig review [https://github.com/OWNER/REPO/pull/NUMBER]")
+		// Several URLs are a stack, bottom first, reviewed as one rig. One
+		// URL has its stack, if any, discovered from GitHub.
+		stack, err := parseStackArgs(args)
+		if err != nil {
+			return fmt.Errorf("usage: rig review [URL...]: %w", err)
 		}
-		return pickupPR(pr, "review", pick)
+		if len(stack) == 1 {
+			stack = nil
+		}
+		pr := parsePRURL(args[len(args)-1])
+		return pickupPR(pr, "review", pick, stack)
 	}
 
 	pr, err := pickReviewPR(pick)
@@ -70,7 +76,7 @@ func runReview(args []string) error {
 	if err != nil {
 		return err
 	}
-	return reviewPickupPR(pr, meta, pick)
+	return reviewPickupPR(pr, meta, pick, nil)
 }
 
 // refreshReviewRig is the only path that moves an existing review snapshot.
@@ -97,6 +103,11 @@ func refreshReviewRig(pr *prRef) error {
 	if repoName == "" {
 		return fmt.Errorf("review rig has no repository for %s", pr.URL())
 	}
+	// A stack is refreshed as a whole, from its top, whichever of its PRs
+	// was named: the workspace's own bookmark is the top PR's head.
+	if top := parsePRURL(m.ReviewPRs[repoName]); top != nil && len(m.ReviewStack[repoName]) > 0 {
+		pr = top
+	}
 	workspace := filepath.Join(found.Path, repoName)
 	if dirty, err := jjWorkspaceDirty(workspace); err != nil {
 		return fmt.Errorf("checking review workspace: %w", err)
@@ -115,6 +126,17 @@ func refreshReviewRig(pr *prRef) error {
 	if err := fetchReviewHead(source, bookmark, pr.Number); err != nil {
 		return err
 	}
+	// A stack review moves every pinned head, so the layers below the top
+	// stay the PRs they are.
+	var lowers []*prRef
+	for _, url := range m.ReviewStack[repoName] {
+		if p := parsePRURL(url); p != nil && p.Number != pr.Number {
+			lowers = append(lowers, p)
+			if err := fetchReviewHead(source, stackBookmarkName(m.ID, repoName, p.Number), p.Number); err != nil {
+				return err
+			}
+		}
+	}
 	newHead, err := jjCommitID(source, bookmark)
 	if err != nil {
 		return fmt.Errorf("resolving refreshed review head: %w", err)
@@ -128,14 +150,17 @@ func refreshReviewRig(pr *prRef) error {
 	// Recto owns the attached PR snapshot. Ask through its public command so a
 	// live viewer updates in place; a parked or older session will restore it on
 	// launch, so an unavailable companion is only a warning.
-	cmd := exec.Command("recto", "pr", pr.URL())
-	cmd.Dir = workspace
-	if output, err := cmd.CombinedOutput(); err != nil {
-		detail := strings.TrimSpace(string(output))
-		if detail == "" {
-			detail = err.Error()
+	// The lower PRs go first and the top last, so the top ends up in front.
+	for _, p := range append(lowers, pr) {
+		cmd := exec.Command("recto", "pr", p.URL())
+		cmd.Dir = workspace
+		if output, err := cmd.CombinedOutput(); err != nil {
+			detail := strings.TrimSpace(string(output))
+			if detail == "" {
+				detail = err.Error()
+			}
+			fmt.Fprintf(os.Stderr, "rig: warning: refreshed workspace but could not update Recto for %s: %s\n", p.URL(), detail)
 		}
-		fmt.Fprintf(os.Stderr, "rig: warning: refreshed workspace but could not update Recto: %s\n", detail)
 	}
 	if oldHead == newHead {
 		fmt.Fprintf(os.Stderr, "rig: review %s is already at %s\n", pr.URL(), shortCommitID(newHead))
@@ -166,7 +191,7 @@ func shortCommitID(id string) string {
 // review by who owns it. verb is the command the user reached for; when
 // authorship disagrees with it we say so and do the right thing anyway, because
 // "my work" has exactly one home (up) and "other work" exactly one (review).
-func pickupPR(pr *prRef, verb string, pick *agentPick) error {
+func pickupPR(pr *prRef, verb string, pick *agentPick, stack []*prRef) error {
 	// A review rig is reconstructible from the URL alone: pr-<n> plus its
 	// owner/repo in the manifest distinguishes it from same-numbered PRs in
 	// other repos. Resolve that locally before touching GitHub so repeating
@@ -197,7 +222,7 @@ func pickupPR(pr *prRef, verb string, pick *agentPick) error {
 	if verb == "up" {
 		fmt.Fprintf(os.Stderr, "rig: PR #%d isn't yours — setting up a review, not authoring\n", pr.Number)
 	}
-	return reviewPickupPR(pr, meta, pick)
+	return reviewPickupPR(pr, meta, pick, stack)
 }
 
 // existingReviewRig finds the local review rig for a PR without relying on the
@@ -210,24 +235,37 @@ func existingReviewRig(rigs []rigInfo, pr *prRef) (*rigInfo, error) {
 	wantRepo := pr.Owner + "/" + pr.Repo
 	var found *rigInfo
 	for i := range rigs {
-		if rigs[i].ID != wantID {
+		// A stack review is named for its top PR, so a lower PR's URL finds
+		// it by the stack its manifest records rather than by id.
+		if !strings.HasPrefix(rigs[i].ID, "pr-") {
 			continue
 		}
 		m, err := readManifest(rigs[i].Path)
 		if err != nil {
+			if rigs[i].ID != wantID {
+				continue
+			}
 			return nil, fmt.Errorf("reading manifest: %w", err)
 		}
 		if !m.isReview() {
 			continue
 		}
-		matchesRepo := false
+		matches := false
 		for subdir, repo := range m.Repos {
-			if strings.EqualFold(repo, wantRepo) && (len(m.Branches[subdir]) > 0 || len(m.Repos) == 1) {
-				matchesRepo = true
+			if !strings.EqualFold(repo, wantRepo) {
+				continue
+			}
+			if rigs[i].ID == wantID && (len(m.Branches[subdir]) > 0 || len(m.Repos) == 1) {
+				matches = true
 				break
 			}
+			for _, url := range m.ReviewStack[subdir] {
+				if p := parsePRURL(url); p != nil && p.Number == pr.Number {
+					matches = true
+				}
+			}
 		}
-		if !matchesRepo {
+		if !matches {
 			continue
 		}
 		if found != nil {
@@ -276,11 +314,46 @@ func attachExistingReviewRig(pr *prRef) (bool, error) {
 // reviewPickupPR builds a read-only review rig: the PR head fetched fork-safe
 // via pull/N/head, kind=review (done when you've posted a review, never gated
 // on merge), and the agent dropped straight into /review-pr.
-func reviewPickupPR(pr *prRef, meta prMeta, pick *agentPick) error {
+func reviewPickupPR(pr *prRef, meta prMeta, pick *agentPick, stack []*prRef) error {
 	// Past every resume check, so this is a rig we're about to build: `rig review
 	// <url>` prompts for nothing else, and this is where its agent bar gets a turn.
 	if ok, err := pick.ensurePicked(); err != nil || !ok {
 		return err
+	}
+	// A PR in a stack is reviewed with its stack: named, and checked out, at
+	// the top PR, with every lower head pinned beside it. An explicit list
+	// stands; otherwise GitHub's base branches say what the stack is.
+	if len(stack) == 0 {
+		stack = discoverReviewChain(pr)
+	}
+	// A stack that grew since a rig was made for part of it would otherwise
+	// get a second rig holding the same PRs, and then neither resolves. Enter
+	// the existing one and say what it's missing.
+	for _, member := range stack {
+		if member.Number == pr.Number {
+			continue
+		}
+		rigs, err := listRigs()
+		if err != nil {
+			return err
+		}
+		if found, err := existingReviewRig(rigs, member); err != nil {
+			return err
+		} else if found != nil {
+			fmt.Fprintf(os.Stderr, "rig: %s already reviews #%d of this stack (%s); entering it. To review the whole stack, tear it down and review again.\n",
+				found.ID, member.Number, stackSummary(stack))
+			return activateRig(*found)
+		}
+	}
+	if top := stack[len(stack)-1]; top.Number != pr.Number {
+		topMeta, err := prDetails(top.Owner, top.Repo, top.Number)
+		if err != nil {
+			return err
+		}
+		pr, meta = top, topMeta
+		if done, err := attachExistingReviewRig(pr); err != nil || done {
+			return err
+		}
 	}
 	repoPath, err := ensureGhqClone(pr.Owner, pr.Repo)
 	if err != nil {
@@ -300,6 +373,11 @@ func reviewPickupPR(pr *prRef, meta prMeta, pick *agentPick) error {
 	if err := fetchReviewHead(repoPath, reviewBookmark, pr.Number); err != nil {
 		return err
 	}
+	for _, lower := range stack[:len(stack)-1] {
+		if err := fetchReviewHead(repoPath, stackBookmarkName(rigID, pr.Repo, lower.Number), lower.Number); err != nil {
+			return err
+		}
+	}
 	basedir, err := basedirPath(taskSlug(rigID, meta.Title))
 	if err != nil {
 		return err
@@ -311,6 +389,21 @@ func reviewPickupPR(pr *prRef, meta prMeta, pick *agentPick) error {
 		Agent:     string(pick.kind), Backend: preferredBackend.Name(), MainRepo: pr.Repo,
 		BuildingRepo: pr.Owner + "/" + pr.Repo,
 	}
+	prompt := fmt.Sprintf(
+		"/review-pr %d (%s). You are already on the PR branch in a dedicated jj workspace; skip branch verification.",
+		pr.Number, meta.Title,
+	)
+	if len(stack) > 1 {
+		m.ReviewStack = map[string][]string{pr.Repo: stackURLs(stack)}
+		var pins []string
+		for _, lower := range stack[:len(stack)-1] {
+			pins = append(pins, fmt.Sprintf("#%d at bookmark %s", lower.Number, stackBookmarkName(rigID, pr.Repo, lower.Number)))
+		}
+		prompt += fmt.Sprintf(
+			" This PR is the top of a stack, bottom first: %s. The workspace sits at the top head; the lower heads are pinned: %s. Review each PR as its own layer: its commits are the ones above the PR below it.",
+			stackSummary(stack), strings.Join(pins, ", "),
+		)
+	}
 	if err := createBasedir(basedir, m); err != nil {
 		return err
 	}
@@ -320,24 +413,37 @@ func reviewPickupPR(pr *prRef, meta prMeta, pick *agentPick) error {
 	if err != nil {
 		return err
 	}
+	// Every PR of a stack is part of the review, so teardown waits on a review
+	// of each: their head branches ride beside the top one, the way rig
+	// track's secondary PRs do.
+	for _, lower := range stack[:len(stack)-1] {
+		lowerMeta, err := prDetails(lower.Owner, lower.Repo, lower.Number)
+		if err != nil {
+			return err
+		}
+		if _, err := addBranchToManifest(basedir, repo.Name, lowerMeta.Branch); err != nil {
+			return fmt.Errorf("recording #%d's branch: %w", lower.Number, err)
+		}
+	}
 
 	sess := sessionSpec{
 		rectoCmd: rectoCommand(),
 		repo:     repo.Name,
 		agent:    pick.kind,
-		prompt: fmt.Sprintf(
-			"/review-pr %d (%s). You are already on the PR branch in a dedicated jj workspace; skip branch verification.",
-			pr.Number, meta.Title,
-		),
-		rigID:   rigID,
-		basedir: basedir,
+		prompt:   prompt,
+		rigID:    rigID,
+		basedir:  basedir,
 	}
 	rs := sessionFor(basedir, m)
 	if err := spawnSession(rs, repoDest, sess); err != nil {
 		return err
 	}
 
-	fmt.Fprintf(os.Stderr, "rig: review %s/%s#%d — %s\n", pr.Owner, pr.Repo, pr.Number, basedir)
+	if len(stack) > 1 {
+		fmt.Fprintf(os.Stderr, "rig: review %s/%s stack %s — %s\n", pr.Owner, pr.Repo, stackSummary(stack), basedir)
+	} else {
+		fmt.Fprintf(os.Stderr, "rig: review %s/%s#%d — %s\n", pr.Owner, pr.Repo, pr.Number, basedir)
+	}
 	return rs.attach()
 }
 

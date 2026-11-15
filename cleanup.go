@@ -293,6 +293,12 @@ func prepareTeardownJob(basedir string, m manifest) (*teardownJob, error) {
 		job.ForgetGroups[source] = append(job.ForgetGroups[source], jjWorkspaceName(m.ID, e.Name()))
 		if m.isReview() && m.ReviewPRs[e.Name()] != "" {
 			job.ReviewBookmarks[source] = append(job.ReviewBookmarks[source], reviewBookmarkName(m.ID, e.Name()))
+			// A stack review pins each lower PR's head too.
+			for _, url := range m.ReviewStack[e.Name()] {
+				if p := parsePRURL(url); p != nil && url != m.ReviewPRs[e.Name()] {
+					job.ReviewBookmarks[source] = append(job.ReviewBookmarks[source], stackBookmarkName(m.ID, e.Name(), p.Number))
+				}
+			}
 		}
 	}
 	// Leave a tombstone before anything is destroyed. This is the last moment

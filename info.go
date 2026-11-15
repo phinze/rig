@@ -23,6 +23,9 @@ type rigContext struct {
 	Repo          string `json:"repo,omitempty"`
 	Repository    string `json:"repository,omitempty"`
 	ReviewPR      string `json:"review_pr,omitempty"`
+	// ReviewPRs is every PR a review rig holds for this repository when it
+	// reviews a stack, bottom first; ReviewPR is then the top one.
+	ReviewPRs []string `json:"review_prs,omitempty"`
 }
 
 func runInfo(args []string) error {
@@ -71,6 +74,9 @@ func rigContextFor(basedir, cwd string, m manifest) rigContext {
 	context.Repo = repo
 	context.Repository = repository
 	context.ReviewPR = reviewPRForRepo(m, repo)
+	if m.isReview() {
+		context.ReviewPRs = m.ReviewStack[repo]
+	}
 	return context
 }
 
