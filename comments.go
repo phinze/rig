@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -50,6 +52,47 @@ type commentAnchor struct {
 	End     int    `json:"end,omitempty"`     //
 	Section string `json:"section,omitempty"` // heading, for a tour anchor
 	Label   string `json:"label"`
+	// Stamp is Recto's record of a diff anchor's lines (the change that owns
+	// them, the commit it was, the lines there, their text), taken when the
+	// comment is made, so the window can mark the lines after an amend moves
+	// them and the agent knows which change they belong to. Opaque to rig.
+	Stamp json.RawMessage `json:"stamp,omitempty"`
+}
+
+// stampDiffAnchor asks Recto to stamp a diff anchor's lines in its repo,
+// best effort: a git repository, an older recto, or lines that aren't there
+// leave the comment as plain lines, which is how every comment used to work.
+var stampDiffAnchor = func(basedir string, a *commentAnchor) {
+	if a.Kind != "diff" || a.Repo == "" || a.Path == "" || a.Start <= 0 || strings.Contains(a.Repo, "/") {
+		return
+	}
+	end := a.End
+	if end < a.Start {
+		end = a.Start
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "recto", "stamp", fmt.Sprintf("%s:%d-%d", a.Path, a.Start, end))
+	cmd.Dir = filepath.Join(basedir, a.Repo)
+	out, err := cmd.Output()
+	if err != nil || !json.Valid(out) {
+		return
+	}
+	a.Stamp = json.RawMessage(strings.TrimSpace(string(out)))
+}
+
+// stampChange is the change a stamped anchor's lines belong to, short.
+func stampChange(raw json.RawMessage) string {
+	var s struct {
+		Change string `json:"change"`
+	}
+	if json.Unmarshal(raw, &s) != nil || s.Change == "" {
+		return ""
+	}
+	if len(s.Change) > 8 {
+		return s.Change[:8]
+	}
+	return s.Change
 }
 
 type commentEvent struct {
@@ -190,6 +233,7 @@ func addComment(basedir string, anchor commentAnchor, quote, body, client string
 	if err != nil {
 		return rigComment{}, err
 	}
+	stampDiffAnchor(basedir, &anchor)
 	ev := commentEvent{Type: "comment", ID: id, Anchor: &anchor, Quote: quote, Body: body, Client: client, At: time.Now()}
 	if err := appendCommentEvent(basedir, ev); err != nil {
 		return rigComment{}, err
@@ -216,6 +260,11 @@ func commentMessage(cs []rigComment) string {
 	b.WriteString("goes in the briefing: `recto brief --group \"$RIG_BASEDIR\"`.\n")
 	for _, c := range cs {
 		fmt.Fprintf(&b, "\n[%s] %s\n", c.ID, c.Anchor.Label)
+		// The line numbers were the diff's when he selected them; the change
+		// says which work they belong to once later edits move them.
+		if change := stampChange(c.Anchor.Stamp); change != "" {
+			fmt.Fprintf(&b, "(lines in change %s)\n", change)
+		}
 		if q := strings.TrimSpace(c.Quote); q != "" {
 			if len(q) > maxQuote {
 				q = strings.TrimSpace(q[:maxQuote]) + " …"

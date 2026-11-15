@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
@@ -121,5 +122,37 @@ func TestCommentWritesRefuseOtherSites(t *testing.T) {
 	}
 	if _, err := os.Stat(commentsPath(filepath.Join(os.Getenv("HOME"), "workspaces", "alpha"))); err != nil {
 		t.Fatalf("the accepted comment wasn't logged: %v", err)
+	}
+}
+
+// A diff comment is stamped when it's made, so the stamp rides with it to
+// the page (which marks the lines wherever they've moved) and the agent's
+// message names the change the lines belong to.
+func TestADiffCommentIsStampedWhenMade(t *testing.T) {
+	basedir := t.TempDir()
+	was := stampDiffAnchor
+	t.Cleanup(func() { stampDiffAnchor = was })
+	stampDiffAnchor = func(_ string, a *commentAnchor) {
+		if a.Kind == "diff" {
+			a.Stamp = json.RawMessage(`{"change":"kxyzabcdefghijkl","commit":"abc","start":3,"end":4}`)
+		}
+	}
+	c, err := addComment(basedir, commentAnchor{Kind: "diff", Repo: "r", Path: "a.go", Start: 3, End: 4, Label: "r/a.go:3-4"}, "x", "why?", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stampChange(c.Anchor.Stamp) != "kxyzabcd" {
+		t.Fatalf("stamp: %s", c.Anchor.Stamp)
+	}
+	saved := readComments(basedir)
+	if len(saved) != 1 || stampChange(saved[0].Anchor.Stamp) != "kxyzabcd" {
+		t.Fatalf("the stamp is kept with the comment: %+v", saved)
+	}
+	if msg := commentMessage(saved); !strings.Contains(msg, "(lines in change kxyzabcd)") {
+		t.Fatalf("the agent hears which change: %s", msg)
+	}
+	tour, _ := addComment(basedir, commentAnchor{Kind: "tour", Section: "Why", Label: "tour"}, "", "hm", "")
+	if len(tour.Anchor.Stamp) != 0 {
+		t.Fatal("only diff anchors are stamped")
 	}
 }
