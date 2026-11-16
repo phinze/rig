@@ -363,3 +363,25 @@ func TestRunRectoRestartsOntoAReplacedBinary(t *testing.T) {
 		t.Fatalf("a replaced binary isn't a failure: %q", w.rectoErr)
 	}
 }
+
+// The switcher lists rigs most recently touched first, skips one still
+// being built, names a rig by its slug when it has no tracker id, and
+// carries the agent's own report when there is one.
+func TestSwitchRowsOrderAndShape(t *testing.T) {
+	now := time.Now()
+	rows := switchRows([]rigStatus{
+		{Slug: "old", ID: "PERS-1", Title: "old one", State: "parked", LastTouched: now.Add(-time.Hour)},
+		{Slug: "half", State: "building", Building: "phinze/rig", LastTouched: now},
+		{Slug: "new", Title: "new one", State: "working", SessionLive: true, LastTouched: now.Add(-time.Minute),
+			AgentStatus: &agentStatus{State: "blocked"}},
+	})
+	if len(rows) != 2 {
+		t.Fatalf("rows = %+v, want two", rows)
+	}
+	if rows[0].Slug != "new" || rows[0].ID != "new" || rows[0].Status != "blocked" || !rows[0].Live {
+		t.Errorf("first row = %+v", rows[0])
+	}
+	if rows[1].Slug != "old" || rows[1].ID != "PERS-1" || rows[1].Live {
+		t.Errorf("second row = %+v", rows[1])
+	}
+}

@@ -180,7 +180,7 @@ const maxSocketPath = 103
 func windowRoutesOnly(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
-		ok := p == "/" || p == "/v1/focus" || p == "/v1/sibling"
+		ok := p == "/" || p == "/v1/focus" || p == "/v1/sibling" || p == "/v1/rigs"
 		for _, prefix := range []string{"/v1/comments/", "/v1/show/", "/v1/surface/"} {
 			ok = ok || strings.HasPrefix(p, prefix)
 		}

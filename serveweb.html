@@ -106,6 +106,31 @@ body.tray #tray { display: flex; }
   .cm .x { min-height: 36px; min-width: 36px; padding: 0; font-size: 15px; }
 }
 @media (max-width: 520px) { #meta { display: none; } }
+/* The switcher: every rig on this host, filtered as you type. */
+#where { cursor: pointer; }
+#switch { position: fixed; inset: 0; z-index: 9; display: none; align-items: flex-start; justify-content: center;
+  padding-top: calc(var(--top) + 8vh); background: rgba(17,17,27,.6); }
+body.switch #switch { display: flex; }
+#switch .card { width: min(520px, calc(100vw - 32px)); max-height: 70vh; display: flex; flex-direction: column;
+  background: var(--mantle); border: 1px solid var(--surface1); border-radius: 10px; box-shadow: 0 10px 40px rgba(0,0,0,.5); overflow: hidden; }
+#switch input { font: 14px var(--mono); color: var(--text); background: var(--base); border: 0; border-bottom: 1px solid var(--surface0);
+  padding: 10px 14px; outline: none; }
+#switch ul { list-style: none; margin: 0; padding: 4px 0; overflow-y: auto; }
+#switch li { display: flex; align-items: center; gap: 8px; padding: 6px 14px; cursor: pointer; }
+#switch li.sel { background: var(--surface0); }
+#switch li .id { font: 600 12px var(--mono); color: var(--mauve); white-space: nowrap; }
+#switch li .t { flex: 1; min-width: 0; color: var(--subtext); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#switch li .here { font: 10px var(--mono); color: var(--overlay0); }
+#switch li .s { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--surface1); }
+#switch li .s.working { background: var(--green); }
+#switch li .s.idle { background: var(--overlay0); }
+#switch li .s.blocked { background: var(--yellow); }
+#switch li .s.done { background: none; box-shadow: inset 0 0 0 1.5px var(--subtext); }
+#switch li .s.parked { background: var(--blue); }
+#switch li .k { font: 10px var(--mono); color: var(--overlay0); border: 1px solid var(--surface1); border-radius: 6px; padding: 0 5px; }
+#switch .empty, #switch .err { padding: 10px 14px; color: var(--overlay0); font: 12px var(--mono); }
+#switch .err { color: var(--red); }
+@media (pointer: coarse), (max-width: 600px) { #switch li { padding: 11px 14px; } #switch li .t { font-size: 15px; } }
 /* The list of keys, over everything until a key or a click puts it away. */
 #keys { position: fixed; inset: 0; z-index: 10; display: none; align-items: center; justify-content: center; background: rgba(17,17,27,.6); }
 body.keys #keys { display: flex; }
@@ -134,9 +159,11 @@ body.keys #keys { display: flex; }
 <div id="stage"><div id="idle">Waiting to see where you're looking.<br>Pick a session in Rex.</div>
 <aside id="tray"><div class="head"><b>comments</b><button id="sendAll"></button><button id="trayClose">close</button></div>
 <div id="trayErr"></div><div class="list"></div></aside></div>
+<div id="switch"><div class="card"><input id="switchQ" placeholder="go to a rig" autocomplete="off" autocapitalize="off" spellcheck="false"><ul id="switchList"></ul></div></div>
 <div id="keys"><div class="card"><h2>keys</h2><table>
 <tr><td><kbd>1</kbd>–<kbd>9</kbd></td><td>a tab on the page</td></tr>
 <tr><td><kbd>[</kbd> <kbd>]</kbd></td><td>previous or next tab</td></tr>
+<tr><td><kbd>s</kbd> or <kbd>⌘</kbd><kbd>K</kbd></td><td>go to another rig</td></tr>
 <tr><td><kbd>n</kbd></td><td>what needs you, in the briefing</td></tr>
 <tr><td><kbd>c</kbd></td><td>show or hide your comments</td></tr>
 <tr><td><kbd>⌘</kbd><kbd>⇧</kbd><kbd>↵</kbd></td><td>send every held comment</td></tr>
@@ -464,12 +491,14 @@ body.keys #keys { display: flex; }
   function onKey(key) {
     if (key === '?') { body.classList.toggle('keys'); return; }
     if (key === 'Escape') {
-      if (body.classList.contains('keys')) body.classList.remove('keys');
+      if (body.classList.contains('switch')) closeSwitch();
+      else if (body.classList.contains('keys')) body.classList.remove('keys');
       else body.classList.remove('tray');
       return;
     }
     body.classList.remove('keys');
-    if (key === 'c') trayBtn.click();
+    if (key === 's' || key === 'switch') openSwitch();
+    else if (key === 'c') trayBtn.click();
     else if (key === 'n') { if (needs.style.display !== 'none') needs.click(); }
     else if (key === 'f') pin.click();
     else if (key === 'send') { if (sendAll.style.display !== 'none') sendAll.click(); }
@@ -482,10 +511,90 @@ body.keys #keys { display: flex; }
     const t = e.target;
     if (e.defaultPrevented || (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)))) return;
     if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'Enter') { e.preventDefault(); onKey('send'); return; }
+    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'k') { e.preventDefault(); onKey('switch'); return; }
     if (e.metaKey || e.ctrlKey || e.altKey) return;
-    if (/^([1-9\[\]?cnf]|Escape)$/.test(e.key)) { e.preventDefault(); onKey(e.key); }
+    if (/^([1-9\[\]?cnfs]|Escape)$/.test(e.key)) { e.preventDefault(); onKey(e.key); }
   });
   $('keys').addEventListener('click', () => body.classList.remove('keys'));
+
+  // The switcher. Picking a rig shows it here at once and asks Rex to put
+  // its session on screen, so both move together, the way a rig link does.
+  // A rig with no live session, or a Rex that can't switch, still shows
+  // here, and the window stops following so focus doesn't pull it back.
+  const switchQ = $('switchQ'), switchList = $('switchList');
+  let rigRows = [], picked = 0;
+  async function openSwitch() {
+    body.classList.add('switch');
+    switchQ.value = '';
+    switchQ.focus();
+    switchList.innerHTML = '<li class="empty">loading…</li>';
+    try {
+      const data = await api('GET', 'v1/rigs');
+      rigRows = data.rigs || [];
+    } catch (err) {
+      switchList.innerHTML = `<li class="err">${esc(err.message || err)}</li>`;
+      return;
+    }
+    // Like alt-tab: the first pick is the rig you were on before this one.
+    picked = rigRows[0] && shown && rigRows[0].slug === shown.rig ? 1 : 0;
+    renderSwitch();
+  }
+  function closeSwitch() {
+    body.classList.remove('switch');
+    switchQ.blur();
+  }
+  function matches() {
+    const q = switchQ.value.trim().toLowerCase();
+    return rigRows.filter((r) => !q || (r.id + ' ' + r.slug + ' ' + r.title).toLowerCase().includes(q));
+  }
+  // Most ticketless rigs are titled with their slug, spaced out.
+  const sameName = (r) => !r.title || [r.id, r.slug].some((n) => n.replace(/-/g, ' ').toLowerCase() === r.title.toLowerCase());
+  function renderSwitch() {
+    const rows = matches();
+    picked = Math.max(0, Math.min(picked, rows.length - 1));
+    if (!rows.length) { switchList.innerHTML = '<li class="empty">no rig matches</li>'; return; }
+    const here = shown && shown.rig;
+    switchList.innerHTML = rows.map((r, i) => {
+      const st = r.state === 'parked' ? 'parked' : r.status === 'blocked' || r.status === 'done' ? r.status : r.live ? r.state : '';
+      const tip = r.status ? r.state + ', agent ' + (r.status === 'done' ? 'finished its turn' : r.status) : r.live ? r.state : r.state + ', no session';
+      return `<li data-i="${i}" class="${i === picked ? 'sel' : ''}">
+        <span class="s ${esc(st)}" title="${esc(tip)}"></span>
+        <span class="id">${esc(r.id)}</span>
+        <span class="t">${esc(sameName(r) ? '' : r.title)}</span>
+        ${r.kind ? `<span class="k">${esc(r.kind)}</span>` : ''}
+        ${r.slug === here ? '<span class="here">here</span>' : ''}
+      </li>`;
+    }).join('');
+    const sel = switchList.querySelector('li.sel');
+    if (sel) sel.scrollIntoView({ block: 'nearest' });
+  }
+  async function hop(r) {
+    closeSwitch();
+    if (!r || (shown && shown.rig === r.slug)) return;
+    show({ rig: r.slug, id: r.id, title: r.title });
+    if (!r.live) { paused = true; renderHeader(); return; }
+    try {
+      await api('POST', 'v1/show/' + encodeURIComponent(r.slug), {});
+    } catch (err) {
+      paused = true;
+      renderHeader();
+      meta.textContent = 'shown here only · Rex: ' + String(err.message || err);
+    }
+  }
+  switchQ.addEventListener('input', () => { picked = 0; renderSwitch(); });
+  switchQ.addEventListener('keydown', (e) => {
+    const down = e.key === 'ArrowDown' || (e.ctrlKey && e.key === 'n');
+    const upKey = e.key === 'ArrowUp' || (e.ctrlKey && e.key === 'p');
+    if (down || upKey) { e.preventDefault(); picked += down ? 1 : -1; renderSwitch(); }
+    else if (e.key === 'Enter') { e.preventDefault(); hop(matches()[picked]); }
+    else if (e.key === 'Escape') { e.preventDefault(); closeSwitch(); }
+  });
+  switchList.addEventListener('click', (e) => {
+    const li = e.target.closest('li[data-i]');
+    if (li) hop(matches()[+li.dataset.i]);
+  });
+  $('switch').addEventListener('click', (e) => { if (e.target.id === 'switch') closeSwitch(); });
+  where.addEventListener('click', openSwitch);
 
   // A newly loaded page needs the list too, and acks arrive from the agent,
   // not from here, so the shown rig is polled while the window is visible.

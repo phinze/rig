@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -343,6 +344,7 @@ func (w *serveWeb) mount(h *http.ServeMux, g *serveGate) {
 	h.HandleFunc("POST /v1/comments/{rig}/send", gated(sameOrigin(postSendComments)))
 	h.HandleFunc("POST /v1/comments/{rig}/{id}/discard", gated(sameOrigin(postDiscardComment)))
 	h.HandleFunc("POST /v1/show/{rig}", gated(sameOrigin(postShowRig)))
+	h.HandleFunc("GET /v1/rigs", gated(serveRigList))
 	proxy := w.rectoProxy()
 	h.HandleFunc("GET /v1/surface/{rig}/{rest...}", gated(func(rw http.ResponseWriter, r *http.Request) {
 		roots, group, label, m, err := surfaceRoots(r.PathValue("rig"))
@@ -724,4 +726,61 @@ func surfaceError(rw http.ResponseWriter, code int, msg string) {
 		retry = `<meta http-equiv=refresh content=3>`
 	}
 	fmt.Fprintf(rw, `<!doctype html><meta charset=utf-8>%s<body style="background:#1e1e2e;color:#f38ba8;font:13px ui-monospace,Menlo,monospace;padding:20px;white-space:pre-wrap">%s</body>`, retry, html.EscapeString(msg))
+}
+
+// switchRow is one rig in the window's switcher: enough to find it by name
+// and see whether anyone's home. State is the board's (parked, stopped,
+// working, idle); Status is the agent's own report when it made one.
+type switchRow struct {
+	Slug   string `json:"slug"`
+	ID     string `json:"id"`
+	Title  string `json:"title"`
+	Kind   string `json:"kind,omitempty"`
+	State  string `json:"state"`
+	Status string `json:"status,omitempty"`
+	Live   bool   `json:"live"`
+}
+
+// switchRows lowers the board's rows to the switcher's, most recently
+// touched first, which is the order a hop back usually wants. A rig still
+// being built has nothing to show yet.
+func switchRows(statuses []rigStatus) []switchRow {
+	sorted := slices.Clone(statuses)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].LastTouched.After(sorted[j].LastTouched) })
+	out := []switchRow{}
+	for _, s := range sorted {
+		if s.Building != "" {
+			continue
+		}
+		row := switchRow{Slug: s.Slug, ID: s.ID, Title: s.Title, Kind: s.Kind, State: s.State, Live: s.SessionLive}
+		if row.ID == "" {
+			row.ID = s.Slug
+		}
+		if s.AgentStatus != nil {
+			row.Status = s.AgentStatus.State
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
+// serveRigList answers the switcher. It reads the same local facts the
+// board does (manifests and one multiplexer listing, no jj or gh), and only
+// when the switcher opens.
+func serveRigList(rw http.ResponseWriter, r *http.Request) {
+	rigs, err := listRigs()
+	if err != nil {
+		jsonError(rw, http.StatusInternalServerError, err)
+		return
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		jsonError(rw, http.StatusInternalServerError, err)
+		return
+	}
+	now := time.Now()
+	statuses := rigStatuses(rigs, home, now)
+	_, panes := boardListing(localBackends())
+	applyPanes(statuses, panes, now)
+	writeJSON(rw, http.StatusOK, map[string]any{"rigs": switchRows(statuses)})
 }
