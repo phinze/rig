@@ -138,6 +138,8 @@ func renderRigInstructions(basedir string, m manifest) string {
 		b.WriteString("  For an ad hoc shell, split from a repo's Recto so it inherits the right\n")
 		b.WriteString("  working directory.\n")
 		b.WriteString("  Do not manipulate panes directly.\n")
+		b.WriteString("- Web first: while `rig config recto` is `web`, Paul reads Recto in the web\n")
+		b.WriteString("  window, and `rig recto` runs commands without opening or moving panes.\n")
 	} else {
 		writeWebWindowBullets(&b)
 	}
@@ -245,9 +247,9 @@ func writeWebWindowBullets(b *strings.Builder) {
 	b.WriteString("- His comments from the window arrive as one message, an id per comment. Mark\n")
 	b.WriteString("  each with `rig ack ID start`, then `rig ack ID done`. What he should read\n")
 	b.WriteString("  goes in the briefing, gathered, not in a reply per comment.\n")
-	b.WriteString("- The terminal Recto is the escape hatch: `rig recto <repo>` opens one beside\n")
-	b.WriteString("  you, for when Paul asks for it or for what the window can't do yet\n")
-	b.WriteString("  (retargeting the base, review drafts). Do not manipulate panes directly.\n")
+	b.WriteString("- The terminal Recto is the escape hatch: `rig recto --pane <repo>` opens one\n")
+	b.WriteString("  beside you, for when Paul asks for it or for what the window can't do yet\n")
+	b.WriteString("  (retargeting the base). Do not manipulate panes directly.\n")
 }
 
 func writeCoSBullet(b *strings.Builder) {

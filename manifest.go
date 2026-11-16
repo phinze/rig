@@ -160,7 +160,10 @@ func (m manifest) isAuthoring() bool { return !m.isReview() && !m.isCoordinator(
 // repo. Every other rig starts with the agent alone, and Recto appears when
 // someone asks for it with `rig recto <repo>`, which creates the viewer on
 // demand.
-func (m manifest) opensRecto() bool { return m.isReview() }
+//
+// Not while rig config recto says web: then the review is read in the web
+// window, and the terminal viewer opens only when someone asks for it.
+func (m manifest) opensRecto() bool { return m.isReview() && !webFirst() }
 
 func writeManifest(basedir string, m manifest) error {
 	var b strings.Builder

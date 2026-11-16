@@ -124,11 +124,14 @@ and dispatch by issue id. Refuses a rig that already tracks an issue.`,
 		details: `Clones if needed and creates a jj workspace at trunk() plus a Recto window.`,
 	},
 	{
-		name:     "recto",
-		group:    "work",
-		usage:    []string{"recto REPO [RECTO-ARGS...]"},
-		summary:  "show a repo's Recto beside the agent",
-		details:  `Extra arguments go to Recto, e.g. "rig recto cloud focus src/app.go:42".`,
+		name:    "recto",
+		group:   "work",
+		usage:   []string{"recto [--pane] REPO [RECTO-ARGS...]"},
+		summary: "show a repo's Recto beside the agent",
+		details: `Extra arguments go to Recto, e.g. "rig recto cloud focus src/app.go:42".
+While rig config recto is web, Paul reads Recto in the web window: the
+arguments still run, but no terminal Recto opens or moves unless --pane
+asks for one. Review rigs then open without one too.`,
 		forwards: true,
 	},
 	{
@@ -400,7 +403,8 @@ in every rig+http surface's history.`,
 		details: `No argument lists every setting, its value, and where it came from.
 
   agent    default agent for new rigs: claude, codex, antigravity, pi.
-  backend  multiplexer for new rigs: tmux, rex.`,
+  backend  multiplexer for new rigs: tmux, rex.
+  recto    where agents show Recto: terminal (panes), web (the web window).`,
 	},
 	{
 		name:    "reap",

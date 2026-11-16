@@ -41,6 +41,10 @@ const surfacesName = "surfaces.toml"
 type rigConfig struct {
 	Agent   string
 	Backend string
+	// Recto is where agents show Recto: "web" keeps rig recto from opening
+	// or promoting the terminal viewer, since Paul reads the web window;
+	// empty or "terminal" is the long-standing pane behavior.
+	Recto string
 	// Surfaces are the multiplexers elsewhere that this machine's boards
 	// list alongside its own, keyed by the place name they show under. See
 	// surface.go. They're hand-edited, not set through `rig config`, but they
@@ -116,6 +120,8 @@ func readConfigFile(path string) rigConfig {
 				c.Agent = parseTOMLString(val)
 			case "backend":
 				c.Backend = parseTOMLString(val)
+			case "recto":
+				c.Recto = parseTOMLString(val)
 			}
 		case "surfaces":
 			if c.Surfaces == nil {
@@ -139,6 +145,9 @@ func writeRigConfig(c rigConfig) error {
 	}
 	if c.Backend != "" {
 		fmt.Fprintf(&b, "backend = %q\n", c.Backend)
+	}
+	if c.Recto != "" {
+		fmt.Fprintf(&b, "recto = %q\n", c.Recto)
 	}
 	if len(c.Surfaces) > 0 {
 		b.WriteString("\n[surfaces]\n")
@@ -305,7 +314,29 @@ var configSettings = []configSetting{{
 		c.Backend = value
 		return nil
 	},
+}, {
+	name: "recto",
+	effective: func() (string, string) {
+		if raw := readRigConfig().Recto; raw != "" {
+			return raw, configOriginPath()
+		}
+		return "terminal", "built-in default"
+	},
+	note: func() string { return "" },
+	set: func(c *rigConfig, value string) error {
+		switch value {
+		case "", "terminal", "web":
+			c.Recto = value
+			return nil
+		}
+		return fmt.Errorf("recto is web or terminal, not %q", value)
+	},
 }}
+
+// webFirst reports whether Paul reads Recto in the web window rather than in
+// terminal panes. One setting carries the whole mode, so trying the web
+// window, or giving it up, is a single rig config write.
+func webFirst() bool { return readRigConfig().Recto == "web" }
 
 // configOriginPath renders the config file's location for the source column,
 // abbreviated under ~ because the full path is noise in a table whose job is to

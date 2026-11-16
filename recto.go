@@ -182,6 +182,16 @@ func launchRectoCommand(m manifest) string {
 	return rectoCommand()
 }
 
+// pickupRectoCommand is what a PR pickup puts in the hot seat: Recto, since
+// the PR is the job there, except web first, when Paul reads it in the web
+// window instead.
+func pickupRectoCommand() string {
+	if webFirst() {
+		return ""
+	}
+	return rectoCommand()
+}
+
 func ensureRepoRecto(rs rigSession, basedir, repo string, panes []mux.Pane) ([]mux.Pane, error) {
 	if _, ok := findRectoPane(panes, repo); ok {
 		return panes, nil
@@ -270,9 +280,17 @@ func promoteRecto(rs rigSession, basedir, repo string, m manifest) error {
 // hot seat. Any remaining arguments are delegated to Recto from that repo, so
 // agents have one semantic operation for both "show cloud" and "focus this
 // cloud span" without learning the tmux choreography underneath.
+//
+// While rig config recto says web, Paul reads Recto in the web window, so the
+// commands run without the viewer being opened or pulled forward; --pane
+// opens it anyway, for when he asks for it.
 func runRecto(args []string) error {
+	pane := len(args) > 0 && args[0] == "--pane"
+	if pane {
+		args = args[1:]
+	}
 	if len(args) < 1 {
-		return fmt.Errorf("usage: rig recto <repo> [ping|focus|annotate|clear ...]")
+		return fmt.Errorf("usage: rig recto [--pane] <repo> [ping|focus|annotate|clear ...]")
 	}
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -290,12 +308,16 @@ func runRecto(args []string) error {
 	if err != nil {
 		return err
 	}
-	rs := sessionFor(basedir, m)
-	if !rs.live() {
-		return fmt.Errorf("rig session is not running")
-	}
-	if err := promoteRecto(rs, basedir, repo, m); err != nil {
-		return err
+	if !webFirst() || pane {
+		rs := sessionFor(basedir, m)
+		if !rs.live() {
+			return fmt.Errorf("rig session is not running")
+		}
+		if err := promoteRecto(rs, basedir, repo, m); err != nil {
+			return err
+		}
+	} else if len(args) == 1 {
+		fmt.Fprintf(os.Stderr, "rig: web first (rig config recto web): Paul reads %s in the web window, so no terminal Recto opened. rig recto --pane %s opens one when he asks.\n", repo, repo)
 	}
 	if len(args) == 1 {
 		return nil

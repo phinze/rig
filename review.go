@@ -427,7 +427,7 @@ func reviewPickupPR(pr *prRef, meta prMeta, pick *agentPick, stack []*prRef) err
 	}
 
 	sess := sessionSpec{
-		rectoCmd: rectoCommand(),
+		rectoCmd: pickupRectoCommand(),
 		repo:     repo.Name,
 		agent:    pick.kind,
 		prompt:   prompt,
@@ -539,7 +539,7 @@ func authorPickupPR(pr *prRef, meta prMeta, pick *agentPick) error {
 	// head and a diff against it is empty. You'd come back to your own PR and be
 	// shown nothing. The merge-base shows the PR.
 	sess := sessionSpec{
-		rectoCmd: rectoCommand(),
+		rectoCmd: pickupRectoCommand(),
 		repo:     repo.Name,
 		agent:    pick.kind,
 		prompt: fmt.Sprintf(
