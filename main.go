@@ -123,6 +123,8 @@ func main() {
 		err = runEnv(args)
 	case "info":
 		err = runInfo(args)
+	case "baseline":
+		err = runBaseline(args)
 	case "config":
 		err = runConfigCmd(args)
 	case "__agent":

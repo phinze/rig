@@ -211,6 +211,19 @@ what they should read goes in the rig's briefing (recto brief --group
 "$RIG_BASEDIR"), gathered in one place rather than scattered across replies.`,
 	},
 	{
+		name:    "baseline",
+		group:   "work",
+		usage:   []string{"baseline [REPO...] [--at REV]"},
+		summary: "start the rig's diffs again from here",
+		details: `Run inside a rig. Each repo's diff in the web window starts where the
+rig first began, so a rig resumed with new scope shows everything that has
+landed since. This moves that start to where each repo forks off trunk now,
+or to REV, which must be on trunk. No REPO means every repo. The window
+shows work this rig lands afterwards, as it does from a fresh start, and
+names the start in each repo's header. Prints the old start, so moving
+back is baseline REPO --at OLD.`,
+	},
+	{
 		name:    "messages",
 		group:   "work",
 		usage:   []string{"messages [RIG[@PLACE]] [--format=json|table]"},
@@ -506,8 +519,7 @@ func printIndex(w io.Writer) {
 		}
 	}
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "rig help COMMAND or rig COMMAND --help for arguments.")
-	fmt.Fprintln(w, "Unique prefixes work (rig swe = sweep).")
+	fmt.Fprintln(w, "rig help COMMAND or rig COMMAND --help for arguments. Unique prefixes work (rig swe = sweep).")
 }
 
 func printCommandHelp(w io.Writer, c command) {

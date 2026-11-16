@@ -344,6 +344,7 @@ func (w *serveWeb) mount(h *http.ServeMux, g *serveGate) {
 	h.HandleFunc("POST /v1/comments/{rig}/send", gated(sameOrigin(postSendComments)))
 	h.HandleFunc("POST /v1/comments/{rig}/{id}/discard", gated(sameOrigin(postDiscardComment)))
 	h.HandleFunc("POST /v1/show/{rig}", gated(sameOrigin(postShowRig)))
+	h.HandleFunc("POST /v1/baseline/{rig}/{repo}", gated(sameOrigin(postBaseline)))
 	h.HandleFunc("GET /v1/rigs", gated(serveRigList))
 	proxy := w.rectoProxy()
 	h.HandleFunc("GET /v1/surface/{rig}/{rest...}", gated(func(rw http.ResponseWriter, r *http.Request) {
@@ -569,7 +570,13 @@ func serveComments(rw http.ResponseWriter, r *http.Request) {
 	if cs == nil {
 		cs = []rigComment{}
 	}
-	writeJSON(rw, http.StatusOK, map[string]any{"comments": cs})
+	// The repos' starts ride along with the poll, so a page redraws when
+	// rig baseline moves one from the CLI, which nothing it watches sees.
+	var starts map[string]string
+	if m, err := readManifest(rig.Path); err == nil {
+		starts = m.Starts
+	}
+	writeJSON(rw, http.StatusOK, map[string]any{"comments": cs, "starts": starts})
 }
 
 func postComment(rw http.ResponseWriter, r *http.Request) {

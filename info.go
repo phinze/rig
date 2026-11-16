@@ -26,6 +26,10 @@ type rigContext struct {
 	// ReviewPRs is every PR a review rig holds for this repository when it
 	// reviews a stack, bottom first; ReviewPR is then the top one.
 	ReviewPRs []string `json:"review_prs,omitempty"`
+	// Start is the commit this repository's diff starts from, as recorded:
+	// where the rig began, or a baseline moved since. Asked fresh rather
+	// than read from RIG_STARTS, which a running session can't update.
+	Start string `json:"start,omitempty"`
 }
 
 func runInfo(args []string) error {
@@ -74,6 +78,7 @@ func rigContextFor(basedir, cwd string, m manifest) rigContext {
 	context.Repo = repo
 	context.Repository = repository
 	context.ReviewPR = reviewPRForRepo(m, repo)
+	context.Start = m.Starts[repo]
 	if m.isReview() {
 		context.ReviewPRs = m.ReviewStack[repo]
 	}

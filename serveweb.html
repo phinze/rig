@@ -364,12 +364,18 @@ body.keys #keys { display: flex; }
     document.body.classList.add('tray');
   }
 
+  const starts = new Map(); // rig slug -> its repos' starts, as last polled
   async function load(slug) {
+    let data;
     try {
-      const data = await api('GET', 'v1/comments/' + encodeURIComponent(slug));
+      data = await api('GET', 'v1/comments/' + encodeURIComponent(slug));
       lists.set(slug, data.comments || []);
     } catch { return; }
     const fr = frames.get(slug);
+    // A start moved from the CLI: redraw the page from the new one.
+    const st = JSON.stringify(data.starts || {});
+    if (starts.has(slug) && starts.get(slug) !== st && fr && fr.contentWindow) fr.contentWindow.postMessage({ refresh: true }, location.origin);
+    starts.set(slug, st);
     if (fr && fr.contentWindow) fr.contentWindow.postMessage({ comments: lists.get(slug) }, location.origin);
     if (shown && shown.rig === slug) renderTray();
   }
@@ -425,6 +431,18 @@ body.keys #keys { display: flex; }
     const slug = rigOf(e.source);
     if (!slug) return;
     if (e.data && typeof e.data.key === 'string') { onKey(e.data.key); return; }
+    // "Start here" on a repo: move its baseline to where it forks off trunk
+    // now, then redraw the page from there. A refusal goes back to the page.
+    if (e.data && typeof e.data.baseline === 'string') {
+      const repo = e.data.baseline;
+      try {
+        await api('POST', 'v1/baseline/' + encodeURIComponent(slug) + '/' + encodeURIComponent(repo), {});
+        e.source.postMessage({ refresh: true }, location.origin);
+      } catch (err) {
+        e.source.postMessage({ baselineError: { repo, error: String(err.message || err) } }, location.origin);
+      }
+      return;
+    }
     if (e.data && typeof e.data.asks === 'number') { asks.set(slug, e.data.asks); renderTray(); }
     if (e.data && Array.isArray(e.data.peers)) {
       const was = (peers.get(slug) || []).join(' ');
