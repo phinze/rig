@@ -106,6 +106,16 @@ body.tray #tray { display: flex; }
   .cm .x { min-height: 36px; min-width: 36px; padding: 0; font-size: 15px; }
 }
 @media (max-width: 520px) { #meta { display: none; } }
+/* The list of keys, over everything until a key or a click puts it away. */
+#keys { position: fixed; inset: 0; z-index: 10; display: none; align-items: center; justify-content: center; background: rgba(17,17,27,.6); }
+body.keys #keys { display: flex; }
+#keys .card { background: var(--mantle); border: 1px solid var(--surface1); border-radius: 10px; padding: 14px 18px; min-width: 260px;
+  box-shadow: 0 10px 40px rgba(0,0,0,.5); }
+#keys h2 { font: 600 12px var(--mono); color: var(--subtext); margin: 0 0 8px; }
+#keys table { border-collapse: collapse; }
+#keys td { padding: 3px 0; vertical-align: top; color: var(--text); }
+#keys td:first-child { padding-right: 16px; white-space: nowrap; }
+#keys kbd { font: 11px var(--mono); color: var(--mauve); background: var(--surface0); border-radius: 4px; padding: 1px 5px; }
 </style>
 </head>
 <body>
@@ -124,6 +134,16 @@ body.tray #tray { display: flex; }
 <div id="stage"><div id="idle">Waiting to see where you're looking.<br>Pick a session in Rex.</div>
 <aside id="tray"><div class="head"><b>comments</b><button id="sendAll"></button><button id="trayClose">close</button></div>
 <div id="trayErr"></div><div class="list"></div></aside></div>
+<div id="keys"><div class="card"><h2>keys</h2><table>
+<tr><td><kbd>1</kbd>–<kbd>9</kbd></td><td>a tab on the page</td></tr>
+<tr><td><kbd>[</kbd> <kbd>]</kbd></td><td>previous or next tab</td></tr>
+<tr><td><kbd>n</kbd></td><td>what needs you, in the briefing</td></tr>
+<tr><td><kbd>c</kbd></td><td>show or hide your comments</td></tr>
+<tr><td><kbd>⌘</kbd><kbd>⇧</kbd><kbd>↵</kbd></td><td>send every held comment</td></tr>
+<tr><td><kbd>f</kbd></td><td>follow Rex, or stay on this rig</td></tr>
+<tr><td><kbd>esc</kbd></td><td>close this, or the comments</td></tr>
+<tr><td><kbd>?</kbd></td><td>this list</td></tr>
+</table></div></div>
 <script>
 (() => {
   const $ = (id) => document.getElementById(id);
@@ -376,6 +396,7 @@ body.tray #tray { display: flex; }
     if (e.origin !== location.origin) return;
     const slug = rigOf(e.source);
     if (!slug) return;
+    if (e.data && typeof e.data.key === 'string') { onKey(e.data.key); return; }
     if (e.data && typeof e.data.asks === 'number') { asks.set(slug, e.data.asks); renderTray(); }
     if (e.data && Array.isArray(e.data.peers)) {
       const was = (peers.get(slug) || []).join(' ');
@@ -434,6 +455,37 @@ body.tray #tray { display: flex; }
     if (fr && fr.contentWindow) fr.contentWindow.postMessage({ brief: true }, location.origin);
   });
   $('trayClose').addEventListener('click', () => document.body.classList.remove('tray'));
+
+  // Keys. They come from here while the frame has the keyboard, or from the
+  // page, which passes up the ones it doesn't answer itself: a key pressed in
+  // an iframe never reaches its parent. Tab keys go the other way, down to
+  // the page on screen.
+  const body = document.body;
+  function onKey(key) {
+    if (key === '?') { body.classList.toggle('keys'); return; }
+    if (key === 'Escape') {
+      if (body.classList.contains('keys')) body.classList.remove('keys');
+      else body.classList.remove('tray');
+      return;
+    }
+    body.classList.remove('keys');
+    if (key === 'c') trayBtn.click();
+    else if (key === 'n') { if (needs.style.display !== 'none') needs.click(); }
+    else if (key === 'f') pin.click();
+    else if (key === 'send') { if (sendAll.style.display !== 'none') sendAll.click(); }
+    else if (/^[1-9\[\]]$/.test(key)) {
+      const fr = shown && shown.rig && frames.get(shown.rig);
+      if (fr && fr.contentWindow) fr.contentWindow.postMessage({ key }, location.origin);
+    }
+  }
+  document.addEventListener('keydown', (e) => {
+    const t = e.target;
+    if (e.defaultPrevented || (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)))) return;
+    if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'Enter') { e.preventDefault(); onKey('send'); return; }
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (/^([1-9\[\]?cnf]|Escape)$/.test(e.key)) { e.preventDefault(); onKey(e.key); }
+  });
+  $('keys').addEventListener('click', () => body.classList.remove('keys'));
 
   // A newly loaded page needs the list too, and acks arrive from the agent,
   // not from here, so the shown rig is polled while the window is visible.
