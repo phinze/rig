@@ -134,6 +134,7 @@ body.switch #switch { display: flex; }
 /* The list of keys, over everything until a key or a click puts it away. */
 #keys { position: fixed; inset: 0; z-index: 10; display: none; align-items: center; justify-content: center; background: rgba(17,17,27,.6); }
 body.keys #keys { display: flex; }
+#keys:focus { outline: none; }
 #keys .card { background: var(--mantle); border: 1px solid var(--surface1); border-radius: 10px; padding: 14px 18px; min-width: 260px;
   box-shadow: 0 10px 40px rgba(0,0,0,.5); }
 #keys h2 { font: 600 12px var(--mono); color: var(--subtext); margin: 0 0 8px; }
@@ -160,7 +161,7 @@ body.keys #keys { display: flex; }
 <aside id="tray"><div class="head"><b>comments</b><button id="sendAll"></button><button id="trayClose">close</button></div>
 <div id="trayErr"></div><div class="list"></div></aside></div>
 <div id="switch"><div class="card"><input id="switchQ" placeholder="go to a rig" autocomplete="off" autocapitalize="off" spellcheck="false"><ul id="switchList"></ul></div></div>
-<div id="keys"><div class="card"><h2>keys</h2><table>
+<div id="keys" tabindex="-1"><div class="card"><h2>keys</h2><table>
 <tr><td><kbd>1</kbd>–<kbd>9</kbd></td><td>a tab on the page</td></tr>
 <tr><td><kbd>[</kbd> <kbd>]</kbd></td><td>previous or next tab</td></tr>
 <tr><td><kbd>s</kbd> or <kbd>⌘</kbd><kbd>K</kbd></td><td>go to another rig</td></tr>
@@ -489,7 +490,9 @@ body.keys #keys { display: flex; }
   // the page on screen.
   const body = document.body;
   function onKey(key) {
-    if (key === '?') { body.classList.toggle('keys'); return; }
+    // Opening the list takes the keyboard from the page, so the next key
+    // closes it here rather than acting behind it.
+    if (key === '?') { if (body.classList.toggle('keys')) $('keys').focus(); return; }
     if (key === 'Escape') {
       if (body.classList.contains('switch')) closeSwitch();
       else if (body.classList.contains('keys')) body.classList.remove('keys');
@@ -522,19 +525,25 @@ body.keys #keys { display: flex; }
   // A rig with no live session, or a Rex that can't switch, still shows
   // here, and the window stops following so focus doesn't pull it back.
   const switchQ = $('switchQ'), switchList = $('switchList');
-  let rigRows = [], picked = 0;
+  // rigRows is null until this opening's list arrives, so nothing from an
+  // earlier one can be picked meanwhile, or after a fetch that failed.
+  let rigRows = null, picked = 0, opening = 0;
   async function openSwitch() {
+    const n = ++opening;
     body.classList.add('switch');
     switchQ.value = '';
     switchQ.focus();
+    rigRows = null;
     switchList.innerHTML = '<li class="empty">loading…</li>';
+    let rows;
     try {
-      const data = await api('GET', 'v1/rigs');
-      rigRows = data.rigs || [];
+      rows = (await api('GET', 'v1/rigs')).rigs || [];
     } catch (err) {
-      switchList.innerHTML = `<li class="err">${esc(err.message || err)}</li>`;
+      if (n === opening) switchList.innerHTML = `<li class="err">${esc(err.message || err)}</li>`;
       return;
     }
+    if (n !== opening) return;
+    rigRows = rows;
     // Like alt-tab: the first pick is the rig you were on before this one.
     picked = rigRows[0] && shown && rigRows[0].slug === shown.rig ? 1 : 0;
     renderSwitch();
@@ -544,6 +553,7 @@ body.keys #keys { display: flex; }
     switchQ.blur();
   }
   function matches() {
+    if (!rigRows) return [];
     const q = switchQ.value.trim().toLowerCase();
     return rigRows.filter((r) => !q || (r.id + ' ' + r.slug + ' ' + r.title).toLowerCase().includes(q));
   }
@@ -581,8 +591,10 @@ body.keys #keys { display: flex; }
       meta.textContent = 'shown here only · Rex: ' + String(err.message || err);
     }
   }
-  switchQ.addEventListener('input', () => { picked = 0; renderSwitch(); });
+  switchQ.addEventListener('input', () => { picked = 0; if (rigRows) renderSwitch(); });
   switchQ.addEventListener('keydown', (e) => {
+    // Keys an input method is using to compose text are its, not ours.
+    if (e.isComposing || e.keyCode === 229) return;
     const down = e.key === 'ArrowDown' || (e.ctrlKey && e.key === 'n');
     const upKey = e.key === 'ArrowUp' || (e.ctrlKey && e.key === 'p');
     if (down || upKey) { e.preventDefault(); picked += down ? 1 : -1; renderSwitch(); }
