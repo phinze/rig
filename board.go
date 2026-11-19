@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -30,10 +31,26 @@ const boardPRTTL = time.Minute
 // degrade-quiet. No PRs: the cheap tier
 // leaves rigStatus.PRs nil, which the encoder renders as null per repo.
 func enrichBoardLocal(statuses []rigStatus) {
-	peers := boardPeers()
+	enrichRowsLocal(statuses, boardPeers())
+}
+
+// boardRowWorkers bounds concurrent workspace reads. Each row runs a couple of
+// jj calls per repo, and run serially they made a 17-rig board take a second.
+const boardRowWorkers = 8
+
+// enrichRowsLocal runs enrichRowLocal concurrently across rows, which share
+// only the read-only peers map.
+func enrichRowsLocal(statuses []rigStatus, peers map[string][]isoPeer) {
+	sem := make(chan struct{}, boardRowWorkers)
+	var wg sync.WaitGroup
 	for i := range statuses {
-		enrichRowLocal(&statuses[i], peers)
+		sem <- struct{}{}
+		wg.Go(func() {
+			defer func() { <-sem }()
+			enrichRowLocal(&statuses[i], peers)
+		})
 	}
+	wg.Wait()
 }
 
 // boardPeers is the one docker call a board read makes for iso peers, shared
@@ -115,10 +132,7 @@ func enrichRowLocal(s *rigStatus, peers map[string][]isoPeer) {
 // into the same cache, so a board read warms the radar and vice versa. Returns
 // the timestamp of the oldest answer used; fresh answers count as now.
 func enrichBoardPRs(statuses []rigStatus, refresh bool, now time.Time) *time.Time {
-	peers := boardPeers()
-	for i := range statuses {
-		enrichRowLocal(&statuses[i], peers)
-	}
+	enrichRowsLocal(statuses, boardPeers())
 
 	cache := map[string]radarCacheEntry{}
 	if !refresh {

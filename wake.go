@@ -31,6 +31,11 @@ func runWake(args []string) error {
 			return activateRig(*found)
 		}
 	}
+	if len(args) == 1 {
+		if r, ok := liveRigNamed(rigs, args[0]); ok {
+			return switchToLiveRig(r)
+		}
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
@@ -79,4 +84,31 @@ func runWake(args []string) error {
 		}
 	}
 	return fmt.Errorf("rig disappeared: %s", chosen.Path)
+}
+
+// liveRigNamed looks up a local, unparked, non-building rig with a live session
+// by exact ID or slug. It leaves places, fuzzy names, and parked rigs to the
+// full wake path.
+func liveRigNamed(rigs []rigInfo, name string) (rigInfo, bool) {
+	if _, place := splitPlace(name); place != "" {
+		return rigInfo{}, false
+	}
+	for _, r := range rigs {
+		if (r.ID == name || r.Slug == name) && r.Parked.IsZero() && r.Building == "" {
+			return r, r.session().live()
+		}
+	}
+	return rigInfo{}, false
+}
+
+// switchToLiveRig touches the MRU timestamp and attaches directly to an
+// already-live rig. Skipping the board and ensureRigRuntime (dozens of serial
+// rex calls across session windows, about two seconds) keeps this path
+// instant; parked rigs still run the full rebuild path.
+func switchToLiveRig(r rigInfo) error {
+	if err := touchRigMode(r.Path, false); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "rig: %s already up — switching\n", r.ID)
+	return r.session().attach()
 }

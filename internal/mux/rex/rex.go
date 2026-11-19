@@ -1274,20 +1274,30 @@ func (b Backend) sessionOfBlock(block string) (string, error) {
 	return "", fmt.Errorf("rex block %s not found in any session", block)
 }
 
+// sessionOfWindow finds which session owns a window id. Like sessionOfBlock,
+// it views every session in parallel: waking a rig renames and marks windows
+// in separate calls, so viewing a dozen sessions serially per call would add
+// seconds.
 func (b Backend) sessionOfWindow(window string) (string, error) {
 	sessions, err := b.listSessions()
 	if err != nil {
 		return "", err
 	}
-	for _, s := range sessions {
-		v, err := b.view(s.ID)
+	owns := make([]bool, len(sessions))
+	each(len(sessions), func(i int) {
+		v, err := b.view(sessions[i].ID)
 		if err != nil {
-			continue
+			return
 		}
 		for _, w := range v.Windows {
 			if w.WindowID == window {
-				return s.Name, nil
+				owns[i] = true
 			}
+		}
+	})
+	for i, s := range sessions {
+		if owns[i] {
+			return s.Name, nil
 		}
 	}
 	return "", fmt.Errorf("rex window %s not found in any session", window)
