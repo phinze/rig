@@ -360,13 +360,18 @@ func attachedTimes(sessions []mux.Session) map[sessionKey]int64 {
 // tty, otherwise prints how to attach manually (e.g. when invoked from a
 // script or test). A backend that can't switch the client says so and
 // succeeds: the session is ready, and the last step is yours.
+//
+// One caller without a tty still gets the switch: a Rex init.lua action that
+// names the app to move (rexClientNamed). Rex switches an app through its
+// API rather than by taking over a terminal, so it never needed the tty, and
+// naming the client is the action asking for exactly this.
 func attachOrReport(b mux.Backend, target string) error {
 	// Forwarded from another host, there's no screen here to attach: hand the
 	// session back to the host that asked, which enters it from its side.
 	if reportAttach(b.Name(), target) {
 		return nil
 	}
-	if !stdinIsTTY() {
+	if !stdinIsTTY() && !(b.Name() == "rex" && rexClientNamed()) {
 		fmt.Fprintf(os.Stderr, "rig: not a tty — session ready as %q, attach manually\n", target)
 		return nil
 	}
@@ -482,6 +487,12 @@ func isAgentCommand(cmd string) bool {
 // typed via SendKeys (where the receiving shell will reparse the line).
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// rexClientNamed reports whether whoever started rig named the Rex app to
+// switch, the way an init.lua action does (see appClient in the rex backend).
+func rexClientNamed() bool {
+	return os.Getenv("RIG_REX_CLIENT") != "" || os.Getenv("RIG_REX_CLIENT_LABEL") != ""
 }
 
 // stdinIsTTY reports whether stdin is connected to a real terminal.

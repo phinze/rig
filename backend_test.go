@@ -309,3 +309,41 @@ func TestBoardListingPrefersASnapshot(t *testing.T) {
 		t.Errorf("listing = sessions %v panes %v, want both backends in order", names, ids)
 	}
 }
+
+// attachRecorder is a fakeBackend that remembers what it was asked to attach.
+type attachRecorder struct {
+	fakeBackend
+	attached []string
+}
+
+func (a *attachRecorder) Attach(target string) error {
+	a.attached = append(a.attached, target)
+	return nil
+}
+
+// Without a tty (as under go test), rig only reports the session, except
+// when a Rex action named the app to switch: Rex moves an app through its
+// API, so that caller gets the switch. A tmux backend never does, since its
+// attach needs the terminal rig doesn't have.
+func TestAttachOrReportWithoutTTY(t *testing.T) {
+	cases := []struct {
+		backend, client, label string
+		want                   bool
+	}{
+		{"rex", "", "", false},
+		{"rex", "client:1", "", true},
+		{"rex", "", "phinze-mrn-mbp", true},
+		{"tmux", "client:1", "", false},
+	}
+	for _, c := range cases {
+		t.Setenv("RIG_REX_CLIENT", c.client)
+		t.Setenv("RIG_REX_CLIENT_LABEL", c.label)
+		b := &attachRecorder{fakeBackend: fakeBackend{name: c.backend}}
+		if err := attachOrReport(b, "rig-session"); err != nil {
+			t.Fatalf("%+v: %v", c, err)
+		}
+		if got := len(b.attached) == 1; got != c.want {
+			t.Errorf("%+v: attached = %v, want %v", c, b.attached, c.want)
+		}
+	}
+}
