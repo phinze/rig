@@ -65,7 +65,12 @@ type serveWeb struct {
 	mu       sync.Mutex
 	cur      webFocus
 	rectoErr string
-	subs     map[chan webFocus]struct{}
+	// subs are frames, sent the focus merged across hosts; localSubs are
+	// other serves following this host's own (?local=1). Keeping the two
+	// apart is what stops two serves re-exporting each other's focus.
+	subs      map[chan webFocus]struct{}
+	localSubs map[chan webFocus]struct{}
+	peers     peerFocuses
 
 	// starts caches recovered workspace starts by root. Recovery walks jj's
 	// operation log, and the page asks on every refresh. Failures are cached too: a workspace whose
@@ -79,6 +84,7 @@ func newServeWeb(rectoSock string) *serveWeb {
 		rectoSock: rectoSock,
 		rectoDone: make(chan struct{}),
 		subs:      map[chan webFocus]struct{}{},
+		localSubs: map[chan webFocus]struct{}{},
 		starts:    map[string]string{},
 	}
 }
@@ -140,20 +146,35 @@ func (w *serveWeb) publish(f webFocus) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.cur = f
+	w.broadcastLocked()
+}
+
+// broadcastLocked sends every reader its view of the focus: frames the merged
+// one, other serves this host's own. w.mu must be held.
+func (w *serveWeb) broadcastLocked() {
+	merged := w.mergedLocked()
 	for ch := range w.subs {
-		// A reader that fell behind should end on the newest focus, not the
-		// oldest it has queued: make room by dropping its oldest.
+		offerNewest(ch, merged)
+	}
+	for ch := range w.localSubs {
+		offerNewest(ch, w.cur)
+	}
+}
+
+// offerNewest queues f for a reader. A reader that fell behind should end on
+// the newest focus, not the oldest it has queued: make room by dropping its
+// oldest.
+func offerNewest(ch chan webFocus, f webFocus) {
+	select {
+	case ch <- f:
+	default:
+		select {
+		case <-ch:
+		default:
+		}
 		select {
 		case ch <- f:
 		default:
-			select {
-			case <-ch:
-			default:
-			}
-			select {
-			case ch <- f:
-			default:
-			}
 		}
 	}
 }
@@ -339,15 +360,15 @@ func (w *serveWeb) mount(h *http.ServeMux, g *serveGate) {
 			http.Redirect(rw, r, altPrefix+"/", http.StatusFound)
 		}))
 	}
-	h.HandleFunc("GET /v1/comments/{rig}", gated(serveComments))
-	h.HandleFunc("POST /v1/comments/{rig}", gated(sameOrigin(postComment)))
-	h.HandleFunc("POST /v1/comments/{rig}/send", gated(sameOrigin(postSendComments)))
-	h.HandleFunc("POST /v1/comments/{rig}/{id}/discard", gated(sameOrigin(postDiscardComment)))
-	h.HandleFunc("POST /v1/show/{rig}", gated(sameOrigin(postShowRig)))
-	h.HandleFunc("POST /v1/baseline/{rig}/{repo}", gated(sameOrigin(postBaseline)))
+	h.HandleFunc("GET /v1/comments/{rig}", gated(peered(serveComments)))
+	h.HandleFunc("POST /v1/comments/{rig}", gated(peered(sameOrigin(postComment))))
+	h.HandleFunc("POST /v1/comments/{rig}/send", gated(peered(sameOrigin(postSendComments))))
+	h.HandleFunc("POST /v1/comments/{rig}/{id}/discard", gated(peered(sameOrigin(postDiscardComment))))
+	h.HandleFunc("POST /v1/show/{rig}", gated(peered(sameOrigin(postShowRig))))
+	h.HandleFunc("POST /v1/baseline/{rig}/{repo}", gated(peered(sameOrigin(postBaseline))))
 	h.HandleFunc("GET /v1/rigs", gated(serveRigList))
 	proxy := w.rectoProxy()
-	h.HandleFunc("GET /v1/surface/{rig}/{rest...}", gated(func(rw http.ResponseWriter, r *http.Request) {
+	h.HandleFunc("GET /v1/surface/{rig}/{rest...}", gated(peered(func(rw http.ResponseWriter, r *http.Request) {
 		roots, group, label, m, err := surfaceRoots(r.PathValue("rig"))
 		if err != nil {
 			surfaceError(rw, http.StatusNotFound, err.Error())
@@ -381,7 +402,7 @@ func (w *serveWeb) mount(h *http.ServeMux, g *serveGate) {
 		out := r.Clone(r.Context())
 		out.URL = &url.URL{Path: "/" + r.PathValue("rest"), RawQuery: q.Encode()}
 		proxy.ServeHTTP(rw, out)
-	}))
+	})))
 }
 
 func (w *serveWeb) serveFocus(rw http.ResponseWriter, r *http.Request) {
@@ -392,15 +413,27 @@ func (w *serveWeb) serveFocus(rw http.ResponseWriter, r *http.Request) {
 	}
 	rw.Header().Set("Content-Type", "text/event-stream")
 	rw.Header().Set("Cache-Control", "no-store")
+	// A frame wants what's on screen anywhere; another serve wants only
+	// what's on screen here.
+	local := r.URL.Query().Get("local") == "1"
 	ch := make(chan webFocus, 4)
 	w.mu.Lock()
-	w.subs[ch] = struct{}{}
-	cur := w.cur
+	subs, cur := w.subs, w.mergedLocked()
+	if local {
+		subs, cur = w.localSubs, w.cur
+	}
+	subs[ch] = struct{}{}
 	w.mu.Unlock()
+	if !local {
+		w.watchPeers()
+	}
 	defer func() {
 		w.mu.Lock()
-		delete(w.subs, ch)
+		delete(subs, ch)
 		w.mu.Unlock()
+		if !local {
+			w.unwatchPeers()
+		}
 	}()
 	send := func(f webFocus) bool {
 		raw, _ := json.Marshal(f)
@@ -746,6 +779,8 @@ type switchRow struct {
 	State  string `json:"state"`
 	Status string `json:"status,omitempty"`
 	Live   bool   `json:"live"`
+	// Touched orders rows from several hosts into one recency list.
+	Touched int64 `json:"touched,omitempty"`
 }
 
 // switchRows lowers the board's rows to the switcher's, most recently
@@ -760,6 +795,9 @@ func switchRows(statuses []rigStatus) []switchRow {
 			continue
 		}
 		row := switchRow{Slug: s.Slug, ID: s.ID, Title: s.Title, Kind: s.Kind, State: s.State, Live: s.SessionLive}
+		if !s.LastTouched.IsZero() {
+			row.Touched = s.LastTouched.UnixMilli()
+		}
 		if row.ID == "" {
 			row.ID = s.Slug
 		}
@@ -771,23 +809,40 @@ func switchRows(statuses []rigStatus) []switchRow {
 	return out
 }
 
-// serveRigList answers the switcher. It reads the same local facts the
-// board does (manifests and one multiplexer listing, no jj or gh), and only
-// when the switcher opens.
+// serveRigList answers the switcher: this host's rigs, and unless the caller
+// is another serve asking for this host's alone (?local=1), every served
+// surface's too, named slug@place. The local half reads the same facts the
+// board does (manifests and one multiplexer listing, no jj or gh), and all
+// of it only when the switcher opens.
 func serveRigList(rw http.ResponseWriter, r *http.Request) {
-	rigs, err := listRigs()
+	rows, err := localSwitchRows()
 	if err != nil {
 		jsonError(rw, http.StatusInternalServerError, err)
 		return
 	}
+	out := map[string]any{"rigs": rows}
+	if r.URL.Query().Get("local") != "1" {
+		peerRows, down := peerSwitchRows(r.Context())
+		out["rigs"] = mergeSwitchRows(rows, peerRows)
+		if len(down) > 0 {
+			out["down"] = down
+		}
+	}
+	writeJSON(rw, http.StatusOK, out)
+}
+
+func localSwitchRows() ([]switchRow, error) {
+	rigs, err := listRigs()
+	if err != nil {
+		return nil, err
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		jsonError(rw, http.StatusInternalServerError, err)
-		return
+		return nil, err
 	}
 	now := time.Now()
 	statuses := rigStatuses(rigs, home, now)
 	_, panes := boardListing(localBackends())
 	applyPanes(statuses, panes, now)
-	writeJSON(rw, http.StatusOK, map[string]any{"rigs": switchRows(statuses)})
+	return switchRows(statuses), nil
 }
