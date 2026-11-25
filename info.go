@@ -15,14 +15,16 @@ import (
 type rigContext struct {
 	SchemaVersion int    `json:"schema_version"`
 	ID            string `json:"id"`
-	Root          string `json:"root"`
-	Kind          string `json:"kind,omitempty"`
-	Tracker       string `json:"tracker,omitempty"`
-	TrackerID     string `json:"tracker_id,omitempty"`
-	TrackerURL    string `json:"tracker_url,omitempty"`
-	Repo          string `json:"repo,omitempty"`
-	Repository    string `json:"repository,omitempty"`
-	ReviewPR      string `json:"review_pr,omitempty"`
+	// Title is the rig's human name, the kickoff line it was created from.
+	Title      string `json:"title,omitempty"`
+	Root       string `json:"root"`
+	Kind       string `json:"kind,omitempty"`
+	Tracker    string `json:"tracker,omitempty"`
+	TrackerID  string `json:"tracker_id,omitempty"`
+	TrackerURL string `json:"tracker_url,omitempty"`
+	Repo       string `json:"repo,omitempty"`
+	Repository string `json:"repository,omitempty"`
+	ReviewPR   string `json:"review_pr,omitempty"`
 	// ReviewPRs is every PR a review rig holds for this repository when it
 	// reviews a stack, bottom first; ReviewPR is then the top one.
 	ReviewPRs []string `json:"review_prs,omitempty"`
@@ -63,7 +65,7 @@ func rigContextFor(basedir, cwd string, m manifest) rigContext {
 		root = basedir
 	}
 	context := rigContext{
-		SchemaVersion: 1, ID: m.ID, Root: root, Kind: m.Kind,
+		SchemaVersion: 1, ID: m.ID, Title: m.Title, Root: root, Kind: m.Kind,
 		Tracker: m.Tracker, TrackerID: m.TrackerID, TrackerURL: m.TrackerURL,
 	}
 	rel, err := filepath.Rel(basedir, cwd)

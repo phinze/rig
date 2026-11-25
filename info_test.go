@@ -37,10 +37,13 @@ func TestRigContextExposesCurrentReviewRepo(t *testing.T) {
 func TestRigContextExposesProjectIdentityAtRoot(t *testing.T) {
 	base := filepath.Join("", "workspaces", "project-byoi")
 	m := manifest{
-		ID: "project-byoi", Kind: "project", Tracker: "linear",
+		ID: "project-byoi", Title: "bring your own infra", Kind: "project", Tracker: "linear",
 		TrackerID: "project-uuid", TrackerURL: "https://linear.app/miren/project/byoi",
 	}
 	got := rigContextFor(base, base, m)
+	if got.Title != "bring your own infra" {
+		t.Errorf("title = %q", got.Title)
+	}
 	if got.Kind != "project" || got.Tracker != "linear" || got.TrackerID != "project-uuid" || got.TrackerURL != m.TrackerURL {
 		t.Fatalf("project context = %+v", got)
 	}
