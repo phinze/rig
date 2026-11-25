@@ -28,6 +28,14 @@ import (
 // and an app switching to it is exactly what focus should report.
 const freshBlock = 2 * time.Second
 
+// focusRepeat is how long a second report of the session an app was just
+// showing counts as the same look. Coming on screen re-sends every block's
+// size in a burst, and so does a resize. A repeat any later is the person
+// coming back: this host can't see them leave for another host's session, so
+// folding it would leave every other host's window believing they never
+// returned.
+var focusRepeat = 2 * time.Second
+
 type focusEvent struct {
 	Type    string          `json:"type"`
 	Payload json.RawMessage `json:"payload"`
@@ -107,7 +115,11 @@ func (b Backend) WatchFocus(ctx context.Context, seen func(mux.Focus)) error {
 
 	born := map[string]time.Time{}        // block id -> created
 	newSessions := map[string]time.Time{} // session id -> created
-	last := map[string]string{}           // app client -> session last reported
+	type report struct {
+		session string
+		at      time.Time
+	}
+	last := map[string]report{} // app client -> session last reported
 	sc := bufio.NewScanner(out)
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	for sc.Scan() {
@@ -192,10 +204,12 @@ func (b Backend) WatchFocus(ctx context.Context, seen func(mux.Focus)) error {
 				}
 				delete(born, e.Payload.BlockID)
 			}
-			if last[e.Payload.Payload.Owner] == p.SessionID {
+			owner := e.Payload.Payload.Owner
+			prev, now := last[owner], time.Now()
+			last[owner] = report{p.SessionID, now}
+			if prev.session == p.SessionID && now.Sub(prev.at) < focusRepeat {
 				continue
 			}
-			last[e.Payload.Payload.Owner] = p.SessionID
 			name := nameOf(p.SessionID)
 			if name == "" {
 				name = p.SessionID

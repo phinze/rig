@@ -94,3 +94,25 @@ func TestWatchFocusReportsANewSession(t *testing.T) {
 		t.Fatalf("focus reports = %v, want [beta]", got)
 	}
 }
+
+// Coming back to the session an app showed last is news once the burst that
+// put it on screen has passed: in between, the person may have been on
+// another host's session, which this host never sees.
+func TestWatchFocusReportsAReturnToTheSameSession(t *testing.T) {
+	size := `{"type":"session_event","payload":{"session_id":"session:1","event":{"type":"block_event","payload":{"block_id":"block:a","name":"size_changed","payload":{"owner":"client:mac"}}}}}` + "\n"
+	fakeFocusRexWith(t, size+size)
+	count := func() int {
+		n := 0
+		_ = Backend{}.WatchFocus(context.Background(), func(mux.Focus) { n++ })
+		return n
+	}
+	if n := count(); n != 1 {
+		t.Fatalf("a burst should report once, got %d", n)
+	}
+	old := focusRepeat
+	focusRepeat = 0
+	t.Cleanup(func() { focusRepeat = old })
+	if n := count(); n != 2 {
+		t.Fatalf("a repeat after the burst should report again, got %d", n)
+	}
+}
