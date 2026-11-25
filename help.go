@@ -452,7 +452,8 @@ by login. --listen defaults to this host's tailnet IPv4 on port 7744. --icon is
 the glyph other radars draw in front of this host's rows instead of its name.
 --alt runs a second serve beside the live one, usually a dev build on another
 --listen port: it keeps its own sockets, and while it's up each web window
-offers a one-tap hop to the other.`,
+offers a one-tap hop to the other. Open it through the live window, at its
+/alt/, which it prints on start; its own port is for checks on this host.`,
 	},
 }
 

@@ -261,3 +261,20 @@ func portOf(addr string) string {
 	}
 	return port
 }
+
+// altWhere tells whoever started an alternate where to open it: under the
+// live window's origin, by this host's name, since a browser elsewhere on the
+// tailnet can't reach the alternate's own port or a loopback forward of the
+// live one. The alternate's own --listen port is for checks on this host.
+func altWhere() string {
+	rec, ok := sibling(false)
+	if !ok {
+		return "rig serve: no live serve is up; once one starts, this build opens at its /alt/"
+	}
+	_, port, err := net.SplitHostPort(rec.Addr)
+	host, herr := os.Hostname()
+	if err != nil || herr != nil {
+		return fmt.Sprintf("rig serve: open this build at the live window's /alt/ (%s)", rec.Addr)
+	}
+	return fmt.Sprintf("rig serve: open this build through the live window at http://%s:%s%s/", strings.SplitN(host, ".", 2)[0], port, altPrefix)
+}

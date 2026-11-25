@@ -199,6 +199,9 @@ func runServe(args []string) error {
 		return err
 	}
 	defer withdraw()
+	if alt {
+		fmt.Fprintln(os.Stderr, altWhere())
+	}
 	web.restoreFocus()
 	go web.runRecto(ctx)
 	web.follow(ctx, localBackends())
