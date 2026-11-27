@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="rig">
 <meta name="theme-color" content="#222326">
 <title>rig</title>
@@ -22,14 +22,19 @@
   --rond: 0;
 }
 * { box-sizing: border-box; }
-/* Home-screen mode draws the page under a translucent status bar, so the
-   header carries the inset itself: its own background fills the notch area
-   instead of the page's content blurring through it. */
+/* iOS 26 blurs the top of a Home Screen window two ways, and each change
+   below stops one. A black-translucent status bar puts the page under the
+   bar, where iOS frosts it, so the bar is "default": opaque, painted in
+   theme-color, with the page starting beneath it. That bar still feathers
+   into the page unless iOS finds a fixed bar at the top to match, so the
+   header is fixed. It keeps carrying the top inset for where there is one,
+   like an icon added under the old style. */
 :root { --bar: 34px; --safe-t: env(safe-area-inset-top, 0px);
   --safe-l: env(safe-area-inset-left, 0px); --safe-r: env(safe-area-inset-right, 0px); --top: calc(var(--bar) + var(--safe-t)); }
 html, body { margin: 0; height: 100%; background: var(--base); color: var(--text); font: 14px var(--sans); overflow: hidden;
   -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
-header { height: var(--top); display: flex; align-items: center; gap: 10px;
+body { padding-top: var(--top); }
+header { position: fixed; top: 0; left: 0; right: 0; z-index: 3; height: var(--top); display: flex; align-items: center; gap: 10px;
   padding: var(--safe-t) calc(12px + var(--safe-r)) 0 calc(12px + var(--safe-l));
   background: var(--mantle); border-bottom: 1px solid var(--surface0); -webkit-user-select: none; user-select: none; }
 #dot { width: 8px; height: 8px; border-radius: 50%; background: var(--overlay0); flex: none; transition: background .3s; }
